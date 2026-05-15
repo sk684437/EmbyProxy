@@ -1,0 +1,13 @@
+services:
+  app:
+    image: ghcr.io/hkfires/embyproxy:latest
+    container_name: embyproxy
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8787}:${PORT:-8787}"
+    volumes:
+      - ./data:/app/data
+    environment:
+      PORT: "${PORT:-8787}"
+    env_file:
+      - .env

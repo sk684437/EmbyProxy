@@ -1,0 +1,871 @@
+package admin
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"embyproxy/internal/auth"
+	"embyproxy/internal/capture"
+	"embyproxy/internal/config"
+	"embyproxy/internal/logging"
+	"embyproxy/internal/storage"
+	"embyproxy/internal/telegram"
+	"embyproxy/internal/validators"
+)
+
+type ResetFunc func(uid, name string)
+
+type Handler struct {
+	cfg        config.Config
+	store      *storage.Store
+	checker    *auth.Checker
+	telegram   *telegram.Service
+	log        *logging.Logger
+	resetRoute ResetFunc
+	staticPath string
+}
+
+func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *telegram.Service, log *logging.Logger, reset ResetFunc) *Handler {
+	return &Handler{
+		cfg:        cfg,
+		store:      store,
+		checker:    checker,
+		telegram:   tg,
+		log:        log,
+		resetRoute: reset,
+		staticPath: filepath.Join(cfg.CWD, "internal", "admin", "static", "index.html"),
+	}
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if r.Method == http.MethodGet && (path == "/admin" || path == "") {
+		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-page"})
+		h.serveIndex(w, r)
+		return
+	}
+	capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-auth"})
+	res := h.checker.Check(r)
+	if !res.OK {
+		writeJSON(w, res.Status, map[string]any{"error": res.Error})
+		return
+	}
+	if r.Method == http.MethodPost && path == "/admin/api" {
+		h.handleAPI(w, r, res.UID)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeFile(w, r, h.staticPath)
+}
+
+func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) {
+	ctx := r.Context()
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "请求 JSON 无效"})
+		return
+	}
+	capture.RememberParsedBody(r, body)
+	action := strings.TrimSpace(asString(body["action"]))
+	capture.SetMeta(r, map[string]any{"mode": "admin", "adminAction": action, "stage": "admin-api"})
+	if uid == "" {
+		uid = "admin"
+	}
+	result, status := h.dispatch(ctx, uid, action, body)
+	writeJSON(w, status, result)
+}
+
+func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[string]any) (map[string]any, int) {
+	switch action {
+	case "list":
+		return h.list(ctx, uid), http.StatusOK
+	case "save":
+		return h.save(ctx, uid, body), http.StatusOK
+	case "import":
+		return h.importNodes(ctx, uid, body), http.StatusOK
+	case "export":
+		return h.exportNodes(ctx, uid, body), http.StatusOK
+	case "delete":
+		name := validators.NormalizeName(body["name"])
+		if name == "" {
+			return fail("name 不能为空"), http.StatusOK
+		}
+		if err := h.store.DeleteNode(ctx, uid, name); err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		h.reset(uid, name)
+		return ok(), http.StatusOK
+	case "batchDelete":
+		for _, name := range arrayStrings(body["names"]) {
+			nm := validators.NormalizeName(name)
+			if nm == "" {
+				continue
+			}
+			_ = h.store.DeleteNode(ctx, uid, nm)
+			h.reset(uid, nm)
+		}
+		return ok(), http.StatusOK
+	case "toggleFav":
+		name := validators.NormalizeName(body["name"])
+		node, err := h.store.GetNode(ctx, uid, name)
+		if err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		if node == nil {
+			return fail("节点不存在"), http.StatusOK
+		}
+		node.Fav = !node.Fav
+		if err := h.store.SaveNode(ctx, uid, *node); err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		return map[string]any{"ok": true, "fav": node.Fav}, http.StatusOK
+	case "saveOrder":
+		order := arrayStrings(body["order"])
+		if len(order) == 0 {
+			order = arrayStrings(body["names"])
+		}
+		for i, name := range order {
+			nm := validators.NormalizeName(name)
+			node, _ := h.store.GetNode(ctx, uid, nm)
+			if node != nil {
+				rank := i + 1
+				node.Rank = &rank
+				_ = h.store.SaveNode(ctx, uid, *node)
+			}
+		}
+		return ok(), http.StatusOK
+	case "batchTag":
+		tag := validators.ValidateTag(body["tag"])
+		for _, name := range arrayStrings(body["names"]) {
+			nm := validators.NormalizeName(name)
+			node, _ := h.store.GetNode(ctx, uid, nm)
+			if node != nil {
+				node.Tag = tag
+				_ = h.store.SaveNode(ctx, uid, *node)
+			}
+		}
+		return ok(), http.StatusOK
+	case "checkStatus":
+		return h.checkStatus(ctx, uid, body), http.StatusOK
+	case "compactAll":
+		nodes, err := h.store.ListNodes(ctx, uid)
+		if err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		count := 0
+		for _, node := range nodes {
+			if err := h.store.SaveNode(ctx, uid, node); err == nil {
+				count++
+			}
+		}
+		return map[string]any{"ok": true, "count": count}, http.StatusOK
+	case "tg.get":
+		cfg, err := h.store.GetTGConfig(ctx)
+		if err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		return map[string]any{"ok": true, "config": cfg, "content": cfg}, http.StatusOK
+	case "tg.set":
+		return h.tgSet(ctx, body), http.StatusOK
+	case "tg.test":
+		cfg, err := h.store.GetTGConfig(ctx)
+		if err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		if cfg.Token == "" || cfg.Chat == "" {
+			return fail("TG 未配置"), http.StatusOK
+		}
+		return map[string]any{"ok": h.telegram.Send(ctx, cfg.Token, cfg.Chat, "Emby Proxy 测试消息")}, http.StatusOK
+	case "config.get":
+		cfg, err := h.store.GetSystemConfig(ctx, h.defaultSystemConfig())
+		if err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		return map[string]any{"ok": true, "config": cfg, "content": cfg}, http.StatusOK
+	case "config.set":
+		return h.configSet(ctx, body), http.StatusOK
+	case "keepalive.test":
+		return h.keepaliveTest(ctx, body)
+	case "stats.get":
+		days := clamp(intValue(body["days"], 7), 1, 30)
+		stats, err := h.store.GetPlayStats(ctx, days)
+		if err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		return map[string]any{"ok": true, "stats": stats}, http.StatusOK
+	default:
+		return fail("未知 action: " + action), http.StatusOK
+	}
+}
+
+func (h *Handler) list(ctx context.Context, uid string) map[string]any {
+	nodes, err := h.store.ListNodes(ctx, uid)
+	if err != nil {
+		return fail(err.Error())
+	}
+	states, err := h.store.GetAllKeepaliveStates(ctx)
+	if err == nil {
+		lastMap := map[string]int64{}
+		for _, st := range states {
+			lastMap[strings.ToLower(st.Node)] = st.LastPlayTS
+		}
+		for i := range nodes {
+			nodes[i].LastPlayAt = lastMap[uid+":"+strings.ToLower(nodes[i].Name)]
+		}
+	}
+	return map[string]any{"ok": true, "nodes": nodes, "uid": uid}
+}
+
+func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map[string]any {
+	raw := mapFromAny(body["node"])
+	if raw == nil {
+		raw = body
+	}
+	validated := validators.ValidateNodeInput(raw)
+	if validated.Error != "" {
+		return fail(validated.Error)
+	}
+	node := validated.Node
+	oldNameRaw := strings.ToLower(strings.TrimSpace(asString(raw["oldName"])))
+	oldName := ""
+	if validators.NameRE.MatchString(oldNameRaw) {
+		oldName = oldNameRaw
+	}
+	kv := h.store.KV()
+	prevName := node.Name
+	if oldName != "" {
+		prevName = oldName
+	}
+	prevPacked, prevOK, err := kv.Get(ctx, "u:"+uid+":node:"+prevName)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if oldName != "" && !prevOK {
+		return fail("原节点不存在（可能已删除或列表过期），请刷新后重试")
+	}
+	existsNew := false
+	if _, ok, err := kv.Get(ctx, "u:"+uid+":node:"+node.Name); err != nil {
+		return fail(err.Error())
+	} else {
+		existsNew = ok
+	}
+	if oldName == "" && existsNew {
+		return fail("请求路径重复:该节点已存在")
+	}
+	if oldName != "" && oldName != node.Name && existsNew {
+		return fail("请求路径重复:该节点已存在")
+	}
+	if prevOK {
+		if prevNode, ok := storage.UnpackNode(prevName, prevPacked); ok {
+			if _, hasFav := raw["fav"]; !hasFav {
+				node.Fav = prevNode.Fav
+			}
+			if _, hasRank := raw["rank"]; !hasRank {
+				node.Rank = prevNode.Rank
+			}
+		}
+	}
+	if err := h.store.SaveNode(ctx, uid, node); err != nil {
+		return fail(err.Error())
+	}
+	h.reset(uid, node.Name)
+	if oldName != "" && oldName != node.Name {
+		_ = h.store.DeleteNode(ctx, uid, oldName)
+		h.reset(uid, oldName)
+	}
+	return map[string]any{"ok": true, "node": node}
+}
+
+func (h *Handler) importNodes(ctx context.Context, uid string, body map[string]any) map[string]any {
+	items := arrayMaps(body["nodes"])
+	if len(items) == 0 {
+		if one := mapFromAny(body["node"]); one != nil {
+			items = []map[string]any{one}
+		} else {
+			items = []map[string]any{body}
+		}
+	}
+	results := []map[string]any{}
+	for _, item := range items {
+		validated := validators.ValidateNodeInput(item)
+		if validated.Error != "" {
+			results = append(results, map[string]any{"ok": false, "name": item["name"], "error": validated.Error})
+			continue
+		}
+		if err := h.store.SaveNode(ctx, uid, validated.Node); err != nil {
+			results = append(results, map[string]any{"ok": false, "name": validated.Node.Name, "error": err.Error()})
+			continue
+		}
+		h.reset(uid, validated.Node.Name)
+		results = append(results, map[string]any{"ok": true, "name": validated.Node.Name})
+	}
+	return map[string]any{"ok": true, "results": results}
+}
+
+func (h *Handler) exportNodes(ctx context.Context, uid string, body map[string]any) map[string]any {
+	nodes, err := h.store.ListNodes(ctx, uid)
+	if err != nil {
+		return fail(err.Error())
+	}
+	wanted := map[string]bool{}
+	for _, name := range arrayStrings(body["names"]) {
+		if nm := validators.NormalizeName(name); nm != "" && validators.NameRE.MatchString(nm) {
+			wanted[nm] = true
+		}
+	}
+	exported := []map[string]any{}
+	for _, node := range nodes {
+		if len(wanted) > 0 && !wanted[node.Name] {
+			continue
+		}
+		exported = append(exported, exportNode(node))
+	}
+	return map[string]any{"ok": true, "nodes": exported, "count": len(exported), "uid": uid, "exportedAt": time.Now().UTC().Format(time.RFC3339)}
+}
+
+func (h *Handler) checkStatus(ctx context.Context, uid string, body map[string]any) map[string]any {
+	names := arrayStrings(body["names"])
+	if len(names) == 0 {
+		if one := validators.NormalizeName(body["name"]); one != "" {
+			names = []string{one}
+		}
+	}
+	if len(names) == 0 {
+		nodes, err := h.store.ListNodes(ctx, uid)
+		if err != nil {
+			return fail(err.Error())
+		}
+		for _, node := range nodes {
+			names = append(names, node.Name)
+		}
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	results := []map[string]any{}
+	for _, name := range names {
+		nm := validators.NormalizeName(name)
+		node, err := h.store.GetNode(ctx, uid, nm)
+		if err != nil {
+			results = append(results, map[string]any{"name": nm, "target": nm, "status": 0, "error": err.Error()})
+			continue
+		}
+		if node == nil {
+			results = append(results, map[string]any{"name": nm, "target": nm, "status": 0, "error": "节点不存在"})
+			continue
+		}
+		proxyPath := "/" + urlPathEscape(nm)
+		if node.Secret != "" {
+			proxyPath += "/" + urlPathEscape(node.Secret)
+		}
+		checked := fmt.Sprintf("http://127.0.0.1:%d%s/emby/System/Info/Public", h.cfg.Port, proxyPath)
+		started := time.Now()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, checked, nil)
+		req.Header.Set("User-Agent", "emby-proxy-check/1.0")
+		res, err := client.Do(req)
+		ms := time.Since(started).Milliseconds()
+		if err != nil {
+			results = append(results, map[string]any{"name": nm, "target": checked, "checked": checked, "status": 0, "error": errorText(err), "ms": ms})
+			continue
+		}
+		_ = res.Body.Close()
+		results = append(results, map[string]any{"name": nm, "target": checked, "checked": checked, "status": res.StatusCode, "ms": ms})
+	}
+	return map[string]any{"ok": true, "results": results}
+}
+
+func (h *Handler) tgSet(ctx context.Context, body map[string]any) map[string]any {
+	cfgMap := mapFromAny(body["config"])
+	if cfgMap == nil {
+		cfgMap = mapFromAny(body["content"])
+	}
+	if cfgMap == nil {
+		cfgMap = map[string]any{}
+	}
+	reportTime := strings.TrimSpace(asString(cfgMap["reportTime"]))
+	reportTime = strings.NewReplacer("﹕", ":", "∶", ":").Replace(reportTime)
+	if reportTime != "" {
+		m := regexp.MustCompile(`^(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.\d+)?)?$`).FindStringSubmatch(reportTime)
+		if len(m) == 0 {
+			return fail("日报推送时间格式不合法（HH:mm）")
+		}
+		hh := clamp(intString(m[1]), 0, 23)
+		mm := clamp(intString(m[2]), 0, 59)
+		reportTime = fmt.Sprintf("%02d:%02d", hh, mm)
+	}
+	if reportTime == "" {
+		reportTime = "00:00"
+	}
+	cfg := storage.TGConfig{
+		Enabled:          validators.ToBool(cfgMap["enabled"]),
+		Token:            strings.TrimSpace(asString(cfgMap["token"])),
+		Chat:             strings.TrimSpace(asString(cfgMap["chat"])),
+		ReportTime:       reportTime,
+		ReportEveryMin:   clamp(intValue(cfgMap["reportEveryMin"], 1440), 60, 1440),
+		ReportMaxPerDay:  clamp(intValue(cfgMap["reportMaxPerDay"], 1), 1, 24),
+		ReportChangeOnly: cfgMap["reportChangeOnly"] != false,
+		DirectEstGB:      floatValue(cfgMap["directEstGB"], 1.2),
+	}
+	if cfg.DirectEstGB < 0 {
+		cfg.DirectEstGB = 0
+	}
+	if err := h.store.SaveTGConfig(ctx, cfg); err != nil {
+		return fail(err.Error())
+	}
+	return ok()
+}
+
+func (h *Handler) configSet(ctx context.Context, body map[string]any) map[string]any {
+	cfgMap := mapFromAny(body["config"])
+	if cfgMap == nil {
+		cfgMap = mapFromAny(body["content"])
+	}
+	if cfgMap == nil {
+		cfgMap = map[string]any{}
+	}
+	defaults := h.defaultSystemConfig()
+	logLevel, errText := normalizeLogLevel(asString(cfgMap["logLevel"]), defaults.LogLevel)
+	if errText != "" {
+		return fail(errText)
+	}
+	hosts, errText := normalizeExternalAllowHosts(asString(cfgMap["externalAllowHosts"]))
+	if errText != "" {
+		return fail(errText)
+	}
+	corsAllowOrigin, errText := normalizeCORSAllowOrigin(asString(cfgMap["corsAllowOrigin"]))
+	if errText != "" {
+		return fail(errText)
+	}
+	trafficCaptureFile, errText := normalizeTrafficCaptureFile(asString(cfgMap["trafficCaptureFile"]), defaults.TrafficCaptureFile)
+	if errText != "" {
+		return fail(errText)
+	}
+	emosMatchHostsInput := defaults.EmosMatchHosts
+	if _, ok := cfgMap["emosMatchHosts"]; ok {
+		emosMatchHostsInput = asString(cfgMap["emosMatchHosts"])
+	}
+	emosMatchHosts, errText := normalizeEmosMatchHosts(emosMatchHostsInput)
+	if errText != "" {
+		return fail(errText)
+	}
+	emosProxyIDInput := defaults.EmosProxyID
+	if _, ok := cfgMap["emosProxyId"]; ok {
+		emosProxyIDInput = asString(cfgMap["emosProxyId"])
+	}
+	emosProxyID, errText := normalizeShortText(emosProxyIDInput, "EMOS Proxy ID", 128)
+	if errText != "" {
+		return fail(errText)
+	}
+	emosProxyNameInput := defaults.EmosProxyName
+	if _, ok := cfgMap["emosProxyName"]; ok {
+		emosProxyNameInput = asString(cfgMap["emosProxyName"])
+	}
+	emosProxyName, errText := normalizeShortText(emosProxyNameInput, "EMOS Proxy Name", 128)
+	if errText != "" {
+		return fail(errText)
+	}
+	logAccess := defaults.LogAccess
+	if _, ok := cfgMap["logAccess"]; ok {
+		logAccess = validators.ToBool(cfgMap["logAccess"])
+	}
+	cfg := storage.SystemConfig{
+		LogLevel:                logLevel,
+		LogAccess:               logAccess,
+		CapyStripEmby:           normalizeBinaryFlag(cfgMap["capyStripEmby"], defaults.CapyStripEmby),
+		EmosCompat:              validators.ToBool(cfgMap["emosCompat"]),
+		EmosMatchHosts:          emosMatchHosts,
+		EmosProxyID:             emosProxyID,
+		EmosProxyName:           emosProxyName,
+		CORSAllowOrigin:         corsAllowOrigin,
+		ExternalAllowHosts:      hosts,
+		ExternalAllowAny:        validators.ToBool(cfgMap["externalAllowAny"]),
+		TrustProxy:              validators.ToBool(cfgMap["trustProxy"]),
+		TrafficCaptureEnabled:   validators.ToBool(cfgMap["trafficCaptureEnabled"]),
+		TrafficCaptureFile:      trafficCaptureFile,
+		TrafficCaptureBodyMax:   defaults.TrafficCaptureBodyMax,
+		TrafficCaptureTextTypes: defaults.TrafficCaptureTextTypes,
+	}
+	if err := h.store.SaveSystemConfig(ctx, cfg); err != nil {
+		return fail(err.Error())
+	}
+	h.log.Configure(cfg.LogLevel, cfg.LogAccess)
+	return ok()
+}
+
+func (h *Handler) defaultSystemConfig() storage.SystemConfig {
+	return storage.DefaultSystemConfig()
+}
+
+func (h *Handler) keepaliveTest(ctx context.Context, body map[string]any) (map[string]any, int) {
+	cfg, err := h.store.GetTGConfig(ctx)
+	if err != nil {
+		return fail(err.Error()), http.StatusInternalServerError
+	}
+	if !cfg.Enabled || cfg.Token == "" || cfg.Chat == "" {
+		return fail("请先在TG设置中启用并配置 Token/Chat ID"), http.StatusBadRequest
+	}
+	name := asString(body["displayName"])
+	if strings.TrimSpace(name) == "" {
+		name = asString(body["name"])
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "未命名节点"
+	}
+	renewDays := maxInt(0, intValue(body["renewDays"], 0))
+	remindBeforeDays := maxInt(0, intValue(body["remindBeforeDays"], 0))
+	keepaliveAt := strings.TrimSpace(asString(body["keepaliveAt"]))
+	if !regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`).MatchString(keepaliveAt) {
+		keepaliveAt = "00:00"
+	}
+	text := strings.Join([]string{
+		"保号测试通知",
+		"节点:" + name,
+		fmt.Sprintf("保号周期:%d天", renewDays),
+		fmt.Sprintf("提前提醒:%d天", remindBeforeDays),
+		"提醒时间:北京时间 " + keepaliveAt,
+	}, "\n")
+	return map[string]any{"ok": h.telegram.Send(ctx, cfg.Token, cfg.Chat, text)}, http.StatusOK
+}
+
+func (h *Handler) reset(uid, name string) {
+	if h.resetRoute != nil {
+		h.resetRoute(uid, validators.NormalizeName(name))
+	}
+}
+
+func exportNode(node storage.Node) map[string]any {
+	out := map[string]any{
+		"name":                node.Name,
+		"target":              node.Target,
+		"streamTarget":        node.StreamTarget,
+		"fav":                 node.Fav,
+		"secret":              node.Secret,
+		"tag":                 node.Tag,
+		"note":                node.Note,
+		"displayName":         node.DisplayName,
+		"directExternal":      node.DirectExternal,
+		"renewDays":           node.RenewDays,
+		"remindBeforeDays":    node.RemindBeforeDays,
+		"keepaliveAt":         node.KeepaliveAt,
+		"keepaliveMaxPerDay":  node.KeepaliveMaxPerDay,
+		"keepaliveChangeOnly": node.KeepaliveChangeOnly,
+		"impersonate":         node.Impersonate,
+		"impersonateProfile":  node.ImpersonateProfile,
+	}
+	if node.Rank != nil {
+		out["rank"] = *node.Rank
+	}
+	return out
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func ok() map[string]any             { return map[string]any{"ok": true} }
+func fail(msg string) map[string]any { return map[string]any{"ok": false, "error": msg} }
+
+func normalizeCORSAllowOrigin(value string) (string, string) {
+	items := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t'
+	})
+	if len(items) > 50 {
+		return "", "CORS 允许来源数量过多（最多50个）"
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		origin := strings.TrimSpace(item)
+		if origin == "" {
+			continue
+		}
+		if len(origin) > 255 {
+			return "", "CORS 允许来源包含过长来源"
+		}
+		if strings.ContainsAny(origin, "\r\n\t") {
+			return "", "CORS 允许来源包含非法空白字符"
+		}
+		if origin == "*" {
+			return "*", ""
+		}
+		if !seen[origin] {
+			seen[origin] = true
+			out = append(out, origin)
+		}
+	}
+	return strings.Join(out, ","), ""
+}
+
+func normalizeExternalAllowHosts(value string) (string, string) {
+	items := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	if len(items) > 200 {
+		return "", "外部连接白名单数量过多（最多200个）"
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		host := strings.TrimSpace(item)
+		if host == "" {
+			continue
+		}
+		if strings.Contains(host, "://") {
+			u, err := url.Parse(host)
+			if err != nil || u.Host == "" {
+				return "", "外部连接白名单包含无效 URL: " + host
+			}
+			host = u.Host
+		}
+		host = strings.TrimSpace(strings.ToLower(host))
+		if host == "" {
+			continue
+		}
+		if len(host) > 255 {
+			return "", "外部连接白名单包含过长 host"
+		}
+		if strings.ContainsAny(host, "/?#") || strings.Contains(host, "@") {
+			return "", "外部连接白名单只能填写域名或 host:port"
+		}
+		if strings.Contains(host, "*") {
+			return "", "外部连接白名单不支持通配符"
+		}
+		u, err := url.Parse("//" + host)
+		if err != nil || u.Host == "" {
+			return "", "外部连接白名单包含无效 host: " + host
+		}
+		if !seen[host] {
+			seen[host] = true
+			out = append(out, host)
+		}
+	}
+	return strings.Join(out, ","), ""
+}
+
+func normalizeLogLevel(value, fallback string) (string, string) {
+	level := strings.ToLower(strings.TrimSpace(value))
+	if level == "" {
+		level = strings.ToLower(strings.TrimSpace(fallback))
+	}
+	switch level {
+	case "silent", "error", "warn", "info", "debug":
+		return level, ""
+	default:
+		return "", "日志等级只能是 silent/error/warn/info/debug"
+	}
+}
+
+func normalizeBinaryFlag(value any, fallback string) string {
+	if value == nil || strings.TrimSpace(asString(value)) == "" {
+		if validators.ToBool(fallback) {
+			return "1"
+		}
+		return "0"
+	}
+	if validators.ToBool(value) {
+		return "1"
+	}
+	return "0"
+}
+
+func normalizeEmosMatchHosts(value string) (string, string) {
+	items := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	if len(items) > 200 {
+		return "", "EMOS 匹配域名数量过多（最多200个）"
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		host := strings.TrimSpace(item)
+		if host == "" {
+			continue
+		}
+		if strings.Contains(host, "://") {
+			u, err := url.Parse(host)
+			if err != nil || u.Host == "" {
+				return "", "EMOS 匹配域名包含无效 URL: " + host
+			}
+			host = u.Host
+		}
+		host = strings.ToLower(strings.TrimSpace(host))
+		if host == "" {
+			continue
+		}
+		if len(host) > 255 {
+			return "", "EMOS 匹配域名包含过长 host"
+		}
+		if strings.ContainsAny(host, "/?#") || strings.Contains(host, "@") {
+			return "", "EMOS 匹配域名只能填写域名或 host:port"
+		}
+		u, err := url.Parse("//" + host)
+		if err != nil || u.Host == "" {
+			return "", "EMOS 匹配域名包含无效 host: " + host
+		}
+		if !seen[host] {
+			seen[host] = true
+			out = append(out, host)
+		}
+	}
+	return strings.Join(out, ","), ""
+}
+
+func normalizeShortText(value, label string, maxLen int) (string, string) {
+	text := strings.TrimSpace(value)
+	if len(text) > maxLen {
+		return "", label + " 过长"
+	}
+	if strings.ContainsAny(text, "\x00\r\n\t") {
+		return "", label + " 包含非法空白字符"
+	}
+	return text, ""
+}
+
+func normalizeTrafficCaptureFile(value, fallback string) (string, string) {
+	file := strings.TrimSpace(value)
+	if file == "" {
+		file = fallback
+	}
+	if file == "" || filepath.Clean(file) == "." {
+		return "", "代理流量记录文件路径不合法"
+	}
+	if len(file) > 512 {
+		return "", "代理流量记录文件路径过长"
+	}
+	if strings.ContainsAny(file, "\x00\r\n") {
+		return "", "代理流量记录文件路径包含非法字符"
+	}
+	return file, ""
+}
+
+func mapFromAny(value any) map[string]any {
+	m, ok := value.(map[string]any)
+	if ok {
+		return m
+	}
+	return nil
+}
+
+func arrayMaps(value any) []map[string]any {
+	arr, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := []map[string]any{}
+	for _, item := range arr {
+		if m := mapFromAny(item); m != nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func arrayStrings(value any) []string {
+	arr, ok := value.([]any)
+	if !ok {
+		if s := strings.TrimSpace(asString(value)); s != "" {
+			return []string{s}
+		}
+		return nil
+	}
+	out := []string{}
+	for _, item := range arr {
+		if s := strings.TrimSpace(asString(item)); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func intValue(value any, fallback int) int {
+	if value == nil || strings.TrimSpace(asString(value)) == "" {
+		return fallback
+	}
+	switch v := value.(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func floatValue(value any, fallback float64) float64 {
+	if value == nil || strings.TrimSpace(asString(value)) == "" {
+		return fallback
+	}
+	switch v := value.(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case string:
+		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func intString(value string) int {
+	n, _ := strconv.Atoi(value)
+	return n
+}
+
+func clamp(value, minValue, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func asString(value any) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
+func urlPathEscape(value string) string {
+	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	if strings.Contains(err.Error(), "Client.Timeout") || strings.Contains(strings.ToLower(err.Error()), "deadline") {
+		return "timeout"
+	}
+	return err.Error()
+}

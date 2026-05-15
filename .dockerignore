@@ -1,0 +1,13 @@
+# 默认排除所有文件，只放行 Docker 构建实际需要的内容
+*
+
+!Dockerfile
+!.dockerignore
+!go.mod
+!go.sum
+
+!cmd
+!cmd/**
+
+!internal
+!internal/**

@@ -1,0 +1,1579 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Emby Management</title>
+<style>
+:root{
+  color-scheme:light;
+  --canvas:#ece7dc;
+  --canvas-2:#f7f3ea;
+  --paper:#fffdf8;
+  --paper-2:#f3efe5;
+  --ink:#1e211d;
+  --ink-2:#42483f;
+  --ink-3:#737c70;
+  --line:#d8d0c0;
+  --line-2:#bdb2a0;
+  --pine:#24594d;
+  --pine-2:#173c35;
+  --pine-wash:#e1eee8;
+  --amber:#bd6a34;
+  --amber-wash:#f7e3d4;
+  --green:#237547;
+  --green-wash:#e2f0e6;
+  --red:#a83b32;
+  --red-wash:#f2dfdc;
+  --blue:#315f8f;
+  --blue-wash:#e0e9f3;
+  --shadow:0 28px 80px rgba(58,48,32,.12);
+  --focus:0 0 0 4px rgba(36,89,77,.16);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%;background:var(--canvas);color:var(--ink-2);font-family:"HarmonyOS Sans SC","MiSans","PingFang SC","Microsoft YaHei UI",sans-serif;font-size:14px;line-height:1.5}
+body{background:linear-gradient(120deg,rgba(36,89,77,.10),transparent 34%),radial-gradient(circle at 94% 4%,rgba(189,106,52,.14),transparent 30rem),var(--canvas)}
+button,input,select,textarea{font:inherit}
+button{border:0}
+a{color:var(--pine);text-decoration:none}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none;box-shadow:var(--focus)}
+#loginWrap{min-height:100vh;display:grid;place-items:center;padding:32px}
+.auth-board{width:min(1120px,100%);min-height:620px;display:grid;grid-template-columns:1.08fr .92fr;border:1px solid rgba(255,253,248,.82);border-radius:42px;background:rgba(255,253,248,.58);box-shadow:var(--shadow);overflow:hidden;backdrop-filter:blur(22px)}
+.auth-manifest{padding:58px;background:var(--pine-2);color:#fbfff7;position:relative;display:flex;flex-direction:column;justify-content:space-between;isolation:isolate}
+.auth-manifest::before{content:"";position:absolute;inset:28px;border:1px solid rgba(255,255,255,.16);border-radius:30px;z-index:-1}
+.auth-manifest::after{content:"";position:absolute;right:-120px;bottom:-140px;width:420px;height:420px;border-radius:50%;background:rgba(255,255,255,.10);z-index:-1}
+.auth-manifest h1{font-size:64px;line-height:1.02;letter-spacing:-.045em;font-weight:950;max-width:520px}
+.auth-manifest p{font-size:17px;color:rgba(255,255,255,.74);max-width:470px;margin-top:26px}
+.auth-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:48px}
+.auth-tile{border:1px solid rgba(255,255,255,.18);border-radius:22px;padding:16px;background:rgba(255,255,255,.08)}
+.auth-tile b{display:block;font-size:24px;letter-spacing:-.05em;color:#fff}
+.auth-tile span{display:block;font-size:12px;color:rgba(255,255,255,.66);margin-top:2px}
+.login-box{padding:58px;background:var(--paper);display:flex;flex-direction:column;justify-content:center}
+.login-box h2{font-size:32px;line-height:1;letter-spacing:-.055em;color:var(--ink);margin-bottom:10px}
+.login-box p{color:var(--ink-3);margin-bottom:32px}
+.login-box input{width:100%;height:56px;border:1px solid var(--line);background:var(--canvas-2);border-radius:18px;padding:0 18px;color:var(--ink);font-size:15px;transition:.16s}
+.login-box input:focus{border-color:var(--pine);background:#fff}
+.login-box .primary-action{width:100%;height:56px;margin-top:14px}
+.login-err{display:none;margin-top:14px;border:1px solid rgba(168,59,50,.18);background:var(--red-wash);color:var(--red);border-radius:16px;padding:12px 14px;font-weight:800;font-size:13px}
+#app{display:none;min-height:100vh;width:100%}
+.shell{width:100%;min-height:100vh;display:grid;grid-template-columns:88px minmax(0,1fr)}
+.command-rail{position:sticky;top:0;height:100vh;padding:18px 12px;background:rgba(30,33,29,.92);display:flex;flex-direction:column;align-items:center;gap:18px;color:#fff;z-index:100}
+.rail-logo{width:54px;height:54px;border-radius:19px;background:#fff;color:var(--pine);display:grid;place-items:center}
+.rail-logo svg{width:36px;height:36px;display:block}
+.rail-nav{display:flex;flex-direction:column;gap:10px;width:100%;margin-top:8px}
+.rail-button{height:64px;border-radius:21px;background:transparent;color:rgba(255,255,255,.66);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font-size:11px;font-weight:900;transition:.16s}
+.rail-button::before{content:"";width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,.24)}
+.rail-button:hover{background:rgba(255,255,255,.08);color:#fff}
+.rail-button.active{background:#fff;color:var(--pine-2)}
+.rail-button.active::before{background:var(--pine)}
+.rail-bottom{margin-top:auto;width:100%;display:flex;flex-direction:column;gap:10px}
+.rail-mini{height:44px;border-radius:16px;background:rgba(255,255,255,.08);color:#fff;cursor:pointer;font-size:11px;font-weight:900}
+.rail-mini:hover{background:rgba(255,255,255,.14)}
+.rail-mini.danger{color:#ffd7d2}
+.ops-surface{min-width:0;padding:22px 28px 30px;display:grid;grid-template-rows:auto minmax(0,1fr);gap:20px}
+.ops-head{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;align-items:stretch}
+.title-plate{background:var(--paper);border:1px solid rgba(255,253,248,.8);border-radius:32px;padding:26px 28px;box-shadow:0 18px 52px rgba(58,48,32,.08)}
+.title-code{font-size:11px;font-weight:950;letter-spacing:.18em;text-transform:uppercase;color:var(--pine);margin-bottom:8px}
+.title-plate h1{font-size:38px;line-height:.95;letter-spacing:-.065em;color:var(--ink);font-weight:950}
+.title-plate p{color:var(--ink-3);margin-top:10px;max-width:720px}
+.status-strip{min-width:0;border-radius:32px;border:1px solid var(--line);background:var(--paper);padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:12px;box-shadow:0 18px 52px rgba(58,48,32,.06)}
+.status-cell{border-radius:22px;background:var(--paper-2);padding:14px}
+.status-cell b{display:block;color:var(--ink);font-size:24px;line-height:1;letter-spacing:-.05em}
+.status-cell span{display:block;margin-top:7px;color:var(--ink-3);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.12em}
+.deck{min-width:0;display:grid;gap:18px}
+.nodes-deck{grid-template-columns:minmax(0,1fr) 330px;align-items:start}
+.command-bar{display:grid;grid-template-columns:minmax(260px,1fr) auto;gap:12px;background:rgba(255,253,248,.72);border:1px solid rgba(255,253,248,.88);border-radius:30px;padding:12px;backdrop-filter:blur(18px);box-shadow:0 16px 50px rgba(58,48,32,.07)}
+.query-pack{display:flex;gap:10px;align-items:center;min-width:0;flex-wrap:wrap}
+.search-field{position:relative;flex:1;min-width:240px}
+.search-field input{width:100%;height:48px;border:1px solid var(--line);background:var(--paper);border-radius:18px;padding:0 16px 0 42px;color:var(--ink);transition:.16s}
+.search-field input:focus{border-color:var(--pine)}
+.search-field::before{content:"";position:absolute;left:17px;top:50%;width:11px;height:11px;border:2px solid var(--ink-3);border-radius:50%;transform:translateY(-58%)}
+.search-field::after{content:"";position:absolute;left:29px;top:29px;width:8px;height:2px;background:var(--ink-3);transform:rotate(45deg);border-radius:2px}
+.select-input{height:48px;border:1px solid var(--line);background:var(--paper);border-radius:18px;padding:0 14px;color:var(--ink);min-width:150px;transition:.16s}
+.select-input:focus{border-color:var(--pine)}
+.action-pack{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
+.btn,.primary-action{min-height:44px;border-radius:16px;border:1px solid var(--line);background:var(--paper);color:var(--ink-2);padding:0 15px;font-size:13px;font-weight:900;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;transition:.16s}
+.btn:hover{border-color:var(--pine);color:var(--pine);background:var(--pine-wash)}
+.primary-action,.btn-primary{background:var(--pine);border-color:var(--pine);color:#fff}
+.primary-action:hover,.btn-primary:hover{background:var(--pine-2);border-color:var(--pine-2);color:#fff}
+.btn-danger{background:var(--red-wash);border-color:rgba(168,59,50,.20);color:var(--red)}
+.btn-danger:hover{background:#fff;border-color:var(--red);color:var(--red)}
+.btn-sm{min-height:34px;border-radius:12px;padding:0 11px;font-size:12px}
+.main-column{display:grid;gap:14px;min-width:0}
+.signal-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.signal{min-height:94px;border-radius:24px;background:var(--paper);border:1px solid rgba(255,253,248,.88);padding:16px;box-shadow:0 12px 34px rgba(58,48,32,.055);display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.signal b{font-size:30px;line-height:1;letter-spacing:-.06em;color:var(--ink);font-weight:950;flex-shrink:0}
+.signal span{font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950;color:var(--ink-3)}
+.signal em{font-style:normal;color:var(--ink-3);font-size:12px;margin-top:5px}
+.batch-tray{display:none;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:24px;background:var(--pine-2);color:#fff;box-shadow:0 18px 44px rgba(23,60,53,.18)}
+.batch-tray.visible{display:flex;position:fixed;left:calc(88px + (100vw - 88px)/2);bottom:24px;transform:translateX(-50%);width:min(760px,calc(100vw - 128px));z-index:260}
+.batch-tray strong{font-size:20px;letter-spacing:-.05em}
+.batch-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.batch-tray .btn{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.16);color:#fff}
+.batch-tray .btn:hover{background:#fff;color:var(--pine-2)}
+.route-board{border-radius:30px;background:var(--paper);border:1px solid rgba(255,253,248,.88);overflow:hidden;box-shadow:0 18px 56px rgba(58,48,32,.08)}
+.route-board-head,.route-row{display:grid;grid-template-columns:112px minmax(130px,.45fr) minmax(300px,1.15fr) 300px 280px;column-gap:24px;row-gap:12px;align-items:center}
+.route-board-head{min-height:48px;padding:0 16px;background:var(--paper-2);color:var(--ink-3);font-size:11px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;border-bottom:1px solid var(--line)}
+.route-board-head span:first-child,.route-board-head span:last-child{justify-self:center;text-align:center}
+.route-board-head span:nth-child(4){margin-left:24px}
+.route-row{position:relative;min-height:116px;padding:16px;border-bottom:1px solid var(--line);transition:.16s;background:var(--paper)}
+.route-row:last-child{border-bottom:0}
+.route-row:hover{background:#fffaf0}
+.route-row.selected{background:var(--pine-wash);box-shadow:inset 4px 0 0 var(--pine)}
+.route-row.focused:not(.selected){background:#fffaf0;box-shadow:inset 4px 0 0 rgba(36,89,77,.38)}
+.route-row.dragging{opacity:.52}
+.route-row.drag-over{box-shadow:inset 0 0 0 3px var(--amber)}
+.route-tools{display:flex;align-items:center;justify-content:center;gap:8px}
+.drag-handle{width:34px;height:34px;border-radius:13px;background:var(--paper-2);border:1px solid var(--line);color:var(--ink-3);cursor:grab;display:grid;place-items:center;font-size:18px;line-height:1;user-select:none}
+.drag-handle:hover{color:var(--pine);border-color:var(--pine)}
+.row-check{width:20px;height:20px;accent-color:var(--pine);cursor:pointer}
+.fav-star{width:34px;height:34px;border-radius:13px;background:var(--paper-2);border:1px solid var(--line);color:var(--ink-3);cursor:pointer;font-size:15px;display:grid;place-items:center;transition:.16s}
+.fav-star:hover{border-color:var(--amber);color:var(--amber)}
+.fav-star.on{background:var(--amber-wash);border-color:rgba(189,106,52,.24);color:var(--amber)}
+.identity{min-width:0}
+.identity strong{display:block;color:var(--ink);font-size:20px;line-height:1.1;letter-spacing:-.045em;word-break:break-all}
+.route-address{min-width:0;display:grid;gap:8px}
+.proxy-line{display:flex;align-items:center;gap:8px;min-width:0}
+.mono{font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px;color:var(--ink-3);word-break:break-all;background:var(--paper-2);border:1px solid var(--line);border-radius:14px;padding:6px 7px 6px 10px;min-width:0;flex:1;display:flex;align-items:center;gap:8px}
+.proxy-text{min-width:0;flex:1;word-break:break-all}
+.mono.is-hidden .proxy-text{font-family:"HarmonyOS Sans SC","MiSans","PingFang SC","Microsoft YaHei UI",sans-serif;color:var(--ink-3);font-weight:800;letter-spacing:0}
+.reveal-button{width:28px;height:28px;border-radius:10px;border:1px solid var(--line);background:var(--paper);color:var(--ink-3);cursor:pointer;display:grid;place-items:center;flex-shrink:0}
+.reveal-button:hover,.reveal-button.on{border-color:var(--pine);color:var(--pine);background:var(--pine-wash)}
+.reveal-button svg{width:17px;height:17px;display:block;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.copy-button{min-height:34px;border-radius:12px;border:1px solid var(--line);background:var(--paper);color:var(--pine);font-size:12px;font-weight:900;cursor:pointer;padding:0 10px}
+.copy-button:hover{background:var(--pine-wash);border-color:var(--pine)}
+.chip-pack{display:flex;flex-wrap:wrap;justify-content:flex-start;justify-self:stretch;gap:6px;width:auto;max-width:100%;margin-left:24px}
+.chip,.node-tag{min-height:26px;border-radius:999px;padding:0 10px;display:inline-flex;align-items:center;background:var(--paper-2);border:1px solid var(--line);color:var(--ink-3);font-size:11px;font-weight:900;white-space:nowrap}
+.node-tag{background:var(--pine-wash);border-color:rgba(36,89,77,.16);color:var(--pine)}
+.chip.ok{background:var(--green-wash);border-color:rgba(35,117,71,.16);color:var(--green)}
+.chip.warn{background:var(--amber-wash);border-color:rgba(189,106,52,.18);color:var(--amber)}
+.chip.blue{background:var(--blue-wash);border-color:rgba(49,95,143,.16);color:var(--blue)}
+.row-actions{display:flex;gap:7px;align-items:center;justify-content:center;justify-self:stretch;flex-wrap:wrap;width:auto;max-width:100%}
+.row-action{width:78px;padding:0 8px;overflow:hidden;text-overflow:ellipsis}
+.check-action.info{background:var(--blue-wash);border-color:rgba(49,95,143,.16);color:var(--blue)}
+.check-action.ok{background:var(--green-wash);border-color:rgba(35,117,71,.16);color:var(--green)}
+.check-action.warn{background:var(--amber-wash);border-color:rgba(189,106,52,.18);color:var(--amber)}
+.check-action.err{background:var(--red-wash);border-color:rgba(168,59,50,.18);color:var(--red)}
+.context-panel{position:sticky;top:22px;display:grid;gap:14px}
+.context-card{background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:30px;padding:20px;box-shadow:0 16px 48px rgba(58,48,32,.08)}
+.context-card h2{font-size:20px;line-height:1;letter-spacing:-.05em;color:var(--ink);margin-bottom:12px}
+.context-card p{color:var(--ink-3);font-size:13px}
+.focus-list{display:grid;gap:10px;margin-top:14px}
+.focus-item{display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:10px;color:var(--ink-3);font-size:13px}
+.focus-item b{color:var(--ink);font-weight:900;text-align:right;word-break:break-all}
+.empty-state{padding:58px 20px;text-align:center;color:var(--ink-3)}
+.empty-state b{display:block;color:var(--ink);font-size:22px;letter-spacing:-.05em;margin-bottom:6px}
+.stats-deck{display:grid;gap:16px}
+.stats-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:rgba(255,253,248,.72);border:1px solid rgba(255,253,248,.88);border-radius:30px;padding:12px;box-shadow:0 16px 50px rgba(58,48,32,.07)}
+.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.stat-block{min-height:132px;border-radius:30px;background:var(--paper);border:1px solid rgba(255,253,248,.88);padding:20px;box-shadow:0 16px 48px rgba(58,48,32,.08);display:flex;flex-direction:column;justify-content:space-between}
+.stat-block .val{font-size:42px;line-height:1;letter-spacing:-.08em;color:var(--ink);font-weight:950}
+.stat-block .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950;color:var(--ink-3)}
+.data-table{background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:30px;overflow:auto;box-shadow:0 18px 56px rgba(58,48,32,.08)}
+table{width:100%;border-collapse:collapse}
+#statsTable{min-width:720px}
+th,td{padding:15px 18px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
+th{background:var(--paper-2);color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950}
+td{color:var(--ink-2)}
+.table-empty{text-align:center;color:var(--ink-3)}
+tr:last-child td{border-bottom:0}
+.sheet-layer{position:fixed;inset:0;background:rgba(30,33,29,.42);z-index:300;display:flex;align-items:stretch;justify-content:flex-end;padding:14px;backdrop-filter:blur(12px)}
+.sheet{width:min(760px,100%);height:100%;overflow:auto;background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:32px;padding:28px;box-shadow:var(--shadow)}
+.config-sheet{width:min(1040px,100%);display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;padding:0;background:linear-gradient(135deg,#fffdf8 0%,#f6f0e4 100%)}
+.sheet-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:22px}
+.config-sheet .sheet-head{padding:28px 28px 0;margin-bottom:18px}
+.sheet-head h2{font-size:30px;line-height:1;letter-spacing:-.06em;color:var(--ink);font-weight:950}
+.sheet-head p{color:var(--ink-3);margin-top:8px}
+.sheet-close{width:42px;height:42px;border-radius:16px;background:var(--paper-2);border:1px solid var(--line);color:var(--ink-2);font-size:22px;cursor:pointer;flex-shrink:0}
+.sheet-close:hover{background:var(--red-wash);border-color:rgba(168,59,50,.20);color:var(--red)}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.form-full{grid-column:1/-1}
+.form-group{display:flex;flex-direction:column;gap:7px;min-width:0}
+.form-group label,.tg-form label{font-size:12px;font-weight:950;color:var(--ink-3);letter-spacing:.04em}
+.form-group input,.form-group select,.form-group textarea,.tg-form input,.tg-form select{width:100%;min-height:48px;border:1px solid var(--line);background:var(--canvas-2);border-radius:16px;padding:10px 13px;color:var(--ink);transition:.16s;resize:vertical}
+.form-group textarea{min-height:112px}
+.form-spaced{margin-bottom:16px}
+.code-textarea{min-height:280px;font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus,.tg-form input:focus,.tg-form select:focus{border-color:var(--pine);background:#fff}
+.form-hint{font-size:11px;color:var(--ink-3);font-weight:700}
+.form-section{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:18px 0 4px;margin-top:2px;color:var(--pine);font-size:12px;text-transform:uppercase;letter-spacing:.16em;font-weight:950;border-top:1px solid var(--line)}
+.form-section:first-child{border-top:0;padding-top:0}
+.collapse-section{cursor:pointer;user-select:none}
+.collapse-section::after{content:"";width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg) translateY(-2px);transition:.16s}
+.collapse-section.collapsed::after{transform:rotate(-45deg)}
+.section-grid{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.inline-check,.toggle-row{min-height:48px;display:flex;align-items:center;gap:10px}
+.inline-check input,.toggle-row input{width:19px;height:19px;accent-color:var(--pine);cursor:pointer;flex-shrink:0}
+.inline-check label,.toggle-row label{font-size:13px;color:var(--ink-2);font-weight:900;cursor:pointer}
+.identity-policy{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px;align-items:center;border:1px solid var(--line);background:linear-gradient(135deg,var(--pine-wash),var(--paper));border-radius:24px;padding:16px}
+.policy-switch{min-height:64px;display:flex;align-items:center;gap:14px;cursor:pointer;min-width:0}
+.policy-switch input{position:absolute;opacity:0;pointer-events:none}
+.policy-toggle{width:54px;height:32px;border-radius:999px;background:var(--line-2);position:relative;flex-shrink:0;transition:.16s}
+.policy-toggle::after{content:"";position:absolute;width:24px;height:24px;left:4px;top:4px;border-radius:50%;background:#fff;box-shadow:0 4px 12px rgba(58,48,32,.22);transition:.16s}
+.policy-switch input:checked + .policy-toggle{background:var(--pine)}
+.policy-switch input:checked + .policy-toggle::after{transform:translateX(22px)}
+.policy-copy{min-width:0}
+.policy-copy b{display:block;color:var(--ink);font-size:15px;letter-spacing:-.02em}
+.policy-copy small{display:block;color:var(--ink-3);font-size:12px;margin-top:3px;line-height:1.45}
+.policy-select{display:flex;align-items:center;min-width:0}
+.policy-select label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.policy-select select{width:100%;min-height:48px;border:1px solid var(--line);background:var(--paper);border-radius:16px;padding:10px 13px;color:var(--ink);transition:.16s}
+.policy-select select:disabled{color:var(--ink-3);background:var(--paper-2)}
+.policy-select select:focus{border-color:var(--pine);background:#fff}
+.form-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
+.config-sheet .form-actions{margin-top:0;padding:18px 28px 24px;background:linear-gradient(180deg,rgba(255,253,248,.22),rgba(255,253,248,.92));backdrop-filter:blur(10px)}
+.tg-form{display:grid;gap:16px}
+.tg-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.config-shell{min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr);gap:18px;padding:0 28px}
+.config-map{position:sticky;top:0;align-self:start;border:1px solid var(--line);border-radius:28px;background:linear-gradient(180deg,var(--paper-2),rgba(255,253,248,.68));padding:14px;box-shadow:0 16px 42px rgba(58,48,32,.06)}
+.config-map-head{padding:6px 6px 12px;margin-bottom:10px;border-bottom:1px solid var(--line)}
+.config-map-head b{display:block;color:var(--ink);font-size:18px;line-height:1;letter-spacing:-.04em}
+.config-map-head span{display:block;color:var(--ink-3);font-size:11px;font-weight:900;margin-top:5px;letter-spacing:.08em;text-transform:uppercase}
+.config-nav{display:grid;gap:8px}
+.config-nav-button{min-height:58px;border-radius:18px;border:1px solid transparent;background:transparent;color:var(--ink-3);cursor:pointer;text-align:left;padding:10px 12px;display:grid;gap:2px;transition:.16s}
+.config-nav-button span{font-size:10px;font-weight:950;letter-spacing:.16em;text-transform:uppercase;color:inherit}
+.config-nav-button b{font-size:14px;color:var(--ink-2);letter-spacing:-.02em}
+.config-nav-button:hover,.config-nav-button.active{background:var(--paper);border-color:var(--line);color:var(--pine);box-shadow:0 10px 24px rgba(58,48,32,.07)}
+.config-nav-button:hover b,.config-nav-button.active b{color:var(--pine)}
+.config-panel{min-height:0;max-height:calc(100vh - 176px);overflow:auto;padding:2px 4px 2px 0;display:grid;gap:12px;scroll-behavior:smooth}
+.config-group{scroll-margin-top:8px;border:1px solid rgba(216,208,192,.92);border-radius:24px;background:rgba(255,253,248,.82);padding:14px 16px 16px;box-shadow:0 12px 30px rgba(58,48,32,.045);display:grid;gap:12px}
+.config-group-head{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"title index";column-gap:12px;align-items:center;padding-bottom:10px;border-bottom:1px solid rgba(216,208,192,.72)}
+.config-index{grid-area:index;justify-self:end;min-width:34px;height:24px;border-radius:999px;background:var(--pine-wash);border:1px solid rgba(36,89,77,.16);color:var(--pine);display:grid;place-items:center;padding:0 9px;font-size:11px;font-weight:950;letter-spacing:.02em}
+.config-group-head > div{grid-area:title;min-width:0}
+.config-group h3{font-size:20px;line-height:1;color:var(--ink);letter-spacing:-.055em}
+.config-group > .tg-row{grid-template-columns:minmax(210px,.72fr) minmax(280px,1fr);gap:12px;align-items:end}
+.config-group > .tg-row .form-group{gap:6px}
+.config-fields{display:grid;gap:12px}
+.config-field-card{border:1px solid var(--line);border-radius:20px;background:rgba(247,243,234,.72);padding:14px;display:grid;gap:12px}
+.config-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.config-card-head h4{font-size:15px;line-height:1.15;color:var(--ink);letter-spacing:-.035em}
+.config-card-head span{border:1px solid rgba(36,89,77,.16);background:var(--pine-wash);color:var(--pine);border-radius:999px;padding:3px 8px;font-size:10px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.config-sheet .toggle-row{min-height:48px;border:1px solid var(--line);border-radius:16px;background:rgba(255,253,248,.78);padding:0 12px}
+.config-field-card.is-warning .config-card-head span{background:var(--amber-wash);border-color:rgba(189,106,52,.22);color:var(--amber)}
+#toastRoot{position:fixed;right:24px;bottom:24px;z-index:9999;display:grid;gap:10px}
+.toast{max-width:380px;border-radius:18px;background:var(--paper);border:1px solid var(--line);border-left:6px solid var(--pine);box-shadow:0 20px 54px rgba(58,48,32,.16);padding:13px 16px;color:var(--ink);font-weight:900;animation:toastIn .18s ease}
+.toast.ok{border-left-color:var(--green)}
+.toast.err{border-left-color:var(--red)}
+.toast.info{border-left-color:var(--blue)}
+@keyframes toastIn{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
+@media (max-width:1700px){
+  .nodes-deck{grid-template-columns:1fr}
+  .context-panel{position:static;grid-template-columns:1fr 1fr}
+}
+@media (max-width:1260px){
+  .command-bar{grid-template-columns:1fr}
+  .action-pack{justify-content:flex-start}
+  .route-board-head{display:none}
+  .route-row{grid-template-columns:112px minmax(0,1fr);align-items:start}
+  .route-address,.chip-pack,.row-actions{grid-column:2}
+  .chip-pack,.row-actions{justify-content:flex-start;justify-self:stretch;width:auto;margin-left:0}
+}
+@media (max-width:920px){
+  .shell{grid-template-columns:1fr}
+  .command-rail{height:auto;position:sticky;top:0;flex-direction:row;padding:10px 12px;justify-content:space-between}
+  .rail-nav,.rail-bottom{width:auto;flex-direction:row;margin-top:0}
+  .rail-button{width:86px;height:50px;border-radius:16px}
+  .rail-mini{width:64px;height:42px}
+  .ops-surface{padding:16px}
+  .batch-tray.visible{left:50%;width:calc(100vw - 32px)}
+  .ops-head,.stats-top{grid-template-columns:1fr}
+  .auth-board{grid-template-columns:1fr}
+  .auth-manifest{min-height:360px;padding:36px}
+  .auth-manifest h1{font-size:46px}
+  .login-box{padding:36px}
+}
+@media (max-width:680px){
+  #loginWrap{padding:14px}
+  .auth-board{border-radius:30px}
+  .auth-manifest{min-height:300px;padding:30px}
+  .auth-manifest h1{font-size:40px}
+  .command-rail{gap:8px;overflow-x:auto}
+  .rail-logo{display:none}
+  .rail-button{width:72px;min-width:72px}
+  .rail-mini{width:56px;min-width:56px}
+  .auth-tiles,.signal-grid,.stats-grid,.status-strip,.context-panel,.form-grid,.section-grid,.tg-row,.identity-policy{grid-template-columns:1fr}
+  .query-pack,.action-pack{display:grid;grid-template-columns:1fr;width:100%}
+  .search-field,.select-input,.btn,.primary-action{width:100%;min-width:0}
+  .route-row{grid-template-columns:1fr;gap:10px}
+  .route-tools,.route-address,.chip-pack,.row-actions{grid-column:1}
+  .route-tools{justify-content:space-between}
+  .row-actions{display:grid;grid-template-columns:1fr 1fr;width:100%;justify-self:stretch}
+  .row-actions .btn{width:100%}
+  .batch-tray{align-items:flex-start;flex-direction:column;bottom:14px}
+  .batch-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}
+  .sheet-layer{padding:0}
+  .sheet{border-radius:0;width:100%}
+  .config-sheet{display:block;overflow:auto}
+  .config-sheet .sheet-head{padding:24px 18px 0}
+  .config-shell{grid-template-columns:1fr;padding:0 18px}
+  .config-map{position:relative}
+  .config-nav{grid-template-columns:1fr 1fr}
+  .config-panel{max-height:none;overflow:visible;padding-right:0}
+  .config-group-head{grid-template-columns:minmax(0,1fr) auto}
+  .config-group > .tg-row{grid-template-columns:1fr}
+  .config-index{min-width:32px;height:22px}
+  .config-sheet .form-actions{padding:18px}
+  #toastRoot{left:14px;right:14px;bottom:14px}
+  .toast{max-width:none}
+}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+</style>
+</head>
+<body>
+<div id="loginWrap">
+  <div class="auth-board">
+    <section class="auth-manifest">
+      <div>
+        <h1>多媒体控制中心</h1>
+        <p>集中管理分散的 Emby 节点</p>
+      </div>
+      <div class="auth-tiles">
+        <div class="auth-tile"><b>Route</b><span>媒体路由</span></div>
+        <div class="auth-tile"><b>Guard</b><span>Token 认证</span></div>
+        <div class="auth-tile"><b>Signal</b><span>播放统计</span></div>
+      </div>
+    </section>
+    <section class="login-box">
+      <h2>管理员登录</h2>
+      <p>输入管理员 Token 后进入节点、通知与播放统计管理</p>
+      <input type="password" id="tokenInput" placeholder="使用管理员 Token 登录" autocomplete="current-password"/>
+      <button class="primary-action" onclick="doLogin()">登录</button>
+      <div class="login-err" id="loginErr">Token 错误，请重试</div>
+    </section>
+  </div>
+</div>
+
+<div id="app">
+  <div class="shell">
+    <aside class="command-rail">
+      <div class="rail-logo" aria-label="Emby">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+          <circle cx="24" cy="24" r="20" fill="currentColor" opacity=".16"></circle>
+          <circle cx="24" cy="24" r="15" fill="currentColor"></circle>
+          <circle cx="24" cy="24" r="5.2" fill="#fff"></circle>
+          <circle cx="24" cy="7" r="3.2" fill="currentColor"></circle>
+          <circle cx="41" cy="24" r="3.2" fill="currentColor"></circle>
+          <circle cx="24" cy="41" r="3.2" fill="currentColor"></circle>
+          <circle cx="7" cy="24" r="3.2" fill="currentColor"></circle>
+        </svg>
+      </div>
+      <nav class="rail-nav">
+        <button class="rail-button active" onclick="switchTab('nodes',this)">节点</button>
+        <button class="rail-button" onclick="switchTab('stats',this)">统计</button>
+      </nav>
+      <div class="rail-bottom">
+        <button class="rail-mini" onclick="openConfigModal()">配置</button>
+        <button class="rail-mini" onclick="openTgModal()">通知</button>
+        <button class="rail-mini danger" onclick="doLogout()">退出</button>
+      </div>
+    </aside>
+
+    <section class="ops-surface">
+      <header class="ops-head">
+        <div class="title-plate">
+          <div class="title-code" id="pageKicker">媒体中枢</div>
+          <h1 id="pageTitle">Emby 服务器管理</h1>
+          <p id="pageSubtitle">统一管理 Emby 服务器访问、线路与策略</p>
+        </div>
+        <div class="status-strip" id="headStatus">
+          <div class="status-cell"><b>0</b><span>Emby 节点</span></div>
+          <div class="status-cell"><b>0</b><span>选中</span></div>
+        </div>
+      </header>
+
+      <main>
+        <section id="tabNodes" class="deck nodes-deck">
+          <div class="main-column">
+            <div class="command-bar">
+              <div class="query-pack">
+                <label class="search-field">
+                  <input type="text" id="searchInput" placeholder="搜索名称、展示名或标签" oninput="filterNodes()"/>
+                </label>
+                <select id="tagFilter" class="select-input" onchange="filterNodes()">
+                  <option value="">全部标签</option>
+                </select>
+              </div>
+              <div class="action-pack">
+                <button class="primary-action" onclick="openAddModal()">新增 Emby 节点</button>
+                <button class="btn" onclick="openImportModal()">导入</button>
+                <button class="btn" onclick="doExport()" title="未选择时导出全部，已选择时导出选中节点">导出</button>
+                <button class="btn" onclick="doSaveOrder()" title="拖动节点后保存当前排序">保存排序</button>
+                <button class="btn" id="btnCheckSel" onclick="checkSelectedStatus()" style="display:none">检测选中</button>
+                <button class="btn btn-danger" id="btnDelSel" onclick="deleteSelected()" style="display:none">删除选中</button>
+              </div>
+            </div>
+
+            <div class="signal-grid" id="nodeOverview"></div>
+
+            <div class="batch-tray" id="selBar">
+              <div><strong id="selCount">0</strong> 个项目已选中</div>
+              <div class="batch-actions">
+                <button class="btn btn-sm" onclick="selectAll()">全选</button>
+                <button class="btn btn-sm" onclick="clearSel()">取消</button>
+                <button class="btn btn-sm" onclick="batchTagSelected()">打标签</button>
+                <button class="btn btn-sm" onclick="doExport()">导出</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteSelected()">删除</button>
+              </div>
+            </div>
+
+            <div id="nodesGrid" class="route-board"></div>
+          </div>
+
+          <aside class="context-panel">
+            <div class="context-card" id="focusPanel"></div>
+            <div class="context-card">
+              <h2>操作提示</h2>
+              <p>选择多个节点后可批量操作；拖动行左侧手柄调整顺序，再点击保存排序</p>
+            </div>
+          </aside>
+        </section>
+
+        <section id="tabStats" class="stats-deck" style="display:none">
+          <div class="stats-top">
+            <select id="statsDays" class="select-input" onchange="loadStats()">
+              <option value="1">今天</option>
+              <option value="7" selected>近 7 天</option>
+              <option value="30">近 30 天</option>
+            </select>
+            <div class="action-pack">
+              <button class="primary-action" onclick="loadStats()">刷新</button>
+            </div>
+          </div>
+          <div class="stats-grid" id="statsCards"></div>
+          <div class="data-table">
+            <table id="statsTable">
+              <thead><tr><th>日期</th><th>Emby 节点</th><th>客户端</th><th>播放次数</th><th>会话数</th></tr></thead>
+              <tbody id="statsBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </section>
+  </div>
+</div>
+
+<div class="sheet-layer" id="nodeModal" style="display:none" onclick="if(event.target===this)closeNodeModal()">
+  <div class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h2 id="modalTitle">添加 Emby 节点</h2>
+        <p>设置 Emby 节点名称、上游线路、身份策略与提醒节奏</p>
+      </div>
+      <button class="sheet-close" onclick="closeNodeModal()">×</button>
+    </div>
+    <div class="form-grid" id="nodeForm">
+      <div class="form-section">基础路由</div>
+      <div class="form-group">
+        <label for="f-name">Emby 节点名称 *</label>
+        <input type="text" id="f-name" placeholder="my-emby（仅 a-z 0-9 _ -）"/>
+      </div>
+      <div class="form-group">
+        <label for="f-displayName">展示名称</label>
+        <input type="text" id="f-displayName" placeholder="我的 Emby（可中文）"/>
+      </div>
+      <div class="form-group form-full">
+        <label for="f-target">上游地址 * <span class="form-hint">多个地址可用换行、分号或逗号分隔</span></label>
+        <textarea id="f-target" placeholder="https://emby.example.com&#10;https://emby-backup.example.com"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="f-secret">访问密钥</label>
+        <input type="text" id="f-secret" placeholder="留空则无需密钥"/>
+      </div>
+      <div class="form-group">
+        <label for="f-tag">标签</label>
+        <input type="text" id="f-tag" placeholder="如：公益服"/>
+      </div>
+      <div class="form-group form-full">
+        <label for="f-note">备注</label>
+        <input type="text" id="f-note" placeholder="备注信息"/>
+      </div>
+
+      <div class="form-section">身份策略</div>
+      <div class="identity-policy">
+        <label class="policy-switch" for="f-impersonate">
+          <input type="checkbox" id="f-impersonate" checked onchange="syncImpersonateProfileState()"/>
+          <span class="policy-toggle"></span>
+          <span class="policy-copy">
+            <b>伪装客户端身份</b>
+            <small>启用后使用所选客户端身份访问上游；关闭则透传真实客户端身份</small>
+          </span>
+        </label>
+        <div class="policy-select">
+          <label for="f-impersonateProfile">身份模板</label>
+          <select id="f-impersonateProfile">
+            <option value="yamby">Yamby Android</option>
+            <option value="hills_android">Hills Android</option>
+            <option value="hills_windows">Hills Windows</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-section collapse-section" onclick="toggleSection('advSection',this)">高级访问</div>
+      <div id="advSection" class="section-grid">
+        <div class="inline-check form-full">
+          <input type="checkbox" id="f-directExternal"/>
+          <label for="f-directExternal">直连外链（播放时跳转到真实地址）</label>
+        </div>
+      </div>
+
+      <div class="form-section collapse-section collapsed" onclick="toggleSection('keepSection',this)">保号提醒</div>
+      <div id="keepSection" class="section-grid" style="display:none">
+        <div class="form-group">
+          <label for="f-renewDays">保号周期（天） <span class="form-hint">0=不启用</span></label>
+          <input type="number" id="f-renewDays" value="0" min="0" max="3650"/>
+        </div>
+        <div class="form-group">
+          <label for="f-remindBeforeDays">提前提醒天数</label>
+          <input type="number" id="f-remindBeforeDays" value="3" min="0" max="3650"/>
+        </div>
+        <div class="form-group">
+          <label for="f-keepaliveAt">每日提醒时间 <span class="form-hint">北京时间</span></label>
+          <input type="time" id="f-keepaliveAt" value="03:00"/>
+        </div>
+        <div class="form-group">
+          <label for="f-keepaliveMaxPerDay">每日最多提醒次数</label>
+          <input type="number" id="f-keepaliveMaxPerDay" value="1" min="1" max="24"/>
+        </div>
+        <div class="inline-check form-full">
+          <input type="checkbox" id="f-keepaliveChangeOnly" checked/>
+          <label for="f-keepaliveChangeOnly">仅内容变化时提醒</label>
+        </div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeNodeModal()">取消</button>
+      <button class="primary-action" onclick="saveNode()">保存 Emby 节点</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-layer" id="importModal" style="display:none" onclick="if(event.target===this)closeImportModal()">
+  <div class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h2>批量导入</h2>
+        <p>上传或粘贴配置 JSON，导入后会刷新当前面板</p>
+      </div>
+      <button class="sheet-close" onclick="closeImportModal()">×</button>
+    </div>
+    <div class="form-group form-spaced">
+      <label for="importFile">选择 JSON 文件</label>
+      <input type="file" id="importFile" accept=".json,application/json" onchange="loadImportFile(this.files && this.files[0])"/>
+    </div>
+    <div class="form-group form-spaced">
+      <label for="importJson">JSON 内容</label>
+      <textarea id="importJson" class="code-textarea" placeholder='[{"name":"my-emby","target":"https://emby.example.com","secret":"","tag":""}]'></textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeImportModal()">取消</button>
+      <button class="primary-action" onclick="doImport()">执行导入</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-layer" id="configModal" style="display:none" onclick="if(event.target===this)closeConfigModal()">
+  <div class="sheet config-sheet">
+    <div class="sheet-head">
+      <div>
+        <h2>系统配置</h2>
+        <p>管理播放兼容、日志、安全访问与运维诊断配置</p>
+      </div>
+      <button class="sheet-close" onclick="closeConfigModal()">×</button>
+    </div>
+    <div class="config-shell" id="configForm">
+      <aside class="config-map" aria-label="系统配置分组">
+        <div class="config-map-head">
+          <b>配置分类</b>
+          <span>快速切换</span>
+        </div>
+        <div class="config-nav">
+          <button type="button" class="config-nav-button active" onclick="scrollConfigGroup('config-playback',this)"><span>01</span><b>播放设置</b></button>
+          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-runtime',this)"><span>02</span><b>日志设置</b></button>
+          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-access',this)"><span>03</span><b>安全设置</b></button>
+          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-ops',this)"><span>04</span><b>运维诊断</b></button>
+        </div>
+      </aside>
+      <div class="config-panel">
+        <section class="config-group" id="config-playback">
+          <div class="config-group-head">
+            <span class="config-index">01</span>
+            <div>
+              <h3>播放设置</h3>
+            </div>
+          </div>
+          <div class="config-fields">
+            <div class="config-field-card">
+              <div class="config-card-head">
+                <h4>CapyPlayer 兼容</h4>
+                <span>播放器</span>
+              </div>
+              <div class="toggle-row">
+                <input type="checkbox" id="cfg-capyStripEmby"/>
+                <label for="cfg-capyStripEmby">兼容 CapyPlayer 播放器</label>
+              </div>
+            </div>
+            <div class="config-field-card">
+              <div class="config-card-head">
+                <h4>EMOS 兼容</h4>
+                <span>反代</span>
+              </div>
+              <div class="toggle-row">
+                <input type="checkbox" id="cfg-emosCompat"/>
+                <label for="cfg-emosCompat">启用兼容模式，匹配后附加 EMOS 请求头</label>
+              </div>
+              <div class="form-group">
+                <label for="cfg-emosMatchHosts">EMOS 匹配域名</label>
+                <textarea id="cfg-emosMatchHosts" placeholder="emos.example.com&#10;media.example.net"></textarea>
+                <div class="form-hint">每行或逗号分隔；关闭兼容模式时不会使用</div>
+              </div>
+              <div class="tg-row">
+                <div class="form-group">
+                  <label for="cfg-emosProxyId">EMOS Proxy ID</label>
+                  <input id="cfg-emosProxyId" placeholder="proxy-id"/>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-emosProxyName">EMOS Proxy Name</label>
+                  <input id="cfg-emosProxyName" placeholder="proxy-name"/>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="config-group" id="config-runtime">
+          <div class="config-group-head">
+            <span class="config-index">02</span>
+            <div>
+              <h3>日志设置</h3>
+            </div>
+          </div>
+          <div class="tg-row">
+            <div class="form-group">
+              <label for="cfg-logLevel">日志等级</label>
+              <select id="cfg-logLevel">
+                <option value="silent">silent</option>
+                <option value="error">error</option>
+                <option value="warn">warn</option>
+                <option value="info">info</option>
+                <option value="debug">debug</option>
+              </select>
+            </div>
+            <div class="toggle-row">
+              <input type="checkbox" id="cfg-logAccess" checked/>
+              <label for="cfg-logAccess">输出客户端访问日志</label>
+            </div>
+          </div>
+        </section>
+
+        <section class="config-group" id="config-access">
+          <div class="config-group-head">
+            <span class="config-index">03</span>
+            <div>
+              <h3>安全设置</h3>
+            </div>
+          </div>
+          <div class="config-fields">
+            <div class="config-field-card">
+              <div class="config-card-head">
+                <h4>真实 IP 识别</h4>
+                <span>Proxy</span>
+              </div>
+              <div class="toggle-row">
+                <input type="checkbox" id="cfg-trustProxy" checked/>
+                <label for="cfg-trustProxy">信任反向代理传入的真实 IP</label>
+              </div>
+            </div>
+            <div class="config-field-card">
+              <div class="config-card-head">
+                <h4>CORS 来源</h4>
+                <span>Origin</span>
+              </div>
+              <div class="form-group">
+                <label for="cfg-corsAllowOrigin">CORS 允许来源</label>
+                <textarea id="cfg-corsAllowOrigin" placeholder="留空：自动使用请求来源&#10;*：允许任意来源&#10;https://app.example.com"></textarea>
+                <div class="form-hint">每行或逗号分隔；留空时自动使用请求来源</div>
+              </div>
+            </div>
+            <div class="config-field-card is-warning">
+              <div class="config-card-head">
+                <h4>外部连接白名单</h4>
+                <span>Raw</span>
+              </div>
+              <div class="form-group">
+                <label for="cfg-externalAllowHosts">允许的外部地址</label>
+                <textarea id="cfg-externalAllowHosts" placeholder="cdn.example.com&#10;media.example.net:8443"></textarea>
+                <div class="form-hint">每行或逗号分隔；需要端口时请一并填写</div>
+              </div>
+              <div class="toggle-row">
+                <input type="checkbox" id="cfg-externalAllowAny"/>
+                <label for="cfg-externalAllowAny">允许任意外部连接（不推荐）</label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="config-group" id="config-ops">
+          <div class="config-group-head">
+            <span class="config-index">04</span>
+            <div>
+              <h3>运维诊断</h3>
+            </div>
+          </div>
+          <div class="config-fields">
+            <div class="config-field-card is-warning">
+              <div class="config-card-head">
+                <h4>代理流量记录</h4>
+                <span>Capture</span>
+              </div>
+              <div class="toggle-row">
+                <input type="checkbox" id="cfg-trafficCaptureEnabled"/>
+                <label for="cfg-trafficCaptureEnabled">启用代理流量记录</label>
+              </div>
+              <div class="form-group">
+                <label for="cfg-trafficCaptureFile">记录位置</label>
+                <input id="cfg-trafficCaptureFile" placeholder="./data/traffic-captures.jsonl"/>
+                <div class="form-hint">写入 JSONL 文件；开启后会原样保存请求与响应内容</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeConfigModal()">取消</button>
+      <button class="primary-action" onclick="saveConfig()">保存配置</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-layer" id="tgModal" style="display:none" onclick="if(event.target===this)closeTgModal()">
+  <div class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h2>Telegram 通知</h2>
+        <p>配置日报通知、变更通知和测试消息</p>
+      </div>
+      <button class="sheet-close" onclick="closeTgModal()">×</button>
+    </div>
+    <div class="tg-form" id="tgForm">
+      <div class="toggle-row">
+        <input type="checkbox" id="tg-enabled"/>
+        <label for="tg-enabled">启用推送</label>
+      </div>
+      <div>
+        <label for="tg-token">Bot Token</label>
+        <input type="text" id="tg-token" placeholder="1234567890:ABCdef..."/>
+      </div>
+      <div>
+        <label for="tg-chat">Chat ID</label>
+        <input type="text" id="tg-chat" placeholder="-1001234567890 或 @频道"/>
+      </div>
+      <div class="tg-row">
+        <div>
+          <label for="tg-reportTime">日报推送时间（北京时间）</label>
+          <input type="time" id="tg-reportTime" value="08:00"/>
+        </div>
+        <div>
+          <label for="tg-reportEveryMin">推送间隔（分钟，最小 60）</label>
+          <input type="number" id="tg-reportEveryMin" value="1440" min="60" max="1440"/>
+        </div>
+      </div>
+      <div class="tg-row">
+        <div>
+          <label for="tg-reportMaxPerDay">每日最多推送次数</label>
+          <input type="number" id="tg-reportMaxPerDay" value="1" min="1" max="24"/>
+        </div>
+        <div>
+          <label for="tg-directEstGB">直连流量估算（GB/次）</label>
+          <input type="number" id="tg-directEstGB" value="1.2" step="0.1" min="0"/>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="tg-changeOnly" checked/>
+        <label for="tg-changeOnly">仅内容变化时推送</label>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="testTg()">测试推送</button>
+      <button class="btn" onclick="closeTgModal()">取消</button>
+      <button class="primary-action" onclick="saveTg()">保存配置</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastRoot"></div>
+
+<script>
+let TOKEN = localStorage.getItem('ep_token') || '';
+let allNodes = [];
+let editingNode = null;
+let selectedNodes = new Set();
+let draggingNode = '';
+let nodeChecks = {};
+let visibleProxyUrls = new Set();
+let focusedNodeName = '';
+
+const HIDDEN_PROXY_TEXT = '••••••••••••••••••••••••••••••••';
+const IMPERSONATE_LABELS = { yamby: 'Yamby Android', hills_android: 'Hills Android', hills_windows: 'Hills Windows' };
+const EYE_ICONS = {
+  open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
+  closed: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 10.6a3 3 0 0 0 4.1 4.1"></path><path d="M9.5 5.5A10.6 10.6 0 0 1 12 5c6 0 9.5 7 9.5 7a16.6 16.6 0 0 1-2.4 3.2"></path><path d="M6.2 6.8C3.8 8.6 2.5 12 2.5 12s3.5 7 9.5 7c1.3 0 2.5-.3 3.6-.8"></path></svg>',
+};
+
+window.onload = () => {
+  if (TOKEN) initApp();
+};
+
+async function doLogin() {
+  const tok = document.getElementById('tokenInput').value.trim();
+  if (!tok) return;
+  const r = await api('list', {}, tok);
+  if (r.ok) {
+    TOKEN = tok;
+    localStorage.setItem('ep_token', TOKEN);
+    initApp();
+  } else {
+    document.getElementById('loginErr').style.display = 'block';
+  }
+}
+
+document.getElementById('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+function doLogout() {
+  localStorage.removeItem('ep_token');
+  TOKEN = '';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('loginWrap').style.display = 'grid';
+}
+
+function initApp() {
+  document.getElementById('loginWrap').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  loadNodes();
+}
+
+async function api(action, data = {}, tok = TOKEN) {
+  try {
+    const r = await fetch('/admin/api', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
+      body: JSON.stringify({ action, ...data }),
+    });
+    return await r.json();
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+function switchTab(name, btn) {
+  document.querySelectorAll('.rail-button').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tabNodes').style.display = name === 'nodes' ? '' : 'none';
+  document.getElementById('tabStats').style.display = name === 'stats' ? '' : 'none';
+  document.getElementById('pageKicker').textContent = name === 'nodes' ? '媒体中枢' : '播放统计';
+  document.getElementById('pageTitle').textContent = name === 'nodes' ? 'Emby 服务器管理' : '播放统计';
+  document.getElementById('pageSubtitle').textContent = name === 'nodes' ? '统一管理 Emby 服务器访问、线路与策略' : '查看近期播放次数、会话数与客户端分布';
+  if (name === 'stats') loadStats(); else renderHeadStatus();
+}
+
+async function loadNodes() {
+  const r = await api('list');
+  if (!r.ok) { toast('加载节点失败: ' + r.error, 'err'); return; }
+  allNodes = r.nodes || [];
+  syncNodeState();
+  renderTagFilter();
+  filterNodes();
+}
+
+function syncNodeState() {
+  const names = new Set(allNodes.map(n => n.name));
+  selectedNodes.forEach(name => { if (!names.has(name)) selectedNodes.delete(name); });
+  visibleProxyUrls.forEach(name => { if (!names.has(name)) visibleProxyUrls.delete(name); });
+  for (const name of Object.keys(nodeChecks)) if (!names.has(name)) delete nodeChecks[name];
+  if (focusedNodeName && !names.has(focusedNodeName)) focusedNodeName = '';
+}
+
+function renderTagFilter() {
+  const sel = document.getElementById('tagFilter');
+  const cur = sel.value;
+  const tags = [...new Set(allNodes.map(n => n.tag).filter(Boolean))];
+  sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option value="${attr(t)}">${esc(t)}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+
+function getFilteredNodes() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const tag = document.getElementById('tagFilter').value;
+  return allNodes.filter(n => {
+    if (tag && n.tag !== tag) return false;
+    if (q && !n.name.includes(q) && !(n.displayName||'').toLowerCase().includes(q) && !(n.tag||'').toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+function splitTargets(target) {
+  return String(target || '').split(/[\n;,]+/g).map(t => t.trim()).filter(Boolean);
+}
+
+function filterNodes() {
+  const nodes = getFilteredNodes();
+  renderSignals(nodes);
+  renderNodes(nodes);
+  renderFocusPanel(nodes);
+  renderHeadStatus();
+  updateSelBar();
+}
+
+function renderHeadStatus() {
+  const el = document.getElementById('headStatus');
+  if (!el) return;
+  el.innerHTML = statusCells([
+    [allNodes.length, 'Emby 节点'],
+    [selectedNodes.size, '选中'],
+  ]);
+}
+
+function statusCells(items) {
+  return items.map(([value, label]) => `<div class="status-cell"><b>${value}</b><span>${label}</span></div>`).join('');
+}
+
+function renderSignals(visibleNodes) {
+  const summary = nodeSummary();
+  document.getElementById('nodeOverview').innerHTML = `
+    <div class="signal"><b>${allNodes.length}</b><div><span>全部 Emby 节点</span><em>${visibleNodes.length} 条当前可见</em></div></div>
+    <div class="signal"><b>${summary.fav}</b><div><span>收藏</span><em>置顶关注</em></div></div>
+    <div class="signal"><b>${summary.protectedCount}</b><div><span>密钥</span><em>受保护 Emby 节点</em></div></div>
+    <div class="signal"><b>${summary.keep}</b><div><span>保号</span><em>${summary.tags} 个标签</em></div></div>
+  `;
+}
+
+function nodeSummary() {
+  const summary = { fav: 0, keep: 0, protectedCount: 0, tags: new Set() };
+  for (const n of allNodes) {
+    if (n.fav) summary.fav++;
+    if (Number(n.renewDays || 0) > 0) summary.keep++;
+    if (n.secret) summary.protectedCount++;
+    if (n.tag) summary.tags.add(n.tag);
+  }
+  return { ...summary, tags: summary.tags.size };
+}
+
+function renderFocusPanel(nodes) {
+  const el = document.getElementById('focusPanel');
+  if (!el) return;
+  const focused = nodes.find(n => n.name === focusedNodeName);
+  const focus = focused || nodes[0];
+  if (!focus) {
+    el.innerHTML = '<h2>当前焦点</h2><p>暂无 Emby 节点，创建后这里会显示标签和上游摘要</p>';
+    return;
+  }
+  const targets = splitTargets(focus.target);
+  el.innerHTML = `
+    <h2>${esc(focus.displayName || focus.name)}</h2>
+    <p>${esc(focus.note || '未填写备注')}</p>
+    <div class="focus-list">
+      <div class="focus-item"><span>Emby 节点</span><b>/${esc(focus.name)}</b></div>
+      <div class="focus-item"><span>上游</span><b>${targets.length} 个地址</b></div>
+      <div class="focus-item"><span>标签</span><b>${esc(focus.tag || '无')}</b></div>
+      <div class="focus-item"><span>身份</span><b>${focus.impersonate === false ? '透传' : esc(impersonateProfileLabel(focus.impersonateProfile))}</b></div>
+    </div>
+  `;
+}
+
+function renderNodes(nodes) {
+  const grid = document.getElementById('nodesGrid');
+  if (!nodes.length) {
+    grid.innerHTML = '<div class="empty-state"><b>没有匹配的 Emby 节点</b><span>尝试清空搜索条件，或添加一个新的 Emby 节点</span></div>';
+    return;
+  }
+  grid.innerHTML = `
+    <div class="route-board-head"><span>控制</span><span>显示名称</span><span>访问地址</span><span>状态</span><span>动作</span></div>
+    ${nodes.map(n => nodeCard(n)).join('')}
+  `;
+}
+
+function toggleProxyUrl(name) {
+  if (visibleProxyUrls.has(name)) visibleProxyUrls.delete(name);
+  else visibleProxyUrls.add(name);
+  renderNodes(getFilteredNodes());
+}
+
+function focusNodeCard(event, name) {
+  const target = event?.target;
+  if (target?.closest?.('button,input,select,textarea,a,[draggable="true"]')) return;
+  focusedNodeName = name;
+  const nodes = getFilteredNodes();
+  renderNodes(nodes);
+  renderFocusPanel(nodes);
+}
+
+function normalizeImpersonateProfile(profile) {
+  const value = String(profile || '').toLowerCase();
+  return IMPERSONATE_LABELS[value] ? value : 'yamby';
+}
+
+function impersonateProfileLabel(profile) {
+  return IMPERSONATE_LABELS[normalizeImpersonateProfile(profile)];
+}
+
+function syncImpersonateProfileState() {
+  const enabled = document.getElementById('f-impersonate').checked;
+  document.getElementById('f-impersonateProfile').disabled = !enabled;
+}
+
+function nodeCard(n) {
+  const targets = splitTargets(n.target);
+  const proxyUrl = `${location.origin}/${n.name}${n.secret ? '/' + n.secret : ''}`;
+  const showProxy = visibleProxyUrls.has(n.name);
+  const sel = selectedNodes.has(n.name);
+  const focused = focusedNodeName === n.name;
+  const identityLabel = impersonateProfileLabel(n.impersonateProfile);
+  const check = nodeChecks[n.name];
+  const checkText = check ? compactCheckText(check.text) : '检测';
+  const checkClass = check ? ' ' + check.type : '';
+  const checkTitle = check ? check.text : '检测延时';
+  const eyeIcon = showProxy ? EYE_ICONS.open : EYE_ICONS.closed;
+  return `<article class="route-row${sel?' selected':''}${focused?' focused':''}" id="row-${n.name}" onclick="focusNodeCard(event,'${n.name}')" ondragover="onNodeDragOver(event,'${n.name}')" ondragenter="onNodeDragEnter(event,'${n.name}')" ondrop="onNodeDrop(event,'${n.name}')">
+    <div class="route-tools">
+      <span class="drag-handle" draggable="true" ondragstart="onNodeDragStart(event,'${n.name}')" ondragend="onNodeDragEnd()" title="拖动排序">↕</span>
+      <input type="checkbox" class="row-check" ${sel?'checked':''} onchange="toggleSelect('${n.name}',this.checked)"/>
+      <button class="fav-star ${n.fav?'on':''}" onclick="toggleFav('${n.name}')" title="收藏" aria-label="收藏">★</button>
+    </div>
+    <div class="identity">
+      <strong>${esc(n.displayName || n.name)}</strong>
+    </div>
+    <div class="route-address">
+      <div class="proxy-line">
+        <div class="mono${showProxy ? '' : ' is-hidden'}">
+          <span class="proxy-text">${showProxy ? esc(proxyUrl) : HIDDEN_PROXY_TEXT}</span>
+          <button class="reveal-button${showProxy ? ' on' : ''}" onclick="toggleProxyUrl('${n.name}')" title="${showProxy ? '隐藏访问地址' : '显示访问地址'}" aria-label="${showProxy ? '隐藏访问地址' : '显示访问地址'}">${eyeIcon}</button>
+        </div>
+        <button class="copy-button" data-copy="${attr(proxyUrl)}" onclick="copyText(this.dataset.copy)">复制</button>
+      </div>
+    </div>
+    <div class="chip-pack">
+      ${n.tag?`<span class="node-tag">${esc(n.tag)}</span>`:''}
+      <span class="chip blue">${targets.length} 上游</span>
+      ${n.secret?'<span class="chip warn">密钥</span>':'<span class="chip">公开</span>'}
+      ${n.directExternal?'<span class="chip blue">直连</span>':''}
+      ${n.renewDays?'<span class="chip ok">保号</span>':''}
+      <span class="chip">${n.impersonate === false ? '透传' : '伪装：' + esc(identityLabel)}</span>
+    </div>
+    <div class="row-actions">
+      <button class="btn btn-sm btn-primary row-action" onclick="openEditModal('${n.name}')">编辑</button>
+      <button class="btn btn-sm row-action check-action${checkClass}" title="${attr(checkTitle)}" onclick="checkNodeStatus('${n.name}')">${esc(checkText)}</button>
+      ${n.renewDays ? `<button class="btn btn-sm" data-name="${attr(n.name)}" data-display="${attr(n.displayName||n.name)}" data-renew="${Number(n.renewDays||0)}" data-remind="${Number(n.remindBeforeDays||0)}" data-at="${attr(n.keepaliveAt||'00:00')}" onclick="testKeepaliveFromButton(this)">保号测试</button>` : ''}
+      <button class="btn btn-sm btn-danger row-action" onclick="deleteNode('${n.name}')">删除</button>
+    </div>
+  </article>`;
+}
+
+function onNodeDragStart(event, name) {
+  draggingNode = name;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', name);
+  }
+  const row = document.getElementById('row-' + name);
+  if (row) row.classList.add('dragging');
+}
+
+function onNodeDragOver(event, targetName) {
+  if (!draggingNode || draggingNode === targetName) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+}
+
+function onNodeDragEnter(event, targetName) {
+  if (!draggingNode || draggingNode === targetName) return;
+  clearNodeDragClasses();
+  const row = document.getElementById('row-' + targetName);
+  if (row) row.classList.add('drag-over');
+}
+
+function onNodeDrop(event, targetName) {
+  event.preventDefault();
+  const sourceName = draggingNode || event.dataTransfer?.getData('text/plain') || '';
+  const source = allNodes.find(n => n.name === sourceName);
+  const target = allNodes.find(n => n.name === targetName);
+  const afterTarget = shouldDropAfter(event, event.currentTarget);
+  clearNodeDragState();
+  if (!source || !target || sourceName === targetName) return;
+  if (!!source.fav !== !!target.fav) {
+    toast('收藏项会固定在前，请在同组内排序', 'info');
+    return;
+  }
+  moveNodeBeforeOrAfter(sourceName, targetName, afterTarget);
+  filterNodes();
+  toast('排序已调整，点击保存排序生效', 'info');
+}
+
+function onNodeDragEnd() {
+  clearNodeDragState();
+}
+
+function shouldDropAfter(event, row) {
+  if (!row || !row.getBoundingClientRect) return false;
+  const rect = row.getBoundingClientRect();
+  return event.clientY > rect.top + rect.height / 2;
+}
+
+function moveNodeBeforeOrAfter(sourceName, targetName, afterTarget) {
+  const from = allNodes.findIndex(n => n.name === sourceName);
+  let to = allNodes.findIndex(n => n.name === targetName);
+  if (from < 0 || to < 0 || from === to) return;
+  const [node] = allNodes.splice(from, 1);
+  if (from < to) to--;
+  if (afterTarget) to++;
+  to = Math.max(0, Math.min(to, allNodes.length));
+  allNodes.splice(to, 0, node);
+}
+
+function clearNodeDragClasses() {
+  document.querySelectorAll('.route-row.drag-over').forEach(el => el.classList.remove('drag-over'));
+}
+
+function clearNodeDragState() {
+  draggingNode = '';
+  document.querySelectorAll('.route-row.dragging,.route-row.drag-over').forEach(el => {
+    el.classList.remove('dragging', 'drag-over');
+  });
+}
+
+function toggleSelect(name, checked) {
+  if (checked) selectedNodes.add(name); else selectedNodes.delete(name);
+  focusedNodeName = name;
+  filterNodes();
+}
+
+function updateSelBar() {
+  const bar = document.getElementById('selBar');
+  const n = selectedNodes.size;
+  document.getElementById('selCount').textContent = n;
+  bar.classList.toggle('visible', n > 0);
+  document.getElementById('btnCheckSel').style.display = n ? '' : 'none';
+  document.getElementById('btnDelSel').style.display = n ? '' : 'none';
+}
+
+function selectAll() {
+  getFilteredNodes().forEach(n => selectedNodes.add(n.name));
+  filterNodes();
+}
+
+function clearSel() {
+  selectedNodes.clear();
+  filterNodes();
+}
+
+function openAddModal() {
+  editingNode = null;
+  document.getElementById('modalTitle').textContent = '添加 Emby 节点';
+  clearNodeForm();
+  showModal('nodeModal');
+  document.getElementById('f-name').focus();
+}
+
+function openEditModal(name) {
+  const n = allNodes.find(x => x.name === name);
+  if (!n) return;
+  editingNode = n;
+  document.getElementById('modalTitle').textContent = '编辑 Emby 节点';
+  fillNodeForm(n);
+  showModal('nodeModal');
+}
+
+function closeNodeModal() {
+  hideModal('nodeModal');
+  editingNode = null;
+}
+
+function showModal(id) {
+  document.getElementById(id).style.display = 'flex';
+}
+
+function hideModal(id) {
+  document.getElementById(id).style.display = 'none';
+}
+
+function clearNodeForm() {
+  ['name','displayName','target','secret','tag','note'].forEach(f => {
+    const el = document.getElementById('f-' + f);
+    if (el) el.value = '';
+  });
+  document.getElementById('f-impersonate').checked = true;
+  document.getElementById('f-impersonateProfile').value = 'yamby';
+  syncImpersonateProfileState();
+  document.getElementById('f-directExternal').checked = false;
+  document.getElementById('f-renewDays').value = '0';
+  document.getElementById('f-remindBeforeDays').value = '3';
+  document.getElementById('f-keepaliveAt').value = '03:00';
+  document.getElementById('f-keepaliveMaxPerDay').value = '1';
+  document.getElementById('f-keepaliveChangeOnly').checked = true;
+}
+
+function fillNodeForm(n) {
+  const s = (f, v) => { const el = document.getElementById('f-'+f); if (el) el.value = v||''; };
+  s('name', n.name); s('displayName', n.displayName); s('target', n.target);
+  s('secret', n.secret); s('tag', n.tag); s('note', n.note);
+  document.getElementById('f-impersonate').checked = n.impersonate !== false;
+  document.getElementById('f-impersonateProfile').value = normalizeImpersonateProfile(n.impersonateProfile);
+  syncImpersonateProfileState();
+  document.getElementById('f-directExternal').checked = !!n.directExternal;
+  document.getElementById('f-renewDays').value = n.renewDays || '0';
+  document.getElementById('f-remindBeforeDays').value = n.remindBeforeDays || '3';
+  document.getElementById('f-keepaliveAt').value = n.keepaliveAt || '03:00';
+  document.getElementById('f-keepaliveMaxPerDay').value = n.keepaliveMaxPerDay || '1';
+  document.getElementById('f-keepaliveChangeOnly').checked = n.keepaliveChangeOnly !== false;
+}
+
+function getNodeFormData() {
+  const g = (f) => { const el = document.getElementById('f-'+f); return el ? el.value : ''; };
+  return {
+    name: g('name'), displayName: g('displayName'), target: g('target'),
+    secret: g('secret'), tag: g('tag'), note: g('note'),
+    impersonate: document.getElementById('f-impersonate').checked,
+    impersonateProfile: normalizeImpersonateProfile(g('impersonateProfile')),
+    directExternal: document.getElementById('f-directExternal').checked,
+    renewDays: parseInt(g('renewDays') || '0'),
+    remindBeforeDays: parseInt(g('remindBeforeDays') || '0'),
+    keepaliveAt: g('keepaliveAt'),
+    keepaliveMaxPerDay: parseInt(g('keepaliveMaxPerDay') || '1'),
+    keepaliveChangeOnly: document.getElementById('f-keepaliveChangeOnly').checked,
+    fav: editingNode?.fav || false,
+    rank: editingNode?.rank,
+  };
+}
+
+async function saveNode() {
+  const data = getNodeFormData();
+  if (editingNode) data.oldName = editingNode.name;
+  const r = await api('save', { node: data });
+  if (r.ok) {
+    closeNodeModal();
+    toast('已保存', 'ok');
+    await loadNodes();
+  } else {
+    toast('保存失败: ' + r.error, 'err');
+  }
+}
+
+async function deleteNode(name) {
+  if (!confirm(`确认删除节点 "${name}"？`)) return;
+  const r = await api('delete', { name });
+  if (r.ok) { toast('已删除', 'ok'); await loadNodes(); }
+  else toast('删除失败: ' + r.error, 'err');
+}
+
+async function deleteSelected() {
+  if (!selectedNodes.size) return;
+  if (!confirm(`确认删除选中的 ${selectedNodes.size} 个节点？`)) return;
+  const r = await api('batchDelete', { names: [...selectedNodes] });
+  if (r.ok) { selectedNodes.clear(); updateSelBar(); toast('已删除', 'ok'); await loadNodes(); }
+  else toast('删除失败: ' + r.error, 'err');
+}
+
+async function toggleFav(name) {
+  const r = await api('toggleFav', { name });
+  if (r.ok) { await loadNodes(); }
+}
+
+async function batchTagSelected() {
+  const tag = prompt('输入标签名（留空清除）:');
+  if (tag === null) return;
+  const r = await api('batchTag', { names: [...selectedNodes], tag });
+  if (r.ok) { toast('标签更新', 'ok'); await loadNodes(); }
+  else toast('失败: ' + r.error, 'err');
+}
+
+async function checkNodeStatus(name) {
+  nodeChecks[name] = { type: 'info', text: '检测中…' };
+  filterNodes();
+  const r = await api('checkStatus', { name });
+  if (!r.ok) {
+    nodeChecks[name] = { type: 'err', text: '失败' };
+    filterNodes();
+    return;
+  }
+  nodeChecks[name] = formatCheckResult(r.results && r.results[0]);
+  filterNodes();
+}
+
+function compactCheckText(text) {
+  return String(text || '').replace(/ · /g, ' ');
+}
+
+function formatCheckResult(result) {
+  if (!result) return { type: 'err', text: '失败' };
+  const msValue = Number(result.ms);
+  const ms = Number.isFinite(msValue) ? `${Math.round(msValue)}ms` : '';
+  if (result.error) return { type: 'err', text: ms ? `${result.error} · ${ms}` : result.error };
+  if (Number.isFinite(msValue) && msValue > 9999) return { type: 'err', text: '超时' };
+  const status = Number(result.status || 0);
+  if (status >= 200 && status < 400) return { type: 'ok', text: ms || '正常' };
+  return { type: 'warn', text: `${status || '异常'}${ms ? ' · ' + ms : ''}` };
+}
+
+async function checkSelectedStatus() {
+  for (const name of selectedNodes) await checkNodeStatus(name);
+}
+
+function openImportModal() {
+  const file = document.getElementById('importFile');
+  if (file) file.value = '';
+  showModal('importModal');
+}
+function closeImportModal() { hideModal('importModal'); }
+
+async function loadImportFile(file) {
+  if (!file) return;
+  if (file.size > 4 * 1024 * 1024) {
+    toast('文件过大，导入接口限制 4MB', 'err');
+    return;
+  }
+  try {
+    const text = await file.text();
+    document.getElementById('importJson').value = text.trim();
+    toast('已读取文件: ' + file.name, 'ok');
+  } catch (e) {
+    toast('读取文件失败: ' + (e?.message || ''), 'err');
+  }
+}
+
+async function doImport() {
+  let nodes;
+  try { nodes = JSON.parse(document.getElementById('importJson').value); }
+  catch { toast('JSON 格式错误', 'err'); return; }
+  if (!Array.isArray(nodes)) nodes = [nodes];
+  const r = await api('import', { nodes });
+  if (r.ok) {
+    const ok = r.results.filter(x => x.ok).length;
+    const fail = r.results.filter(x => !x.ok);
+    closeImportModal();
+    toast(`导入完成: ${ok} 成功${fail.length?' / ' + fail.length + ' 失败':''}`, ok ? 'ok' : 'err');
+    if (fail.length) console.warn('Import failures:', fail);
+    await loadNodes();
+  } else {
+    toast('导入失败: ' + r.error, 'err');
+  }
+}
+
+async function doExport() {
+  const names = [...selectedNodes];
+  const r = await api('export', names.length ? { names } : {});
+  if (!r.ok) { toast('导出失败: ' + r.error, 'err'); return; }
+  const nodes = Array.isArray(r.nodes) ? r.nodes : [];
+  if (!nodes.length) { toast('没有可导出的节点', 'info'); return; }
+  const scope = names.length ? 'selected' : 'all';
+  downloadJson(`emby-proxy-nodes-${scope}-${formatStamp(new Date())}.json`, nodes);
+  toast(`已导出 ${nodes.length} 个节点`, 'ok');
+}
+
+function formatExternalAllowHosts(value) {
+  return String(value || '').split(',').map(x => x.trim()).filter(Boolean).join('\n');
+}
+
+function formatCORSAllowOrigin(value) {
+  return String(value || '').split(',').map(x => x.trim()).filter(Boolean).join('\n');
+}
+
+function formatCommaList(value) {
+  return String(value || '').split(',').map(x => x.trim()).filter(Boolean).join('\n');
+}
+
+function flagEnabled(value) {
+  if (value === true) return true;
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function safeLogLevel(value) {
+  const level = String(value || 'info').trim().toLowerCase();
+  return ['silent', 'error', 'warn', 'info', 'debug'].includes(level) ? level : 'info';
+}
+
+async function openConfigModal() {
+  const r = await api('config.get');
+  if (r.ok && r.config) {
+    const c = r.config;
+    document.getElementById('cfg-logLevel').value = safeLogLevel(c.logLevel);
+    document.getElementById('cfg-logAccess').checked = c.logAccess !== false;
+    document.getElementById('cfg-capyStripEmby').checked = flagEnabled(c.capyStripEmby);
+    document.getElementById('cfg-emosCompat').checked = !!c.emosCompat;
+    document.getElementById('cfg-emosMatchHosts').value = formatCommaList(c.emosMatchHosts);
+    document.getElementById('cfg-emosProxyId').value = c.emosProxyId || '';
+    document.getElementById('cfg-emosProxyName').value = c.emosProxyName || '';
+    document.getElementById('cfg-corsAllowOrigin').value = formatCORSAllowOrigin(c.corsAllowOrigin);
+    document.getElementById('cfg-externalAllowHosts').value = formatExternalAllowHosts(c.externalAllowHosts);
+    document.getElementById('cfg-externalAllowAny').checked = !!c.externalAllowAny;
+    document.getElementById('cfg-trustProxy').checked = c.trustProxy !== false;
+    document.getElementById('cfg-trafficCaptureEnabled').checked = !!c.trafficCaptureEnabled;
+    document.getElementById('cfg-trafficCaptureFile').value = c.trafficCaptureFile || './data/traffic-captures.jsonl';
+  }
+  showModal('configModal');
+  const panel = document.querySelector('#configForm .config-panel');
+  if (panel) panel.scrollTop = 0;
+  document.querySelectorAll('#configForm .config-nav-button').forEach((btn, index) => btn.classList.toggle('active', index === 0));
+}
+
+function closeConfigModal() { hideModal('configModal'); }
+
+function scrollConfigGroup(id, btn) {
+  const group = document.getElementById(id);
+  if (!group) return;
+  document.querySelectorAll('#configForm .config-nav-button').forEach(x => x.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  group.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function saveConfig() {
+  const config = {
+    logLevel: document.getElementById('cfg-logLevel').value,
+    logAccess: document.getElementById('cfg-logAccess').checked,
+    capyStripEmby: document.getElementById('cfg-capyStripEmby').checked ? '1' : '0',
+    emosCompat: document.getElementById('cfg-emosCompat').checked,
+    emosMatchHosts: document.getElementById('cfg-emosMatchHosts').value.trim(),
+    emosProxyId: document.getElementById('cfg-emosProxyId').value.trim(),
+    emosProxyName: document.getElementById('cfg-emosProxyName').value.trim(),
+    corsAllowOrigin: document.getElementById('cfg-corsAllowOrigin').value.trim(),
+    externalAllowHosts: document.getElementById('cfg-externalAllowHosts').value.trim(),
+    externalAllowAny: document.getElementById('cfg-externalAllowAny').checked,
+    trustProxy: document.getElementById('cfg-trustProxy').checked,
+    trafficCaptureEnabled: document.getElementById('cfg-trafficCaptureEnabled').checked,
+    trafficCaptureFile: document.getElementById('cfg-trafficCaptureFile').value.trim(),
+  };
+  const r = await api('config.set', { config });
+  if (r.ok) { closeConfigModal(); toast('系统配置已保存', 'ok'); }
+  else toast('保存失败: ' + r.error, 'err');
+}
+
+async function openTgModal() {
+  const r = await api('tg.get');
+  if (r.ok && r.config) {
+    const c = r.config;
+    document.getElementById('tg-enabled').checked = !!c.enabled;
+    document.getElementById('tg-token').value = c.token || '';
+    document.getElementById('tg-chat').value = c.chat || '';
+    document.getElementById('tg-reportTime').value = c.reportTime || '08:00';
+    document.getElementById('tg-reportEveryMin').value = c.reportEveryMin || 1440;
+    document.getElementById('tg-reportMaxPerDay').value = c.reportMaxPerDay || 1;
+    document.getElementById('tg-directEstGB').value = c.directEstGB || 1.2;
+    document.getElementById('tg-changeOnly').checked = c.reportChangeOnly !== false;
+  }
+  showModal('tgModal');
+}
+
+function closeTgModal() { hideModal('tgModal'); }
+
+async function saveTg() {
+  const config = {
+    enabled: document.getElementById('tg-enabled').checked,
+    token: document.getElementById('tg-token').value.trim(),
+    chat: document.getElementById('tg-chat').value.trim(),
+    reportTime: document.getElementById('tg-reportTime').value,
+    reportEveryMin: parseInt(document.getElementById('tg-reportEveryMin').value),
+    reportMaxPerDay: parseInt(document.getElementById('tg-reportMaxPerDay').value),
+    directEstGB: parseFloat(document.getElementById('tg-directEstGB').value),
+    reportChangeOnly: document.getElementById('tg-changeOnly').checked,
+  };
+  const r = await api('tg.set', { config });
+  if (r.ok) { closeTgModal(); toast('TG 配置已保存', 'ok'); }
+  else toast('保存失败: ' + r.error, 'err');
+}
+
+async function testTg() {
+  toast('发送测试消息…', 'info');
+  const r = await api('tg.test');
+  toast(r.ok ? '测试消息发送成功' : '发送失败: ' + r.error, r.ok ? 'ok' : 'err');
+}
+
+async function loadStats() {
+  const days = parseInt(document.getElementById('statsDays').value);
+  const r = await api('stats.get', { days });
+  if (!r.ok) { toast('加载统计失败', 'err'); return; }
+  const stats = r.stats || [];
+
+  let totalPlays = 0, totalSessions = 0;
+  const nodeSet = new Set(), clientSet = new Set();
+  for (const s of stats) { totalPlays += s.plays; totalSessions += s.sessions; nodeSet.add(s.node); clientSet.add(s.client); }
+
+  document.getElementById('headStatus').innerHTML = statusCells([
+    [totalPlays, '播放'],
+    [totalSessions, '会话'],
+  ]);
+  document.getElementById('statsCards').innerHTML = `
+    <div class="stat-block"><div class="val">${totalPlays}</div><div class="lbl">总播放次数</div></div>
+    <div class="stat-block"><div class="val">${totalSessions}</div><div class="lbl">总会话数</div></div>
+    <div class="stat-block"><div class="val">${nodeSet.size}</div><div class="lbl">活跃节点</div></div>
+    <div class="stat-block"><div class="val">${clientSet.size}</div><div class="lbl">客户端种类</div></div>
+  `;
+  const tbody = document.getElementById('statsBody');
+  tbody.innerHTML = stats.length ? stats.map(s => `
+    <tr><td>${s.day}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td></tr>
+  `).join('') : '<tr><td class="table-empty" colspan="5">暂无数据</td></tr>';
+}
+
+function testKeepaliveFromButton(btn) {
+  testKeepalive(btn.dataset.name, btn.dataset.display, parseInt(btn.dataset.renew || '0'), parseInt(btn.dataset.remind || '0'), btn.dataset.at || '00:00');
+}
+
+async function testKeepalive(name, displayName, renewDays, remindBeforeDays, keepaliveAt) {
+  toast('发送保号测试通知…', 'info');
+  const r = await api('keepalive.test', { name, displayName, renewDays, remindBeforeDays, keepaliveAt });
+  toast(r.ok ? '保号测试通知已发送' : '发送失败: ' + (r.error || ''), r.ok ? 'ok' : 'err');
+}
+
+async function doSaveOrder() {
+  const order = allNodes.map(n => n.name);
+  const r = await api('saveOrder', { order });
+  toast(r.ok ? '排序已保存' : '失败: ' + (r.error || ''), r.ok ? 'ok' : 'err');
+}
+
+function toggleSection(id, btn) {
+  const el = document.getElementById(id);
+  const collapsed = btn.classList.toggle('collapsed');
+  if (collapsed) {
+    el.style.display = 'none';
+  } else {
+    el.style.display = 'grid';
+  }
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function attr(s) {
+  return esc(s).replace(/'/g,'&#39;');
+}
+
+function copyText(t) {
+  navigator.clipboard.writeText(t).then(() => toast('已复制', 'ok'));
+}
+
+function downloadJson(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function formatStamp(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.getElementById('toastRoot').appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+</script>
+</body>
+</html>
