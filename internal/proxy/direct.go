@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
@@ -117,7 +116,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 		}
 		rewriteSetCookieHeaders(rh, selfPrefixForRaw)
 		rh.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length, Content-Type")
-		if res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Range") != "" || regexp.MustCompile(`(?i)bytes`).MatchString(res.Header.Get("Accept-Ranges")) {
+		if res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Range") != "" || acceptRangesBytesRE.MatchString(res.Header.Get("Accept-Ranges")) {
 			rh.Set("Accept-Ranges", "bytes")
 		} else {
 			rh.Del("Accept-Ranges")
@@ -155,7 +154,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 }
 
 func rangeStartZero(value string) bool {
-	m := regexp.MustCompile(`(?i)^\s*bytes\s*=\s*(\d+)-`).FindStringSubmatch(value)
+	m := rangeStartRE.FindStringSubmatch(value)
 	if len(m) != 2 {
 		return false
 	}

@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"embyproxy/internal/auth"
@@ -35,14 +34,14 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 		return textResponse(http.StatusInternalServerError, "STRM parse error", nil), nil
 	}
 	line := ""
-	for _, item := range regexp.MustCompile(`\r?\n`).Split(strings.TrimSpace(string(raw)), -1) {
+	for _, item := range lineBreakRE.Split(strings.TrimSpace(string(raw)), -1) {
 		item = strings.TrimSpace(item)
 		if item != "" && !strings.HasPrefix(item, "#") {
 			line = item
 			break
 		}
 	}
-	if !regexp.MustCompile(`(?i)^https?://`).MatchString(line) {
+	if !httpURLRE.MatchString(line) {
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-bad-target", "targetUrl": finalURL.String()})
 		return textResponse(http.StatusBadRequest, "Bad STRM", nil), nil
 	}
@@ -67,7 +66,7 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, baseHeaders http.Header, body []byte, env config.ProxyEnv) *http.Response {
 	rawAuthURL := cloneURL(finalURL)
 	embyAuthURL := cloneURL(finalURL)
-	if !regexp.MustCompile(`(?i)^/emby/`).MatchString(embyAuthURL.Path) {
+	if !embySlashPrefixRE.MatchString(embyAuthURL.Path) {
 		embyAuthURL.Path = "/emby" + ensureLeadingSlash(embyAuthURL.Path)
 	}
 	urls := []*url.URL{embyAuthURL}
@@ -161,13 +160,13 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	addCORSHeaders(headers, reqOrigin, env)
 	headers.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length, Content-Type")
 	if isStreamingMedia {
-		if res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Range") != "" || regexp.MustCompile(`(?i)bytes`).MatchString(res.Header.Get("Accept-Ranges")) {
+		if res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Range") != "" || acceptRangesBytesRE.MatchString(res.Header.Get("Accept-Ranges")) {
 			headers.Set("Accept-Ranges", "bytes")
 		} else {
 			headers.Del("Accept-Ranges")
 		}
 		headers.Set("Cache-Control", "no-store, no-transform")
-		if regexp.MustCompile(`(?i)\.m3u8($|\?)`).MatchString(finalURL.Path) {
+		if m3u8PathRE.MatchString(finalURL.Path) {
 			headers.Set("Content-Type", "application/vnd.apple.mpegurl")
 		}
 	}
@@ -326,8 +325,7 @@ func (h *Handler) rewriteBodyLinks(ctx context.Context, text, requestURL string,
 		}
 	}
 	hostMap, _ := h.store.GetHostIndex(ctx, "admin")
-	urlRE := regexp.MustCompile(`https?://[^\s"'<>\\]+`)
-	matches := uniqueStrings(urlRE.FindAllString(text, -1))
+	matches := uniqueStrings(bodyURLRE.FindAllString(text, -1))
 	if len(matches) == 0 {
 		return text
 	}

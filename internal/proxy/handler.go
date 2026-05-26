@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,8 +19,6 @@ import (
 	"embyproxy/internal/logging"
 	"embyproxy/internal/storage"
 )
-
-var nodeNameRE = regexp.MustCompile(`(?i)^[a-z0-9_-]{1,32}$`)
 
 type Handler struct {
 	cfg              config.Config
@@ -247,14 +244,14 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	reqOrigin := r.Header.Get("Origin")
 	forwardPath := parsed.Path
 	basePath := strings.TrimRight(base.Path, "/")
-	if regexp.MustCompile(`(?i)^/emby(/|$)`).MatchString(forwardPath) && regexp.MustCompile(`(?i)^/emby(/|$)`).MatchString(basePath) {
-		forwardPath = regexp.MustCompile(`(?i)^/emby`).ReplaceAllString(forwardPath, "")
+	if embyPathRE.MatchString(forwardPath) && embyPathRE.MatchString(basePath) {
+		forwardPath = embyPrefixRE.ReplaceAllString(forwardPath, "")
 		if forwardPath == "" {
 			forwardPath = "/"
 		}
 	}
-	if env.CapyStripEmby == "1" && isCapy && regexp.MustCompile(`(?i)^/emby(/|$)`).MatchString(forwardPath) {
-		forwardPath = regexp.MustCompile(`(?i)^/emby`).ReplaceAllString(forwardPath, "")
+	if env.CapyStripEmby == "1" && isCapy && embyPathRE.MatchString(forwardPath) {
+		forwardPath = embyPrefixRE.ReplaceAllString(forwardPath, "")
 		if forwardPath == "" {
 			forwardPath = "/"
 		}
@@ -283,13 +280,13 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	finalURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
 	applyIdentityToURL(h.ids, finalURL, node)
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-target", "targetUrl": finalURL.String()})
-	if h.isSTRM(finalURL.Path) && !regexp.MustCompile(`(?i)/emby/videos/[^/]+/stream\.strm$`).MatchString(finalURL.Path) {
+	if h.isSTRM(finalURL.Path) && !strmStreamPathRE.MatchString(finalURL.Path) {
 		return h.handleSTRM(ctx, r, node, parsed, finalURL, body, env)
 	}
 	p := strings.ToLower(finalURL.Path)
 	isStreaming := streamingRE.MatchString(forwardPath)
 	isStatic := (staticExtRE.MatchString(forwardPath) || embyImagesRE.MatchString(forwardPath)) && r.Method == http.MethodGet
-	isAuthAPI := regexp.MustCompile(`(?i)/users/authenticate(byname)?`).MatchString(p)
+	isAuthAPI := authAPIRE.MatchString(p)
 	isPlaybackAPI := isPlaybackPath(p)
 	isImageAPI := isImagePath(finalURL.Path)
 	isAdditionalPartsAPI := isAdditionalPartsPath(finalURL.Path)
@@ -299,7 +296,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	if isCapy && isAuthAPI {
 		deleteHeaders(headers, "X-Emby-Token", "X-MediaBrowser-Token", "X-Authorization")
 		az := headers.Get("Authorization")
-		if regexp.MustCompile(`(?i)^(Bearer|Token)\s+`).MatchString(az) {
+		if bearerOrTokenRE.MatchString(az) {
 			headers.Del("Authorization")
 		}
 		if headers.Get("Content-Type") == "" {
@@ -309,7 +306,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	headers.Set("Host", base.Host)
 	authz := headers.Get("Authorization")
 	xEmby := headers.Get("X-Emby-Authorization")
-	if !isAuthAPI && regexp.MustCompile(`(?i)^MediaBrowser\s+`).MatchString(authz) && xEmby == "" {
+	if !isAuthAPI && mediaBrowserAuthRE.MatchString(authz) && xEmby == "" {
 		headers.Set("X-Emby-Authorization", authz)
 	}
 	if !isAuthAPI && authz == "" && xEmby != "" {
@@ -614,7 +611,7 @@ func (h *Handler) rawHostAllowed(node storage.Node, rawURL *url.URL, env config.
 }
 
 func (h *Handler) isSTRM(path string) bool {
-	return regexp.MustCompile(`(?i)\.strm$`).MatchString(path)
+	return strmExtRE.MatchString(path)
 }
 
 func (h *Handler) getActiveTarget(nodeKey string, targets []string) string {
@@ -685,14 +682,14 @@ func (h *Handler) makeDirectCandidates(rawPath, rawQuery string) []string {
 		return value + sep + rawQuery
 	}
 	p := strings.TrimSpace(rawPath)
-	if regexp.MustCompile(`(?i)^https?://`).MatchString(p) {
+	if httpURLRE.MatchString(p) {
 		return []string{withQuery(p)}
 	}
 	hostPart := strings.Split(strings.Split(strings.Split(p, "/")[0], "?")[0], "#")[0]
-	if regexp.MustCompile(`(?i):80$`).MatchString(hostPart) {
+	if defaultPort80RE.MatchString(hostPart) {
 		return []string{withQuery("http://" + p), withQuery("https://" + p)}
 	}
-	if regexp.MustCompile(`(?i):443$`).MatchString(hostPart) {
+	if defaultPort443RE.MatchString(hostPart) {
 		return []string{withQuery("https://" + p), withQuery("http://" + p)}
 	}
 	return []string{withQuery("https://" + p), withQuery("http://" + p)}

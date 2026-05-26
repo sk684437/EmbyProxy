@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+var (
+	sessionProgressRE = regexp.MustCompile(`/sessions/playing/progress/?$`)
+	sessionStoppedRE  = regexp.MustCompile(`/sessions/playing/stopped/?$`)
+	sessionPlayingRE  = regexp.MustCompile(`/sessions/playing/?$`)
+	contentRangeRE    = regexp.MustCompile(`(?i)bytes\s+(\d+)-(\d+)`)
+)
+
 type PlaybackInput struct {
 	Node       Node
 	RequestIP  string
@@ -238,11 +245,11 @@ func stringFromAny(value any) string {
 func sessionPlayingEvent(raw string) string {
 	path := strings.ToLower(parseRequestPath(raw))
 	switch {
-	case regexp.MustCompile(`/sessions/playing/progress/?$`).MatchString(path):
+	case sessionProgressRE.MatchString(path):
 		return "progress"
-	case regexp.MustCompile(`/sessions/playing/stopped/?$`).MatchString(path):
+	case sessionStoppedRE.MatchString(path):
 		return "stopped"
-	case regexp.MustCompile(`/sessions/playing/?$`).MatchString(path):
+	case sessionPlayingRE.MatchString(path):
 		return "playing"
 	default:
 		return ""
@@ -290,7 +297,7 @@ func headerOrQuery(headers http.Header, u *url.URL, names ...string) string {
 
 func responseBytes(status int, headers http.Header) int64 {
 	if cr := headers.Get("Content-Range"); cr != "" {
-		m := regexp.MustCompile(`(?i)bytes\s+(\d+)-(\d+)`).FindStringSubmatch(cr)
+		m := contentRangeRE.FindStringSubmatch(cr)
 		if len(m) == 3 {
 			start, _ := strconv.ParseInt(m[1], 10, 64)
 			end, _ := strconv.ParseInt(m[2], 10, 64)

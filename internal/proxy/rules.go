@@ -10,10 +10,35 @@ import (
 	"embyproxy/internal/storage"
 )
 
-var staticExtRE = regexp.MustCompile(`(?i)\.(jpg|jpeg|gif|png|svg|ico|webp|js|css|woff2?|ttf|otf|map|webmanifest|srt|ass|vtt|sub)$`)
-var embyImagesRE = regexp.MustCompile(`(?i)(/Images/|/Icons/|/Branding/|/emby/covers/)`)
-var streamingRE = regexp.MustCompile(`(?i)\.(mp4|m4v|m4s|m4a|ogv|webm|mkv|mov|avi|wmv|flv|ts|m3u8|mpd)$`)
-var capyClientRE = regexp.MustCompile(`(?i)(capy\s*player|capyplayer|卡皮巴拉)`)
+var (
+	nodeNameRE             = regexp.MustCompile(`(?i)^[a-z0-9_-]{1,32}$`)
+	staticExtRE            = regexp.MustCompile(`(?i)\.(jpg|jpeg|gif|png|svg|ico|webp|js|css|woff2?|ttf|otf|map|webmanifest|srt|ass|vtt|sub)$`)
+	embyImagesRE           = regexp.MustCompile(`(?i)(/Images/|/Icons/|/Branding/|/emby/covers/)`)
+	streamingRE            = regexp.MustCompile(`(?i)\.(mp4|m4v|m4s|m4a|ogv|webm|mkv|mov|avi|wmv|flv|ts|m3u8|mpd)$`)
+	capyClientRE           = regexp.MustCompile(`(?i)(capy\s*player|capyplayer|卡皮巴拉)`)
+	embyPathRE             = regexp.MustCompile(`(?i)^/emby(/|$)`)
+	embyPrefixRE           = regexp.MustCompile(`(?i)^/emby`)
+	embySlashPrefixRE      = regexp.MustCompile(`(?i)^/emby/`)
+	strmStreamPathRE       = regexp.MustCompile(`(?i)/emby/videos/[^/]+/stream\.strm$`)
+	authAPIRE              = regexp.MustCompile(`(?i)/users/authenticate(byname)?`)
+	bearerOrTokenRE        = regexp.MustCompile(`(?i)^(Bearer|Token)\s+`)
+	mediaBrowserAuthRE     = regexp.MustCompile(`(?i)^MediaBrowser\s+`)
+	strmExtRE              = regexp.MustCompile(`(?i)\.strm$`)
+	httpURLRE              = regexp.MustCompile(`(?i)^https?://`)
+	defaultPort80RE        = regexp.MustCompile(`(?i):80$`)
+	defaultPort443RE       = regexp.MustCompile(`(?i):443$`)
+	acceptRangesBytesRE    = regexp.MustCompile(`(?i)bytes`)
+	rangeStartRE           = regexp.MustCompile(`(?i)^\s*bytes\s*=\s*(\d+)-`)
+	m3u8PathRE             = regexp.MustCompile(`(?i)\.m3u8($|\?)`)
+	lineBreakRE            = regexp.MustCompile(`\r?\n`)
+	bodyURLRE              = regexp.MustCompile(`https?://[^\s"'<>\\]+`)
+	playbackMediaExtRE     = regexp.MustCompile(`(?i)\.(m3u8|mpd|mkv|mp4|ts|m4s)$`)
+	embyItemImagesRE       = regexp.MustCompile(`(?i)/emby/items/.+/images/`)
+	additionalPartsPathRE  = regexp.MustCompile(`(?i)/emby/videos/.+/additionalparts`)
+	setCookieDomainRE      = regexp.MustCompile(`(?i);\s*domain=[^;]+`)
+	setCookiePathPresentRE = regexp.MustCompile(`(?i);\s*path=`)
+	setCookiePathRE        = regexp.MustCompile(`(?i);\s*path=[^;]+`)
+)
 
 var panKeywords = []string{
 	"aliyundrive", "alipan", "quark", "baidupcs", "pan.baidu.com",
@@ -144,15 +169,15 @@ func isPlaybackPath(path string) bool {
 	return strings.Contains(p, "/emby/") && (strings.Contains(p, "/videos/") || strings.Contains(p, "/playback/") || strings.Contains(p, "/sessions/playing") ||
 		(strings.Contains(p, "/items/") && (strings.Contains(p, "/download") || strings.Contains(p, "/stream") || strings.Contains(p, "/file"))) ||
 		strings.Contains(p, "/audio/") || strings.Contains(p, "/hls/") || strings.Contains(p, "/dash/") ||
-		regexp.MustCompile(`(?i)\.(m3u8|mpd|mkv|mp4|ts|m4s)$`).MatchString(p))
+		playbackMediaExtRE.MatchString(p))
 }
 
 func isImagePath(path string) bool {
-	return regexp.MustCompile(`(?i)/emby/items/.+/images/`).MatchString(path) || embyImagesRE.MatchString(path)
+	return embyItemImagesRE.MatchString(path) || embyImagesRE.MatchString(path)
 }
 
 func isAdditionalPartsPath(path string) bool {
-	return regexp.MustCompile(`(?i)/emby/videos/.+/additionalparts`).MatchString(path)
+	return additionalPartsPathRE.MatchString(path)
 }
 
 func routePrefix(name, key string) string {

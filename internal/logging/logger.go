@@ -19,7 +19,11 @@ var levels = map[string]int{
 	"debug":  4,
 }
 
-var sensitiveQueryRE = regexp.MustCompile(`(?i)(token|api[_-]?key|access[_-]?token|auth|authorization|password|secret|session)`)
+var (
+	sensitiveQueryRE = regexp.MustCompile(`(?i)(token|api[_-]?key|access[_-]?token|auth|authorization|password|secret|session)`)
+	httpURLRE        = regexp.MustCompile(`(?i)^https?://`)
+	safeLogValueRE   = regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`)
+)
 
 type Logger struct {
 	level     atomic.Int64
@@ -85,7 +89,7 @@ func RedactURL(raw string) string {
 	if value == "" {
 		return ""
 	}
-	hasOrigin := regexp.MustCompile(`(?i)^https?://`).MatchString(value)
+	hasOrigin := httpURLRE.MatchString(value)
 	u, err := url.Parse(value)
 	if err == nil {
 		if !hasOrigin {
@@ -208,7 +212,7 @@ func formatValue(value any) string {
 	if s == "" {
 		return ""
 	}
-	if regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`).MatchString(s) {
+	if safeLogValueRE.MatchString(s) {
 		return s
 	}
 	return fmt.Sprintf("%q", s)

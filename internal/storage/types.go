@@ -64,6 +64,8 @@ const DefaultTrafficCaptureTextTypes = "application/json,application/xml,text/xm
 	"application/vnd.apple.mpegurl,application/x-mpegurl,application/mpegurl," +
 	"audio/mpegurl,audio/x-mpegurl,application/dash+xml"
 
+var targetSplitRE = regexp.MustCompile(`\r?\n|[;,，；|]+`)
+
 func DefaultSystemConfig() SystemConfig {
 	return SystemConfig{
 		LogLevel:                "info",
@@ -190,7 +192,7 @@ func UnpackNode(name, packed string) (Node, bool) {
 
 func SplitTargets(value string) []string {
 	raw := strings.NewReplacer("\\r\\n", "\n", "\\n", "\n").Replace(value)
-	parts := regexp.MustCompile(`\r?\n|[;,，；|]+`).Split(raw, -1)
+	parts := targetSplitRE.Split(raw, -1)
 	out := make([]string, 0, len(parts))
 	seen := map[string]bool{}
 	for _, part := range parts {

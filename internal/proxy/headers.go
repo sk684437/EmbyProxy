@@ -3,7 +3,6 @@ package proxy
 import (
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"embyproxy/internal/config"
@@ -172,10 +171,10 @@ func rewriteSetCookieHeaders(headers http.Header, prefix string) {
 	}
 	headers.Del("Set-Cookie")
 	for _, cookie := range cookies {
-		cookie = regexp.MustCompile(`(?i);\s*domain=[^;]+`).ReplaceAllString(cookie, "")
+		cookie = setCookieDomainRE.ReplaceAllString(cookie, "")
 		if prefix != "" {
-			if regexp.MustCompile(`(?i);\s*path=`).MatchString(cookie) {
-				cookie = regexp.MustCompile(`(?i);\s*path=[^;]+`).ReplaceAllString(cookie, "; Path="+prefix)
+			if setCookiePathPresentRE.MatchString(cookie) {
+				cookie = setCookiePathRE.ReplaceAllString(cookie, "; Path="+prefix)
 			} else {
 				cookie += "; Path=" + prefix
 			}
