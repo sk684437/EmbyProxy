@@ -23,6 +23,8 @@ type Store struct {
 	nodeCache      map[string]cacheEntry[*Node]
 	nodeListCache  map[string]cacheEntry[[]Node]
 	hostIndexCache map[string]cacheEntry[map[string]HostMatch]
+	sysConfigCache systemConfigCacheEntry
+	sysConfigGen   uint64
 }
 
 type KV struct {
@@ -33,6 +35,14 @@ type cacheEntry[T any] struct {
 	value T
 	exp   time.Time
 }
+
+type systemConfigCacheEntry struct {
+	value SystemConfig
+	ok    bool
+	exp   time.Time
+}
+
+const systemConfigCacheTTL = 5 * time.Second
 
 type ListResult struct {
 	Keys         []string
@@ -331,16 +341,59 @@ func (s *Store) SaveTGConfig(ctx context.Context, cfg TGConfig) error {
 }
 
 func (s *Store) GetSystemConfig(ctx context.Context, fallback SystemConfig) (SystemConfig, error) {
+	s.mu.RLock()
+	entry := s.sysConfigCache
+	gen := s.sysConfigGen
+	s.mu.RUnlock()
+	if !entry.exp.IsZero() && time.Now().Before(entry.exp) {
+		if entry.ok {
+			return entry.value, nil
+		}
+		return fallback, nil
+	}
+
 	cfg := fallback
 	ok, err := s.KV().GetJSON(ctx, "system:config", &cfg)
 	if err != nil || !ok {
+		if err == nil {
+			s.setSystemConfigCacheIfGen(gen, SystemConfig{}, false, systemConfigCacheTTL)
+		}
 		return fallback, err
 	}
+	s.setSystemConfigCacheIfGen(gen, cfg, true, systemConfigCacheTTL)
 	return cfg, nil
 }
 
 func (s *Store) SaveSystemConfig(ctx context.Context, cfg SystemConfig) error {
-	return s.KV().Put(ctx, "system:config", cfg)
+	if err := s.KV().Put(ctx, "system:config", cfg); err != nil {
+		s.invalidateSystemConfigCache()
+		return err
+	}
+	s.setSystemConfigCache(cfg, true, systemConfigCacheTTL)
+	return nil
+}
+
+func (s *Store) setSystemConfigCache(value SystemConfig, ok bool, ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sysConfigGen++
+	s.sysConfigCache = systemConfigCacheEntry{value: value, ok: ok, exp: time.Now().Add(ttl)}
+}
+
+func (s *Store) setSystemConfigCacheIfGen(gen uint64, value SystemConfig, ok bool, ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sysConfigGen != gen {
+		return
+	}
+	s.sysConfigCache = systemConfigCacheEntry{value: value, ok: ok, exp: time.Now().Add(ttl)}
+}
+
+func (s *Store) invalidateSystemConfigCache() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sysConfigGen++
+	s.sysConfigCache = systemConfigCacheEntry{}
 }
 
 func (s *Store) getNodeCache(key string) (*Node, bool) {
