@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,6 +22,9 @@ import (
 	"embyproxy/internal/validators"
 )
 
+//go:embed static/index.html
+var indexHTML string
+
 type ResetFunc func(uid, name string)
 
 type Handler struct {
@@ -30,7 +34,6 @@ type Handler struct {
 	telegram   *telegram.Service
 	log        *logging.Logger
 	resetRoute ResetFunc
-	staticPath string
 }
 
 func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *telegram.Service, log *logging.Logger, reset ResetFunc) *Handler {
@@ -41,7 +44,6 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 		telegram:   tg,
 		log:        log,
 		resetRoute: reset,
-		staticPath: filepath.Join(cfg.CWD, "internal", "admin", "static", "index.html"),
 	}
 }
 
@@ -67,7 +69,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	http.ServeFile(w, r, h.staticPath)
+	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(indexHTML))
 }
 
 func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) {

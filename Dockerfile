@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS build
+FROM golang:1.26.3-alpine AS build
 
 WORKDIR /src
 
@@ -10,14 +10,13 @@ COPY internal ./internal
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/embyproxy ./cmd/embyproxy
 
-FROM alpine:3.22
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
 COPY --from=build /out/embyproxy /app/embyproxy
-COPY internal/admin/static ./internal/admin/static
 
 RUN mkdir -p /app/data
 

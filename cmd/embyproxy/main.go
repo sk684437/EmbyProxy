@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -56,12 +55,10 @@ func main() {
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
 	mux := http.NewServeMux()
-	adminStaticDir := filepath.Join(cfg.CWD, "internal", "admin", "static")
 	mux.Handle("/admin", adminHandler)
 	mux.Handle("/admin/", adminHandler)
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(adminStaticDir))))
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, filepath.Join(adminStaticDir, "favicon.ico"))
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
