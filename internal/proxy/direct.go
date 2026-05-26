@@ -104,7 +104,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 			}
 		}
 		if isRetryableProtocolStatus(res.StatusCode) {
-			lastRes = res
+			h.setLastResponse(&lastRes, res)
 			continue
 		}
 		rh := cloneHeader(res.Header)
@@ -128,6 +128,8 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 					if abs.Scheme == "http" || abs.Scheme == "https" {
 						if !node.DirectExternal {
 							_ = res.Body.Close()
+							h.closeBody(lastRes)
+							lastRes = nil
 							capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-location-follow", "targetUrl": abs.String()})
 							return h.handleDirect(ctx, r, abs.String(), env, node, body)
 						}
@@ -140,6 +142,8 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-completed", "targetUrl": targetURL, "outboundHeaders": currentHeaders})
 		h.log.Info("direct", "target completed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": res.StatusCode, "ms": time.Since(started).Milliseconds()})
 		res.Header = rh
+		h.closeBody(lastRes)
+		lastRes = nil
 		return res, nil
 	}
 	if lastRes != nil {

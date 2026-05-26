@@ -193,18 +193,20 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			h.lineBan.Set(banKey, 1, time.Minute)
 			h.log.Warn("proxy", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "ms": time.Since(started).Milliseconds(), "error": err.Error()})
 			lastErr = err
-			lastRes = textResponse(http.StatusBadGateway, "Proxy Error: "+err.Error(), nil)
+			h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Proxy Error: "+err.Error(), nil))
 			continue
 		}
 		status := res.StatusCode
 		if status < 500 && status != http.StatusForbidden && status != http.StatusNotFound && status != http.StatusRequestedRangeNotSatisfiable {
+			h.closeBody(lastRes)
+			lastRes = nil
 			h.markTargetHealthy(nodeKey, targets, target, expectedActive)
 			h.log.Info("proxy", "target completed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": time.Since(started).Milliseconds()})
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)
 		h.log.Warn("proxy", "target returned retryable status", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": time.Since(started).Milliseconds()})
-		lastRes = res
+		h.setLastResponse(&lastRes, res)
 	}
 	if tried == 0 {
 		for _, target := range ordered {
@@ -213,15 +215,17 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			res, err := h.handleOneTarget(ctx, r, nodeTry, parsed, body, env)
 			if err != nil {
 				lastErr = err
-				lastRes = textResponse(http.StatusBadGateway, "Proxy Error: "+err.Error(), nil)
+				h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Proxy Error: "+err.Error(), nil))
 				continue
 			}
 			status := res.StatusCode
 			if status < 500 && status != http.StatusForbidden && status != http.StatusNotFound && status != http.StatusRequestedRangeNotSatisfiable {
+				h.closeBody(lastRes)
+				lastRes = nil
 				h.markTargetHealthy(nodeKey, targets, target, expectedActive)
 				return res, nil
 			}
-			lastRes = res
+			h.setLastResponse(&lastRes, res)
 		}
 	}
 	if lastRes != nil {
@@ -438,6 +442,7 @@ func (h *Handler) fetchWithProtocolFallback(ctx context.Context, target *url.URL
 		if err == nil {
 			return first, nil
 		}
+		h.closeBody(first)
 		return nil, err
 	}
 	alt := *target
@@ -449,10 +454,12 @@ func (h *Handler) fetchWithProtocolFallback(ctx context.Context, target *url.URL
 	second, err2 := h.doFetch(ctx, client, &alt, method, headers, body)
 	if err2 != nil {
 		if err != nil {
+			h.closeBody(first)
 			return nil, err2
 		}
 		return first, nil
 	}
+	h.closeBody(first)
 	return second, nil
 }
 
@@ -699,6 +706,16 @@ func (h *Handler) closeBody(res *http.Response) {
 	if res != nil && res.Body != nil {
 		_ = res.Body.Close()
 	}
+}
+
+func (h *Handler) setLastResponse(slot **http.Response, res *http.Response) {
+	if slot == nil {
+		return
+	}
+	if *slot != nil && *slot != res {
+		h.closeBody(*slot)
+	}
+	*slot = res
 }
 
 func isRetryableProtocolStatus(status int) bool {
