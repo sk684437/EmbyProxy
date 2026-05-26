@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -50,13 +51,6 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	sessionEvent := sessionPlayingEvent(in.RequestURL)
 	countable := (method == http.MethodGet || method == http.MethodHead) && sessionEvent == ""
 
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO keepalive_state (node, anchor_ts, last_play_ts) VALUES (?, ?, ?)
-		ON CONFLICT(node) DO UPDATE SET last_play_ts = excluded.last_play_ts
-	`, uid+":"+nodeName, now, now); err != nil {
-		return err
-	}
-
 	ua := cutString(in.Headers.Get("User-Agent"), 128)
 	client := ua
 	if client == "" {
@@ -78,16 +72,32 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	if countable {
 		sessInc = 1
 	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO keepalive_state (node, anchor_ts, last_play_ts) VALUES (?, ?, ?)
+		ON CONFLICT(node) DO UPDATE SET last_play_ts = MAX(COALESCE(keepalive_state.last_play_ts, 0), excluded.last_play_ts)
+	`, uid+":"+nodeName, now, now); err != nil {
+		return err
+	}
+
 	if countable && (sessionID != "" || deviceID != "") {
 		sessKey := strings.Join([]string{day, nodeName, client, ip, deviceID, sessionID}, "|")
 		var lastTS int64
-		err := s.db.QueryRowContext(ctx, `SELECT last_ts FROM play_sessions WHERE k = ?`, sessKey).Scan(&lastTS)
+		err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_sessions WHERE k = ?`, sessKey).Scan(&lastTS)
 		if err == nil && now-lastTS < 15*60*1000 {
 			sessInc = 0
+		} else if err != nil && err != sql.ErrNoRows {
+			return err
 		}
-		_, err = s.db.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO play_sessions (k, day, last_ts) VALUES (?, ?, ?)
-			ON CONFLICT(k) DO UPDATE SET last_ts = excluded.last_ts
+			ON CONFLICT(k) DO UPDATE SET last_ts = MAX(play_sessions.last_ts, excluded.last_ts)
 		`, sessKey, day, now)
 		if err != nil {
 			return err
@@ -99,7 +109,7 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		errInc = 1
 	}
 	if countable {
-		if _, err := s.db.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO play_stats (day, node, client, plays, bytes, sessions, errors, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(day, node, client) DO UPDATE SET
@@ -117,19 +127,16 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		if in.Mode == "direct" {
 			key = "stats:directPlays:" + day
 		}
-		prevRaw, ok, err := s.KV().Get(ctx, key)
-		if err != nil {
-			return err
-		}
-		prev := int64(0)
-		if ok {
-			prev, _ = strconv.ParseInt(strings.TrimSpace(prevRaw), 10, 64)
-		}
-		if err := s.KV().Put(ctx, key, strconv.FormatInt(prev+playInc, 10)); err != nil {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO proxy_kv (k, v, updated_at) VALUES (?, ?, ?)
+			ON CONFLICT(k) DO UPDATE SET
+				v = CAST(CAST(proxy_kv.v AS INTEGER) + CAST(excluded.v AS INTEGER) AS TEXT),
+				updated_at = excluded.updated_at
+		`, key, strconv.FormatInt(playInc, 10), now); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) {
