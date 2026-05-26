@@ -1,6 +1,9 @@
 services:
   app:
     image: ghcr.io/hkfires/embyproxy:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: embyproxy
     restart: unless-stopped
     ports:
