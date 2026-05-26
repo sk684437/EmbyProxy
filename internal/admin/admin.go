@@ -51,6 +51,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	if r.Method == http.MethodGet && (path == "/admin" || path == "") {
 		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-page"})
+		if strings.TrimSpace(h.cfg.AdminToken) == "" {
+			h.serveAdminTokenError(w)
+			return
+		}
 		h.serveIndex(w, r)
 		return
 	}
@@ -70,6 +74,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(indexHTML))
+}
+
+func (h *Handler) serveAdminTokenError(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = w.Write([]byte(`<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EmbyProxy 配置错误</title>
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f4;color:#18201b;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{width:min(520px,calc(100vw - 32px));border:1px solid #d8ddd5;background:#fff;padding:28px}
+h1{margin:0 0 12px;font-size:24px;line-height:1.2}
+p{margin:0 0 10px;color:#536052;line-height:1.7}
+code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#9d2f2a}
+</style>
+</head>
+<body>
+<main>
+<h1>管理 Token 未配置</h1>
+<p>` + auth.AdminTokenNotConfigured + `。</p>
+<p>请设置 <code>ADMIN_TOKEN</code> 后重启 EmbyProxy。</p>
+</main>
+</body>
+</html>`))
 }
 
 func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) {

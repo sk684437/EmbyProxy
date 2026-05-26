@@ -21,6 +21,8 @@ type Result struct {
 	Error  string
 }
 
+const AdminTokenNotConfigured = "ADMIN_TOKEN 未配置，请在 .env 或环境变量中设置后重启服务"
+
 type Checker struct {
 	cfg   config.Config
 	store *storage.Store
@@ -58,7 +60,10 @@ func (c *Checker) Check(r *http.Request) Result {
 	}
 	got := ExtractToken(r)
 	admin := strings.TrimSpace(c.cfg.AdminToken)
-	if got != "" && admin != "" && SafeEqual(got, admin) {
+	if admin == "" {
+		return Result{Status: http.StatusInternalServerError, Error: AdminTokenNotConfigured}
+	}
+	if got != "" && SafeEqual(got, admin) {
 		delete(c.fails, ip)
 		return Result{OK: true, UID: "admin", Role: "admin"}
 	}
