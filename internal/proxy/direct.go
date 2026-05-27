@@ -14,6 +14,24 @@ import (
 )
 
 func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte) (*http.Response, error) {
+	return h.handleDirectWithClient(ctx, r, rawPath, env, node, body, h.followClient)
+}
+
+func (h *Handler) handleRawDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte) (*http.Response, error) {
+	client := h.rawClient
+	if client == nil {
+		client = newRawHTTPClient()
+	}
+	return h.handleDirectWithClient(ctx, r, rawPath, env, node, body, client)
+}
+
+func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, client *http.Client) (*http.Response, error) {
+	if client == nil {
+		client = h.followClient
+	}
+	if client == nil {
+		client = newProxyHTTPClient(true)
+	}
 	method := strings.ToUpper(r.Method)
 	reqOrigin := r.Header.Get("Origin")
 	nodeName := strings.ToLower(strings.TrimSpace(node.Name))
@@ -41,7 +59,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 		headers.Set("Accept-Encoding", "identity")
 		currentHeaders := headers
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-normal", "targetUrl": targetURL, "outboundHeaders": headers})
-		res, err := h.doFetch(ctx, h.followClient, u, method, headers, body)
+		res, err := h.doFetch(ctx, client, u, method, headers, body)
 		if err != nil {
 			h.log.Warn("direct", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "ms": time.Since(started).Milliseconds(), "error": err.Error()})
 			lastErr = err
@@ -56,7 +74,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 				hNoRange.Set("Accept-Encoding", "identity")
 				currentHeaders = hNoRange
 				capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-no-range", "targetUrl": targetURL, "outboundHeaders": hNoRange})
-				res, err = h.doFetch(ctx, h.followClient, u, method, hNoRange, body)
+				res, err = h.doFetch(ctx, client, u, method, hNoRange, body)
 				if err != nil {
 					lastErr = err
 					continue
@@ -69,7 +87,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 			h2.Set("Accept-Encoding", "identity")
 			currentHeaders = h2
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-no-origin", "targetUrl": targetURL, "outboundHeaders": h2})
-			res, err = h.doFetch(ctx, h.followClient, u, method, h2, body)
+			res, err = h.doFetch(ctx, client, u, method, h2, body)
 			if err != nil {
 				lastErr = err
 				continue
@@ -81,7 +99,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 			h3.Set("Accept-Encoding", "identity")
 			currentHeaders = h3
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-browserish", "targetUrl": targetURL, "outboundHeaders": h3})
-			res, err = h.doFetch(ctx, h.followClient, u, method, h3, body)
+			res, err = h.doFetch(ctx, client, u, method, h3, body)
 			if err != nil {
 				lastErr = err
 				continue
@@ -96,7 +114,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 				hNoRange.Set("Accept-Encoding", "identity")
 				currentHeaders = hNoRange
 				capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-no-range-2", "targetUrl": targetURL, "outboundHeaders": hNoRange})
-				res, err = h.doFetch(ctx, h.followClient, u, method, hNoRange, body)
+				res, err = h.doFetch(ctx, client, u, method, hNoRange, body)
 				if err != nil {
 					lastErr = err
 					continue
@@ -131,7 +149,7 @@ func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath str
 							h.closeBody(lastRes)
 							lastRes = nil
 							capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-location-follow", "targetUrl": abs.String()})
-							return h.handleDirect(ctx, r, abs.String(), env, node, body)
+							return h.handleDirectWithClient(ctx, r, abs.String(), env, node, body, client)
 						}
 						rh.Set("Location", abs.String())
 					}

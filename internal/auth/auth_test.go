@@ -45,3 +45,16 @@ func TestCheckAcceptsConfiguredAdminToken(t *testing.T) {
 		t.Fatalf("identity = %q/%q, want admin/admin", res.UID, res.Role)
 	}
 }
+
+func TestClientIPIgnoresForwardedForWhenProxyNotTrusted(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "/admin/api", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.RemoteAddr = "203.0.113.10:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.7")
+
+	if got := ClientIP(req, false); got != "203.0.113.10" {
+		t.Fatalf("ClientIP() = %q, want remote address", got)
+	}
+}

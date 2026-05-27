@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,6 +13,10 @@ import (
 	"embyproxy/internal/config"
 	"embyproxy/internal/storage"
 )
+
+const proxyRewriteBodyMaxBytes int64 = 10 * 1024 * 1024
+
+var errProxyRewriteBodyTooLarge = errors.New("rewritable upstream response body is too large")
 
 func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, body []byte, env config.ProxyEnv) (*http.Response, error) {
 	headers := cloneHeader(r.Header)
@@ -28,10 +33,10 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 		return res, nil
 	}
 	defer res.Body.Close()
-	raw, err := io.ReadAll(res.Body)
+	raw, err := readProxyRewriteBody(res.Body)
 	if err != nil {
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-parse-error", "targetUrl": finalURL.String()})
-		return textResponse(http.StatusInternalServerError, "STRM parse error", nil), nil
+		return textResponse(http.StatusBadGateway, "Bad Gateway", nil), nil
 	}
 	line := ""
 	for _, item := range lineBreakRE.Split(strings.TrimSpace(string(raw)), -1) {
@@ -253,7 +258,7 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 	ct := strings.ToLower(headers.Get("Content-Type"))
 	if res.StatusCode >= 200 && res.StatusCode < 300 && (strings.Contains(ct, "application/vnd.apple.mpegurl") || strings.Contains(ct, "application/x-mpegurl") || strings.Contains(ct, "application/dash+xml")) {
 		defer res.Body.Close()
-		raw, err := io.ReadAll(res.Body)
+		raw, err := readProxyRewriteBody(res.Body)
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +269,7 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 	}
 	if res.StatusCode >= 200 && res.StatusCode < 300 && strings.Contains(ct, "application/json") && strings.Contains(strings.ToLower(r.URL.RequestURI()), "/playbackinfo") {
 		defer res.Body.Close()
-		raw, err := io.ReadAll(res.Body)
+		raw, err := readProxyRewriteBody(res.Body)
 		if err != nil {
 			return nil, err
 		}
@@ -275,6 +280,17 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 	}
 	res.Header = headers
 	return res, nil
+}
+
+func readProxyRewriteBody(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, proxyRewriteBodyMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > proxyRewriteBodyMaxBytes {
+		return nil, errProxyRewriteBodyTooLarge
+	}
+	return raw, nil
 }
 
 func (h *Handler) rewriteLocation(r *http.Request, location string, node storage.Node, parsed parsedRoute, base *url.URL, selfPrefix string) (string, bool, string) {

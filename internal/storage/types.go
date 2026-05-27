@@ -71,7 +71,7 @@ func DefaultSystemConfig() SystemConfig {
 		LogLevel:                "info",
 		LogAccess:               true,
 		CapyStripEmby:           "0",
-		TrustProxy:              true,
+		TrustProxy:              false,
 		TrafficCaptureFile:      "./data/traffic-captures.jsonl",
 		TrafficCaptureBodyMax:   262144,
 		TrafficCaptureTextTypes: DefaultTrafficCaptureTextTypes,

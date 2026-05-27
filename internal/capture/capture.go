@@ -233,16 +233,17 @@ func (r *Recorder) appendHTTP(req *http.Request, cw *captureWriter, cfg storage.
 
 func (r *Recorder) appendRecord(record Record, cfg storage.SystemConfig) {
 	file := r.captureFilePath(cfg)
-	if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
 		r.log.Warn("traffic", "capture mkdir failed", map[string]any{"error": err.Error()})
 		return
 	}
-	f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		r.log.Warn("traffic", "capture open failed", map[string]any{"error": err.Error()})
 		return
 	}
 	defer f.Close()
+	_ = f.Chmod(0600)
 	b, err := json.Marshal(record)
 	if err != nil {
 		return
@@ -251,14 +252,36 @@ func (r *Recorder) appendRecord(record Record, cfg storage.SystemConfig) {
 }
 
 func (r *Recorder) captureFilePath(cfg storage.SystemConfig) string {
-	file := strings.TrimSpace(cfg.TrafficCaptureFile)
+	file := safeCaptureFile(cfg.TrafficCaptureFile)
 	if file == "" {
-		file = storage.DefaultSystemConfig().TrafficCaptureFile
+		file = safeCaptureFile(storage.DefaultSystemConfig().TrafficCaptureFile)
 	}
-	if filepath.IsAbs(file) {
-		return file
+	if file == "" {
+		file = filepath.Join("data", "traffic-captures.jsonl")
 	}
 	return filepath.Join(r.cfg.CWD, file)
+}
+
+func safeCaptureFile(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 512 || strings.ContainsAny(value, "\x00\r\n") {
+		return ""
+	}
+	normalized := strings.NewReplacer("\\", string(filepath.Separator), "/", string(filepath.Separator)).Replace(value)
+	cleaned := filepath.Clean(normalized)
+	if cleaned == "" || cleaned == "." || cleaned == "data" {
+		return ""
+	}
+	if filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" {
+		return ""
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	if !strings.HasPrefix(cleaned, "data"+string(filepath.Separator)) {
+		return ""
+	}
+	return cleaned
 }
 
 func summarizeBuffer(buf []byte, bytesLen int64, contentType string, truncated bool, cfg storage.SystemConfig) BodySummary {

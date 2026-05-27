@@ -773,16 +773,36 @@ func normalizeTrafficCaptureFile(value, fallback string) (string, string) {
 	if file == "" {
 		file = fallback
 	}
-	if file == "" || filepath.Clean(file) == "." {
-		return "", "代理流量记录文件路径不合法"
-	}
 	if len(file) > 512 {
 		return "", "代理流量记录文件路径过长"
 	}
 	if strings.ContainsAny(file, "\x00\r\n") {
 		return "", "代理流量记录文件路径包含非法字符"
 	}
-	return file, ""
+	cleaned, ok := cleanTrafficCaptureFile(file)
+	if !ok {
+		return "", "代理流量记录文件路径必须位于 data 目录内"
+	}
+	return cleaned, ""
+}
+
+func cleanTrafficCaptureFile(file string) (string, bool) {
+	normalized := strings.NewReplacer("\\", string(filepath.Separator), "/", string(filepath.Separator)).Replace(strings.TrimSpace(file))
+	cleaned := filepath.Clean(normalized)
+	if cleaned == "" || cleaned == "." || cleaned == "data" {
+		return "", false
+	}
+	if filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" {
+		return "", false
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	dataPrefix := "data" + string(filepath.Separator)
+	if !strings.HasPrefix(cleaned, dataPrefix) {
+		return "", false
+	}
+	return filepath.ToSlash(cleaned), true
 }
 
 func mapFromAny(value any) map[string]any {

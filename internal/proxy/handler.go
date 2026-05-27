@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -32,6 +34,7 @@ type Handler struct {
 	activeTarget     map[string]string
 	manualClient     *http.Client
 	followClient     *http.Client
+	rawClient        *http.Client
 }
 
 type parsedRoute struct {
@@ -43,6 +46,11 @@ type parsedRoute struct {
 	HasKey   bool
 }
 
+const (
+	rawHostLookupTimeout = 3 * time.Second
+	proxyConnIdleTimeout = 2 * time.Minute
+)
+
 func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *logging.Logger) *Handler {
 	return &Handler{
 		cfg:              cfg,
@@ -53,11 +61,123 @@ func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *lo
 		progressThrottle: newTTLMap(),
 		playbackDedup:    newTTLMap(),
 		activeTarget:     map[string]string{},
-		manualClient: &http.Client{Timeout: 0, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		}},
-		followClient: &http.Client{Timeout: 0},
+		manualClient:     newProxyHTTPClient(false),
+		followClient:     newProxyHTTPClient(true),
+		rawClient:        newRawHTTPClient(),
 	}
+}
+
+func newProxyHTTPClient(follow bool) *http.Client {
+	client := &http.Client{Transport: newProxyTransport(false)}
+	if !follow {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	return client
+}
+
+func newRawHTTPClient() *http.Client {
+	return &http.Client{Transport: newProxyTransport(true)}
+}
+
+func newProxyTransport(protectRaw bool) *http.Transport {
+	dialer := &net.Dialer{
+		Timeout:   15 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialWithIdleTimeout(dialer, proxyConnIdleTimeout),
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		ExpectContinueTimeout: 5 * time.Second,
+	}
+	if protectRaw {
+		transport.Proxy = nil
+		transport.DialContext = dialPublicOnlyWithIdleTimeout(dialer, proxyConnIdleTimeout)
+	}
+	return transport
+}
+
+func dialWithIdleTimeout(dialer *net.Dialer, timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &idleTimeoutConn{Conn: conn, timeout: timeout}, nil
+	}
+}
+
+type idleTimeoutConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *idleTimeoutConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Read(p)
+}
+
+func (c *idleTimeoutConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Write(p)
+}
+
+func dialPublicOnlyWithIdleTimeout(dialer *net.Dialer, timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := resolvePublicDialIPs(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		var lastErr error
+		for _, ip := range ips {
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return &idleTimeoutConn{Conn: conn, timeout: timeout}, nil
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("no public dial address for %s", host)
+	}
+}
+
+func resolvePublicDialIPs(ctx context.Context, host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		if rawIPBlocked(ip) {
+			return nil, fmt.Errorf("blocked private raw host: %s", host)
+		}
+		return []net.IP{ip}, nil
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, rawHostLookupTimeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(lookupCtx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		if rawIPBlocked(ip) {
+			continue
+		}
+		out = append(out, ip)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("blocked private raw host: %s", host)
+	}
+	return out, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +240,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	res, err := h.handleNode(ctx, r, *node, parsed, body, env)
 	if err != nil {
 		h.log.Error("proxy", "request failed", map[string]any{"node": parsed.Name, "error": err.Error()})
-		http.Error(w, "Proxy Error: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
 	}
 	h.sendResponse(w, res)
@@ -193,7 +313,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			h.lineBan.Set(banKey, 1, time.Minute)
 			h.log.Warn("proxy", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "ms": time.Since(started).Milliseconds(), "error": err.Error()})
 			lastErr = err
-			h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Proxy Error: "+err.Error(), nil))
+			h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Bad Gateway", nil))
 			continue
 		}
 		status := res.StatusCode
@@ -215,7 +335,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			res, err := h.handleOneTarget(ctx, r, nodeTry, parsed, body, env)
 			if err != nil {
 				lastErr = err
-				h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Proxy Error: "+err.Error(), nil))
+				h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Bad Gateway", nil))
 				continue
 			}
 			status := res.StatusCode
@@ -234,7 +354,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 	if lastErr != nil {
 		return nil, lastErr
 	}
-	return textResponse(http.StatusBadGateway, "Proxy Error: all targets failed", nil), nil
+	return textResponse(http.StatusBadGateway, "Bad Gateway", nil), nil
 }
 
 func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, body []byte, env config.ProxyEnv) (*http.Response, error) {
@@ -274,12 +394,12 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "raw-bad-protocol"})
 			return textResponse(http.StatusBadRequest, "Bad Request", nil), nil
 		}
-		if !h.rawHostAllowed(node, u, env) {
+		if !h.rawHostAllowed(ctx, node, u, env) {
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "raw-forbidden", "targetUrl": u.String()})
 			return textResponse(http.StatusForbidden, "Forbidden raw host", nil), nil
 		}
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": parsed.Name, "secret": node.Secret, "stage": "raw-direct", "targetUrl": u.String()})
-		return h.handleDirect(ctx, r, raw, env, node, body)
+		return h.handleRawDirect(ctx, r, raw, env, node, body)
 	}
 	finalURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
 	applyIdentityToURL(h.ids, finalURL, node)
@@ -433,6 +553,9 @@ func (h *Handler) fetchWithProtocolFallback(ctx context.Context, target *url.URL
 	client := h.manualClient
 	if follow {
 		client = h.followClient
+	}
+	if client == nil {
+		client = newProxyHTTPClient(follow)
 	}
 	first, err := h.doFetch(ctx, client, target, method, headers, body)
 	if err == nil && first.StatusCode != 525 && first.StatusCode != 526 && first.StatusCode != 530 {
@@ -599,7 +722,10 @@ func (h *Handler) defaultSystemConfig() storage.SystemConfig {
 	return storage.DefaultSystemConfig()
 }
 
-func (h *Handler) rawHostAllowed(node storage.Node, rawURL *url.URL, env config.ProxyEnv) bool {
+func (h *Handler) rawHostAllowed(ctx context.Context, node storage.Node, rawURL *url.URL, env config.ProxyEnv) bool {
+	if rawURL == nil || rawHostBlocked(ctx, rawURL.Hostname()) {
+		return false
+	}
 	if env.ExternalAllowAny {
 		return true
 	}
@@ -615,6 +741,110 @@ func (h *Handler) rawHostAllowed(node storage.Node, rawURL *url.URL, env config.
 		}
 	}
 	return allowed[strings.ToLower(rawURL.Host)]
+}
+
+func rawHostBlocked(ctx context.Context, host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return rawIPBlocked(ip)
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, rawHostLookupTimeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(lookupCtx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		return true
+	}
+	for _, ip := range ips {
+		if rawIPBlocked(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func rawIPBlocked(ip net.IP) bool {
+	addr, ok := netIPAddr(ip)
+	if !ok || !addr.IsGlobalUnicast() {
+		return true
+	}
+	for _, prefix := range rawBlockedIPPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func netIPAddr(ip net.IP) (netip.Addr, bool) {
+	if ip == nil {
+		return netip.Addr{}, false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		addr, ok := netip.AddrFromSlice(v4)
+		return addr, ok
+	}
+	v6 := ip.To16()
+	if v6 == nil {
+		return netip.Addr{}, false
+	}
+	addr, ok := netip.AddrFromSlice(v6)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
+var rawBlockedIPPrefixes = mustParseRawBlockedIPPrefixes([]string{
+	"0.0.0.0/8",
+	"10.0.0.0/8",
+	"100.64.0.0/10",
+	"127.0.0.0/8",
+	"169.254.0.0/16",
+	"172.16.0.0/12",
+	"192.0.0.0/24",
+	"192.0.2.0/24",
+	"192.31.196.0/24",
+	"192.52.193.0/24",
+	"192.88.99.0/24",
+	"192.168.0.0/16",
+	"192.175.48.0/24",
+	"198.18.0.0/15",
+	"198.51.100.0/24",
+	"203.0.113.0/24",
+	"224.0.0.0/4",
+	"240.0.0.0/4",
+	"255.255.255.255/32",
+	"::/128",
+	"::1/128",
+	"::ffff:0:0/96",
+	"64:ff9b::/96",
+	"64:ff9b:1::/48",
+	"100::/64",
+	"2001::/23",
+	"2001:db8::/32",
+	"2002::/16",
+	"2620:4f:8000::/48",
+	"3fff::/20",
+	"5f00::/16",
+	"fc00::/7",
+	"fe80::/10",
+	"fec0::/10",
+	"ff00::/8",
+})
+
+func mustParseRawBlockedIPPrefixes(values []string) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			panic(err)
+		}
+		out = append(out, prefix)
+	}
+	return out
 }
 
 func (h *Handler) isSTRM(path string) bool {

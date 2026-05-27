@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+func TestDefaultSystemConfigDoesNotTrustProxyHeaders(t *testing.T) {
+	if DefaultSystemConfig().TrustProxy {
+		t.Fatal("TrustProxy default should be false")
+	}
+}
+
 func TestSystemConfigCacheRefreshesOnSave(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "test.db"))
