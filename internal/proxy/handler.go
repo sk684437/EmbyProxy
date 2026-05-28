@@ -30,6 +30,8 @@ type Handler struct {
 	lineBan          *ttlMap
 	progressThrottle *ttlMap
 	playbackDedup    *ttlMap
+	imageLimiterMu   sync.Mutex
+	imageLimiter     *imageRequestLimiter
 	activeMu         sync.Mutex
 	activeTarget     map[string]string
 	manualClient     *http.Client
@@ -60,6 +62,7 @@ func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *lo
 		lineBan:          newTTLMap(),
 		progressThrottle: newTTLMap(),
 		playbackDedup:    newTTLMap(),
+		imageLimiter:     newImageRequestLimiter(imageProxyMaxConcurrent, imageProxyStartInterval),
 		activeTarget:     map[string]string{},
 		manualClient:     newProxyHTTPClient(false),
 		followClient:     newProxyHTTPClient(true),

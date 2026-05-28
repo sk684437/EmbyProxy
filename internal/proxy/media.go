@@ -131,6 +131,13 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	} else if isAdditionalPartsAPI {
 		stage = "additionalparts-proxy"
 	}
+	if isImageAPI {
+		release, err := h.acquireImageRequestSlot(ctx, parsed.Name)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": finalURL.String(), "outboundHeaders": hClean})
 	res, err := h.fetchWithProtocolFallback(ctx, finalURL, r.Method, hClean, body, true)
 	if err != nil {
@@ -162,6 +169,9 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			}
 		}
 	}
+	if isImageAPI && res.StatusCode == http.StatusTooManyRequests {
+		h.noteImageRateLimited(parsed.Name, res.Header.Get("Retry-After"))
+	}
 	headers := cloneHeader(res.Header)
 	addCORSHeaders(headers, reqOrigin, env)
 	headers.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length, Content-Type")
@@ -179,7 +189,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	if isImageAPI {
 		headers.Del("Set-Cookie")
 		headers.Del("Vary")
-		headers.Set("Cache-Control", "public, max-age=60, s-maxage=60")
+		setImageCacheControl(headers, res.StatusCode, "public, max-age=60, s-maxage=60")
 	}
 	_ = h.store.LogPlayback(ctx, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: headers, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method})
 	res.Header = headers
@@ -241,7 +251,7 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 	} else if isImageAPI {
 		headers.Del("Set-Cookie")
 		headers.Del("Vary")
-		headers.Set("Cache-Control", "public, max-age=2592000, s-maxage=2592000, immutable")
+		setImageCacheControl(headers, res.StatusCode, "public, max-age=2592000, s-maxage=2592000, immutable")
 	} else if isStreaming {
 		headers.Set("Cache-Control", "no-store, no-transform")
 	}
@@ -427,6 +437,14 @@ func isSystemInfoAddressKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+func setImageCacheControl(headers http.Header, status int, cacheValue string) {
+	if status == http.StatusNotModified || (status >= 200 && status < 300) {
+		headers.Set("Cache-Control", cacheValue)
+		return
+	}
+	headers.Set("Cache-Control", "no-store")
 }
 
 func isAuthSuccess(res *http.Response) bool {

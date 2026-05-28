@@ -245,6 +245,39 @@ func TestServeHTTPRewritesSystemInfoAddressesWithTargetPathPrefix(t *testing.T) 
 	}
 }
 
+func TestHandleMediaProxyDoesNotCacheImageErrors(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	h.imageLimiter = newImageRequestLimiter(imageProxyMaxConcurrent, 0)
+	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return bytesResponse(http.StatusTooManyRequests, []byte("rate limited"), http.Header{
+			"Cache-Control": []string{"public, max-age=60"},
+			"Content-Type":  []string{"text/html; charset=UTF-8"},
+		}), nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary", nil)
+	finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("handleMediaProxy() error = %v", err)
+	}
+	defer res.Body.Close()
+	if got := res.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
 func TestSetLastResponseClosesReplacedResponse(t *testing.T) {
 	h := &Handler{}
 	firstBody := newTrackedBody("first")
