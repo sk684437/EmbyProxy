@@ -158,7 +158,9 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		}
 		addCORSHeaders(rh, reqOrigin, env)
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-completed", "targetUrl": targetURL, "outboundHeaders": currentHeaders})
-		h.log.Info("direct", "target completed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": res.StatusCode, "ms": time.Since(started).Milliseconds()})
+		targetMs := time.Since(started).Milliseconds()
+		h.log.Info("direct", "target headers received", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": res.StatusCode, "ms": targetMs})
+		SetAccessLogField(ctx, "targetMs", targetMs)
 		res.Header = rh
 		h.closeBody(lastRes)
 		lastRes = nil

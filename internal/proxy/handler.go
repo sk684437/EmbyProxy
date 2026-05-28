@@ -335,7 +335,9 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			h.closeBody(lastRes)
 			lastRes = nil
 			h.markTargetHealthy(nodeKey, targets, target, expectedActive)
-			h.log.Info("proxy", "target completed", withAccessLogFields(ctx, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": time.Since(started).Milliseconds()}))
+			targetMs := time.Since(started).Milliseconds()
+			h.log.Info("proxy", "target headers received", withAccessLogFields(ctx, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": targetMs}))
+			SetAccessLogField(ctx, "targetMs", targetMs)
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)

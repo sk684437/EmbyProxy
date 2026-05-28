@@ -174,6 +174,32 @@ func TestHandleNodeHidesTargetErrorDetails(t *testing.T) {
 	}
 }
 
+func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	h.manualClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/System/Ping", nil).WithContext(ctx)
+	res, err := h.handleNode(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/System/Ping"}, nil, config.ProxyEnv{})
+	if err != nil {
+		t.Fatalf("handleNode() error = %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	if _, ok := AccessLogFields(ctx)["targetMs"].(int64); !ok {
+		t.Fatalf("targetMs access log field = %T, want int64", AccessLogFields(ctx)["targetMs"])
+	}
+}
+
 func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
