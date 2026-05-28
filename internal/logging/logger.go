@@ -20,9 +20,10 @@ var levels = map[string]int{
 }
 
 var (
-	sensitiveQueryRE = regexp.MustCompile(`(?i)(token|api[_-]?key|access[_-]?token|auth|authorization|password|secret|session)`)
-	httpURLRE        = regexp.MustCompile(`(?i)^https?://`)
-	safeLogValueRE   = regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`)
+	sensitiveQueryRE  = regexp.MustCompile(`(?i)(token|api[_-]?key|access[_-]?token|auth|authorization|password|secret|session)`)
+	httpURLRE         = regexp.MustCompile(`(?i)^https?://`)
+	embeddedHTTPURLRE = regexp.MustCompile(`(?i)https?://[^\s"'<>()]+`)
+	safeLogValueRE    = regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`)
 )
 
 type Logger struct {
@@ -70,7 +71,7 @@ func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 		return
 	}
 	parts := []string{time.Now().UTC().Format(time.RFC3339), strings.ToUpper(level), "[" + scope + "]"}
-	if clean := cleanString(msg, 512); clean != "" {
+	if clean := RedactText(msg); clean != "" {
 		parts = append(parts, clean)
 	}
 	if formatted := formatMeta(meta); formatted != "" {
@@ -116,6 +117,14 @@ func RedactURL(raw string) string {
 		return value
 	}
 	return value[:q] + redactQuery(value[q+1:])
+}
+
+func RedactText(raw string) string {
+	value := cleanString(raw, 512)
+	if value == "" {
+		return ""
+	}
+	return embeddedHTTPURLRE.ReplaceAllStringFunc(value, RedactURL)
 }
 
 func RedactProxyURL(raw, nodeName, secret string) string {
@@ -208,7 +217,7 @@ func formatMeta(meta map[string]any) string {
 }
 
 func formatValue(value any) string {
-	s := cleanString(fmt.Sprint(value), 512)
+	s := RedactText(fmt.Sprint(value))
 	if s == "" {
 		return ""
 	}
