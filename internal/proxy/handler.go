@@ -32,6 +32,7 @@ type Handler struct {
 	playbackDedup    *ttlMap
 	imageLimiterMu   sync.Mutex
 	imageLimiter     *imageRequestLimiter
+	imageCache       *imageDiskCache
 	activeMu         sync.Mutex
 	activeTarget     map[string]string
 	manualClient     *http.Client
@@ -63,6 +64,7 @@ func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *lo
 		progressThrottle: newTTLMap(),
 		playbackDedup:    newTTLMap(),
 		imageLimiter:     newImageRequestLimiter(imageProxyMaxConcurrent, imageProxyStartInterval),
+		imageCache:       newImageCacheFromConfig(cfg),
 		activeTarget:     map[string]string{},
 		manualClient:     newProxyHTTPClient(false),
 		followClient:     newProxyHTTPClient(true),
@@ -253,6 +255,9 @@ func (h *Handler) CleanupTTLMaps() {
 	h.lineBan.Cleanup()
 	h.progressThrottle.Cleanup()
 	h.playbackDedup.Cleanup()
+	if h.imageCache != nil {
+		h.imageCache.CleanupExpired()
+	}
 }
 
 func (h *Handler) ResetNodeRoutingState(uid, name string) {
@@ -324,7 +329,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			h.closeBody(lastRes)
 			lastRes = nil
 			h.markTargetHealthy(nodeKey, targets, target, expectedActive)
-			h.log.Info("proxy", "target completed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": time.Since(started).Milliseconds()})
+			h.log.Info("proxy", "target completed", withAccessLogFields(ctx, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": time.Since(started).Milliseconds()}))
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)

@@ -158,11 +158,16 @@ func requestMiddleware(log *logging.Logger, store *storage.Store, next http.Hand
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := log.NextRequestID("")
 		ctx := context.WithValue(r.Context(), "requestID", id)
+		ctx = proxy.WithAccessLogFields(ctx)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		started := time.Now()
 		next.ServeHTTP(sw, r.WithContext(ctx))
 		if log.AccessEnabled() {
-			log.Info("access", r.Method+" "+logging.RedactURL(r.URL.RequestURI()), map[string]any{"id": id, "status": sw.status, "bytes": sw.bytes, "ms": time.Since(started).Milliseconds(), "ip": auth.ClientIP(r, trustsProxy(ctx, store))})
+			meta := map[string]any{"id": id, "status": sw.status, "bytes": sw.bytes, "ms": time.Since(started).Milliseconds(), "ip": auth.ClientIP(r, trustsProxy(ctx, store))}
+			for key, value := range proxy.AccessLogFields(ctx) {
+				meta[key] = value
+			}
+			log.Info("access", r.Method+" "+logging.RedactURL(r.URL.RequestURI()), meta)
 		}
 	})
 }

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
@@ -291,6 +292,85 @@ func TestHandleMediaProxyDoesNotCacheImageErrors(t *testing.T) {
 	defer res.Body.Close()
 	if got := res.Header.Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	h.imageCache = newImageDiskCache(filepath.Join(t.TempDir(), "image-cache"), time.Hour)
+	h.imageLimiter = newImageRequestLimiter(1, 0)
+	upstreamCalls := 0
+	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		upstreamCalls++
+		if upstreamCalls > 1 {
+			return nil, errors.New("unexpected upstream request")
+		}
+		return bytesResponse(http.StatusOK, []byte("cached-image"), http.Header{
+			"Content-Type": []string{"image/jpeg"},
+			"ETag":         []string{`"image-v1"`},
+		}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary?tag=a", nil)
+	finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("handleMediaProxy() first error = %v", err)
+	}
+	body, err := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "cached-image" {
+		t.Fatalf("first body = %q", body)
+	}
+	if got := AccessLogFields(ctx)["imageCache"]; got != "miss" {
+		t.Fatalf("first imageCache log field = %v, want miss", got)
+	}
+	h.imageLimiter = newImageRequestLimiter(1, time.Hour)
+	release, err := h.acquireImageRequestSlot(context.Background(), "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	hitBaseCtx := WithAccessLogFields(context.Background())
+	hitCtx, cancel := context.WithTimeout(hitBaseCtx, 25*time.Millisecond)
+	defer cancel()
+	req = httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary?tag=a", nil).WithContext(hitCtx)
+	finalURL, err = url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = h.handleMediaProxy(hitCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("handleMediaProxy() cache hit error = %v", err)
+	}
+	body, err = io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "cached-image" {
+		t.Fatalf("cache hit body = %q", body)
+	}
+	if got := AccessLogFields(hitCtx)["imageCache"]; got != "hit" {
+		t.Fatalf("cache hit imageCache log field = %v, want hit", got)
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", upstreamCalls)
 	}
 }
 

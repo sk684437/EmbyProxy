@@ -52,7 +52,7 @@ func Load() (Config, error) {
 			CacheTTL:           10000,
 			ListCacheTTL:       180000,
 			MaxRetryBodyBytes:  32 * 1024 * 1024,
-			ImageCacheTTL:      86400,
+			ImageCacheTTL:      7 * 24 * 60 * 60,
 			PingCacheTTL:       60,
 			StaticCacheTTL:     604800,
 			ProgressThrottleMS: 1200,
