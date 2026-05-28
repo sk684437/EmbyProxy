@@ -2,11 +2,13 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -152,6 +154,94 @@ func TestHandleNodeHidesTargetErrorDetails(t *testing.T) {
 	}
 	if strings.TrimSpace(string(body)) != "Bad Gateway" {
 		t.Fatalf("body = %q, want Bad Gateway", body)
+	}
+}
+
+func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	finalURL, err := url.Parse("https://upstream.example/emby/System/Info/Public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := bytesResponse(http.StatusOK, []byte(`{"ServerName":"demo","Version":"4.9.3.0","WanAddress":"https://upstream.example","LocalAddress":"http://192.168.1.2:8096"}`), http.Header{
+		"Content-Type":   []string{"application/json"},
+		"Content-Length": []string{"128"},
+	})
+
+	out, err := h.finishGeneralResponse(context.Background(), req, res, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/System/Info/Public"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+	if err != nil {
+		t.Fatalf("finishGeneralResponse() error = %v", err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "upstream.example") || strings.Contains(string(body), "192.168.1.2") {
+		t.Fatalf("system info leaked upstream address: %s", body)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := "https://proxy.example/node/secret"
+	if payload["WanAddress"] != want {
+		t.Fatalf("WanAddress = %q, want %q", payload["WanAddress"], want)
+	}
+	if payload["LocalAddress"] != want {
+		t.Fatalf("LocalAddress = %q, want %q", payload["LocalAddress"], want)
+	}
+}
+
+func TestServeHTTPRewritesSystemInfoAddressesWithTargetPathPrefix(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	if err := store.SaveNode(ctx, "admin", storage.Node{
+		Name:           "node",
+		Secret:         "secret",
+		Target:         "https://upstream.example/proxy",
+		DirectExternal: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var upstreamRequestURL string
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	h.manualClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		upstreamRequestURL = req.URL.String()
+		return bytesResponse(http.StatusOK, []byte(`{"ServerName":"demo","Version":"4.9.3.0","WanAddress":"https://upstream.example","LocalAddress":"http://192.168.1.2:8096"}`), http.Header{
+			"Content-Type": []string{"application/json"},
+		}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if upstreamRequestURL != "https://upstream.example/proxy/emby/System/Info/Public" {
+		t.Fatalf("upstream request URL = %q", upstreamRequestURL)
+	}
+	if strings.Contains(rr.Body.String(), "upstream.example") || strings.Contains(rr.Body.String(), "192.168.1.2") {
+		t.Fatalf("proxied system info leaked upstream address: %s", rr.Body.String())
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := "https://proxy.example/node/secret"
+	if payload["WanAddress"] != want || payload["LocalAddress"] != want {
+		t.Fatalf("addresses = WanAddress %q, LocalAddress %q; want %q", payload["WanAddress"], payload["LocalAddress"], want)
 	}
 }
 

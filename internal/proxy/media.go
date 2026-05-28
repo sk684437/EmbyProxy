@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -278,6 +279,19 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 		headers.Del("Content-Length")
 		return bytesResponse(res.StatusCode, []byte(rewritten), headers), nil
 	}
+	if res.StatusCode >= 200 && res.StatusCode < 300 && strings.Contains(ct, "application/json") && isSystemInfoPath(parsed.Path) {
+		defer res.Body.Close()
+		raw, err := readProxyRewriteBody(res.Body)
+		if err != nil {
+			return nil, err
+		}
+		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "systeminfo-rewrite", "targetUrl": finalURL.String(), "outboundHeaders": currentHeaders})
+		rewritten, changed := rewriteSystemInfoAddresses(raw, schemeHost(r)+selfPrefix)
+		if changed {
+			headers.Del("Content-Length")
+		}
+		return bytesResponse(res.StatusCode, rewritten, headers), nil
+	}
 	res.Header = headers
 	return res, nil
 }
@@ -370,6 +384,49 @@ func (h *Handler) rewriteBodyLinks(ctx context.Context, text, requestURL string,
 		out = strings.ReplaceAll(out, from, to)
 	}
 	return out
+}
+
+func isSystemInfoPath(path string) bool {
+	p := strings.ToLower(strings.Trim(path, "/"))
+	return p == "system/info" || p == "system/info/public" || p == "emby/system/info" || p == "emby/system/info/public"
+}
+
+func rewriteSystemInfoAddresses(raw []byte, publicBase string) ([]byte, bool) {
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw, false
+	}
+	changed := false
+	for key, value := range payload {
+		if !isSystemInfoAddressKey(key) {
+			continue
+		}
+		switch value.(type) {
+		case string:
+			payload[key] = publicBase
+			changed = true
+		case []any:
+			payload[key] = []any{publicBase}
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, false
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return raw, false
+	}
+	return out, true
+}
+
+func isSystemInfoAddressKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "localaddress", "wanaddress", "remoteaddress", "publicaddress", "publicurl", "localaddresses", "wanaddresses", "remoteaddresses":
+		return true
+	default:
+		return false
+	}
 }
 
 func isAuthSuccess(res *http.Response) bool {
