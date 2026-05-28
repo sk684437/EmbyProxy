@@ -44,18 +44,14 @@ func (b *trackedBody) Close() error {
 	return nil
 }
 
-func TestFetchWithProtocolFallbackClosesDiscardedFirstResponse(t *testing.T) {
-	firstBody := newTrackedBody("first")
-	secondBody := newTrackedBody("second")
+func TestFetchTargetDoesNotDowngradeHTTPS(t *testing.T) {
+	body := newTrackedBody("first")
 	schemes := []string{}
 
 	h := &Handler{
 		manualClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			schemes = append(schemes, req.URL.Scheme)
-			if len(schemes) == 1 {
-				return &http.Response{StatusCode: 530, Header: http.Header{}, Body: firstBody, Request: req}, nil
-			}
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: secondBody, Request: req}, nil
+			return &http.Response{StatusCode: 530, Header: http.Header{}, Body: body, Request: req}, nil
 		})},
 	}
 
@@ -63,24 +59,44 @@ func TestFetchWithProtocolFallbackClosesDiscardedFirstResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := h.fetchWithProtocolFallback(context.Background(), target, http.MethodGet, http.Header{}, nil, false)
+	res, err := h.fetchTarget(context.Background(), target, http.MethodGet, http.Header{}, nil, false)
 	if err != nil {
-		t.Fatalf("fetchWithProtocolFallback() error = %v", err)
+		t.Fatalf("fetchTarget() error = %v", err)
 	}
 	t.Cleanup(func() {
 		_ = res.Body.Close()
 	})
-	if res.Body != secondBody {
-		t.Fatal("fetchWithProtocolFallback() did not return the fallback response")
+	if res.Body != body {
+		t.Fatal("fetchTarget() did not return the original response")
 	}
-	if got := strings.Join(schemes, ","); got != "https,http" {
-		t.Fatalf("schemes = %q, want https,http", got)
+	if got := strings.Join(schemes, ","); got != "https" {
+		t.Fatalf("schemes = %q, want https", got)
 	}
-	if !firstBody.closed {
-		t.Fatal("discarded first response body was not closed")
-	}
-	if secondBody.closed {
+	if body.closed {
 		t.Fatal("returned response body was closed too early")
+	}
+}
+
+func TestFetchTargetDoesNotRetryHTTPAfterHTTPSError(t *testing.T) {
+	schemes := []string{}
+	wantErr := errors.New("upstream timeout")
+	h := &Handler{
+		manualClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			schemes = append(schemes, req.URL.Scheme)
+			return nil, wantErr
+		})},
+	}
+
+	target, err := url.Parse("https://example.test/emby/System/Info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.fetchTarget(context.Background(), target, http.MethodGet, http.Header{}, nil, false)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("fetchTarget() error = %v, want %v", err, wantErr)
+	}
+	if got := strings.Join(schemes, ","); got != "https" {
+		t.Fatalf("schemes = %q, want https", got)
 	}
 }
 

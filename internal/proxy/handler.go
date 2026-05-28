@@ -504,7 +504,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		return h.handleMediaProxy(ctx, r, node, parsed, finalURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-proxy", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	res, err := h.fetchWithProtocolFallback(ctx, finalURL, r.Method, headers, body, false)
+	res, err := h.fetchTarget(ctx, finalURL, r.Method, headers, body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +518,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		h2.Set("Referer", reqBase+"/")
 		currentHeaders = h2
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-retry-compat-origin", "targetUrl": finalURL.String(), "outboundHeaders": h2})
-		res, err = h.fetchWithProtocolFallback(ctx, finalURL, r.Method, h2, body, false)
+		res, err = h.fetchTarget(ctx, finalURL, r.Method, h2, body, false)
 		if err != nil {
 			return nil, err
 		}
@@ -552,7 +552,7 @@ func (h *Handler) sendResponse(w http.ResponseWriter, res *http.Response) {
 	}
 }
 
-func (h *Handler) fetchWithProtocolFallback(ctx context.Context, target *url.URL, method string, headers http.Header, body []byte, follow bool) (*http.Response, error) {
+func (h *Handler) fetchTarget(ctx context.Context, target *url.URL, method string, headers http.Header, body []byte, follow bool) (*http.Response, error) {
 	client := h.manualClient
 	if follow {
 		client = h.followClient
@@ -560,33 +560,7 @@ func (h *Handler) fetchWithProtocolFallback(ctx context.Context, target *url.URL
 	if client == nil {
 		client = newProxyHTTPClient(follow)
 	}
-	first, err := h.doFetch(ctx, client, target, method, headers, body)
-	if err == nil && first.StatusCode != 525 && first.StatusCode != 526 && first.StatusCode != 530 {
-		return first, nil
-	}
-	if body != nil && int64(len(body)) > h.cfg.Defaults.MaxRetryBodyBytes {
-		if err == nil {
-			return first, nil
-		}
-		h.closeBody(first)
-		return nil, err
-	}
-	alt := *target
-	if alt.Scheme == "https" {
-		alt.Scheme = "http"
-	} else {
-		alt.Scheme = "https"
-	}
-	second, err2 := h.doFetch(ctx, client, &alt, method, headers, body)
-	if err2 != nil {
-		if err != nil {
-			h.closeBody(first)
-			return nil, err2
-		}
-		return first, nil
-	}
-	h.closeBody(first)
-	return second, nil
+	return h.doFetch(ctx, client, target, method, headers, body)
 }
 
 func (h *Handler) doFetch(ctx context.Context, client *http.Client, target *url.URL, method string, headers http.Header, body []byte) (*http.Response, error) {

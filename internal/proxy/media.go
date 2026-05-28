@@ -25,7 +25,7 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 	headers.Del("If-Range")
 	applyIdentity(h.ids, headers, node, true)
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-source", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	res, err := h.fetchWithProtocolFallback(ctx, finalURL, http.MethodGet, headers, nil, true)
+	res, err := h.fetchTarget(ctx, finalURL, http.MethodGet, headers, nil, true)
 	if err != nil {
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-source-failed", "targetUrl": finalURL.String(), "outboundHeaders": headers})
 		return nil, err
@@ -95,7 +95,7 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 				hh.Del("Referer")
 			}
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "auth-" + mode, "targetUrl": u.String(), "outboundHeaders": hh})
-			res, err := h.fetchWithProtocolFallback(ctx, u, r.Method, hh, body, false)
+			res, err := h.fetchTarget(ctx, u, r.Method, hh, body, false)
 			if err != nil {
 				continue
 			}
@@ -139,7 +139,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		defer release()
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": finalURL.String(), "outboundHeaders": hClean})
-	res, err := h.fetchWithProtocolFallback(ctx, finalURL, r.Method, hClean, body, true)
+	res, err := h.fetchTarget(ctx, finalURL, r.Method, hClean, body, true)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		hImg.Set("Accept-Encoding", "identity")
 		applyIdentity(h.ids, hImg, node, true)
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-clean", "targetUrl": finalURL.String(), "outboundHeaders": hImg})
-		res, err = h.fetchWithProtocolFallback(ctx, finalURL, r.Method, hImg, nil, false)
+		res, err = h.fetchTarget(ctx, finalURL, r.Method, hImg, nil, false)
 		if err != nil {
 			return nil, err
 		}
@@ -163,7 +163,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			hImg2.Set("Referer", originOf(finalURL)+"/")
 			hImg2.Set("Origin", originOf(finalURL))
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-origin", "targetUrl": finalURL.String(), "outboundHeaders": hImg2})
-			res, err = h.fetchWithProtocolFallback(ctx, finalURL, r.Method, hImg2, nil, false)
+			res, err = h.fetchTarget(ctx, finalURL, r.Method, hImg2, nil, false)
 			if err != nil {
 				return nil, err
 			}
@@ -209,7 +209,7 @@ func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node sto
 		applyEmosHeaders(h3, env)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-retry-clean", "targetUrl": finalURL.String(), "outboundHeaders": h3})
-	res, err := h.fetchWithProtocolFallback(ctx, finalURL, r.Method, h3, body, false)
+	res, err := h.fetchTarget(ctx, finalURL, r.Method, h3, body, false)
 	if err != nil || res.StatusCode != http.StatusForbidden {
 		return res, h3, err
 	}
@@ -229,7 +229,7 @@ func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node sto
 			applyEmosHeaders(h4, env)
 		}
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": finalURL.String(), "outboundHeaders": h4})
-		res, err = h.fetchWithProtocolFallback(ctx, finalURL, r.Method, h4, body, false)
+		res, err = h.fetchTarget(ctx, finalURL, r.Method, h4, body, false)
 		if err != nil || res.StatusCode != http.StatusForbidden {
 			return res, h4, err
 		}
