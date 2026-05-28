@@ -576,7 +576,7 @@ tr:last-child td{border-bottom:0}
     <div class="sheet-head">
       <div>
         <h2>系统配置</h2>
-        <p>管理播放兼容、日志、安全访问与运维诊断配置</p>
+        <p>管理播放兼容、图片、日志、安全访问与运维诊断配置</p>
       </div>
       <button class="sheet-close" onclick="closeConfigModal()">×</button>
     </div>
@@ -588,9 +588,11 @@ tr:last-child td{border-bottom:0}
         </div>
         <div class="config-nav">
           <button type="button" class="config-nav-button active" onclick="scrollConfigGroup('config-playback',this)"><span>01</span><b>播放设置</b></button>
-          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-runtime',this)"><span>02</span><b>日志设置</b></button>
-          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-access',this)"><span>03</span><b>安全设置</b></button>
-          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-ops',this)"><span>04</span><b>运维诊断</b></button>
+          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-image-request',this)"><span>02</span><b>图片请求</b></button>
+          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-image-cache',this)"><span>03</span><b>图片缓存</b></button>
+          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-runtime',this)"><span>04</span><b>日志设置</b></button>
+          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-access',this)"><span>05</span><b>安全设置</b></button>
+          <button type="button" class="config-nav-button" onclick="scrollConfigGroup('config-ops',this)"><span>06</span><b>运维诊断</b></button>
         </div>
       </aside>
       <div class="config-panel">
@@ -640,9 +642,68 @@ tr:last-child td{border-bottom:0}
           </div>
         </section>
 
-        <section class="config-group" id="config-runtime">
+        <section class="config-group" id="config-image-request">
           <div class="config-group-head">
             <span class="config-index">02</span>
+            <div>
+              <h3>图片请求</h3>
+            </div>
+          </div>
+          <div class="config-fields">
+            <div class="config-field-card">
+              <div class="config-card-head">
+                <h4>上游请求限制</h4>
+                <span>Upstream</span>
+              </div>
+              <div class="toggle-row">
+                <input type="checkbox" id="cfg-imageProxyLimitEnabled"/>
+                <label for="cfg-imageProxyLimitEnabled">启用图片请求限流</label>
+              </div>
+              <div class="tg-row">
+                <div class="form-group">
+                  <label for="cfg-imageProxyMaxConcurrent">上游并发数</label>
+                  <input type="number" id="cfg-imageProxyMaxConcurrent" min="1" max="32" step="1"/>
+                  <div class="form-hint">单个节点同时请求上游图片的数量上限；仅在开启限流时生效，默认 4</div>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-imageProxyRequestIntervalMs">请求间隔（毫秒）</label>
+                  <input type="number" id="cfg-imageProxyRequestIntervalMs" min="0" max="5000" step="50"/>
+                  <div class="form-hint">单个节点两次图片请求之间的最小间隔；仅在开启限流时生效，默认 250ms，填 0 表示不限制</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="config-group" id="config-image-cache">
+          <div class="config-group-head">
+            <span class="config-index">03</span>
+            <div>
+              <h3>图片缓存</h3>
+            </div>
+          </div>
+          <div class="config-fields">
+            <div class="config-field-card">
+              <div class="config-card-head">
+                <h4>磁盘缓存</h4>
+                <span>Cache</span>
+              </div>
+              <div class="toggle-row">
+                <input type="checkbox" id="cfg-imageCacheEnabled"/>
+                <label for="cfg-imageCacheEnabled">启用图片缓存</label>
+              </div>
+              <div class="form-group">
+                <label for="cfg-imageCacheTtlDays">缓存保留时长（天）</label>
+                <input type="number" id="cfg-imageCacheTtlDays" min="1" max="365" step="1"/>
+                <div class="form-hint">关闭时不读写磁盘缓存；开启后图片最多保留该天数，默认 7 天</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="config-group" id="config-runtime">
+          <div class="config-group-head">
+            <span class="config-index">04</span>
             <div>
               <h3>日志设置</h3>
             </div>
@@ -667,7 +728,7 @@ tr:last-child td{border-bottom:0}
 
         <section class="config-group" id="config-access">
           <div class="config-group-head">
-            <span class="config-index">03</span>
+            <span class="config-index">05</span>
             <div>
               <h3>安全设置</h3>
             </div>
@@ -714,7 +775,7 @@ tr:last-child td{border-bottom:0}
 
         <section class="config-group" id="config-ops">
           <div class="config-group-head">
-            <span class="config-index">04</span>
+            <span class="config-index">06</span>
             <div>
               <h3>运维诊断</h3>
             </div>
@@ -1401,6 +1462,11 @@ async function openConfigModal() {
     document.getElementById('cfg-emosMatchHosts').value = formatCommaList(c.emosMatchHosts);
     document.getElementById('cfg-emosProxyId').value = c.emosProxyId || '';
     document.getElementById('cfg-emosProxyName').value = c.emosProxyName || '';
+    document.getElementById('cfg-imageProxyLimitEnabled').checked = c.imageProxyLimitEnabled === true;
+    document.getElementById('cfg-imageProxyMaxConcurrent').value = c.imageProxyMaxConcurrent ?? 4;
+    document.getElementById('cfg-imageProxyRequestIntervalMs').value = c.imageProxyRequestIntervalMs ?? 250;
+    document.getElementById('cfg-imageCacheEnabled').checked = c.imageCacheEnabled === true;
+    document.getElementById('cfg-imageCacheTtlDays').value = c.imageCacheTtlDays ?? 7;
     document.getElementById('cfg-corsAllowOrigin').value = formatCORSAllowOrigin(c.corsAllowOrigin);
     document.getElementById('cfg-externalAllowHosts').value = formatExternalAllowHosts(c.externalAllowHosts);
     document.getElementById('cfg-externalAllowAny').checked = !!c.externalAllowAny;
@@ -1433,6 +1499,11 @@ async function saveConfig() {
     emosMatchHosts: document.getElementById('cfg-emosMatchHosts').value.trim(),
     emosProxyId: document.getElementById('cfg-emosProxyId').value.trim(),
     emosProxyName: document.getElementById('cfg-emosProxyName').value.trim(),
+    imageProxyLimitEnabled: document.getElementById('cfg-imageProxyLimitEnabled').checked,
+    imageProxyMaxConcurrent: parseInt(document.getElementById('cfg-imageProxyMaxConcurrent').value || '4'),
+    imageProxyRequestIntervalMs: parseInt(document.getElementById('cfg-imageProxyRequestIntervalMs').value || '250'),
+    imageCacheEnabled: document.getElementById('cfg-imageCacheEnabled').checked,
+    imageCacheTtlDays: parseInt(document.getElementById('cfg-imageCacheTtlDays').value || '7'),
     corsAllowOrigin: document.getElementById('cfg-corsAllowOrigin').value.trim(),
     externalAllowHosts: document.getElementById('cfg-externalAllowHosts').value.trim(),
     externalAllowAny: document.getElementById('cfg-externalAllowAny').checked,

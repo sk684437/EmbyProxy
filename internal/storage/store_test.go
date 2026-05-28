@@ -12,6 +12,32 @@ func TestDefaultSystemConfigDoesNotTrustProxyHeaders(t *testing.T) {
 	}
 }
 
+func TestSystemConfigBackfillsImageDefaults(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	fallback := DefaultSystemConfig()
+	if err := store.KV().Put(ctx, "system:config", map[string]any{"logLevel": "debug"}); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+	got, err := store.GetSystemConfig(ctx, fallback)
+	if err != nil {
+		t.Fatalf("GetSystemConfig() error = %v", err)
+	}
+	if got.LogLevel != "debug" {
+		t.Fatalf("LogLevel = %q, want debug", got.LogLevel)
+	}
+	if got.ImageProxyLimitEnabled != fallback.ImageProxyLimitEnabled || got.ImageProxyMaxConcurrent != fallback.ImageProxyMaxConcurrent || got.ImageProxyRequestIntervalMS != fallback.ImageProxyRequestIntervalMS || got.ImageCacheEnabled != fallback.ImageCacheEnabled || got.ImageCacheTTLDays != fallback.ImageCacheTTLDays {
+		t.Fatalf("image settings = %+v, want defaults %+v", got, fallback)
+	}
+}
+
 func TestSystemConfigCacheRefreshesOnSave(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "test.db"))

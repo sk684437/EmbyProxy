@@ -468,23 +468,43 @@ func (h *Handler) configSet(ctx context.Context, body map[string]any) map[string
 		cfgMap = map[string]any{}
 	}
 	defaults := h.defaultSystemConfig()
-	logLevel, errText := normalizeLogLevel(asString(cfgMap["logLevel"]), defaults.LogLevel)
+	current, err := h.store.GetSystemConfig(ctx, defaults)
+	if err != nil {
+		return fail(err.Error())
+	}
+	logLevelInput := current.LogLevel
+	if _, ok := cfgMap["logLevel"]; ok {
+		logLevelInput = asString(cfgMap["logLevel"])
+	}
+	logLevel, errText := normalizeLogLevel(logLevelInput, defaults.LogLevel)
 	if errText != "" {
 		return fail(errText)
 	}
-	hosts, errText := normalizeExternalAllowHosts(asString(cfgMap["externalAllowHosts"]))
+	hostsInput := current.ExternalAllowHosts
+	if _, ok := cfgMap["externalAllowHosts"]; ok {
+		hostsInput = asString(cfgMap["externalAllowHosts"])
+	}
+	hosts, errText := normalizeExternalAllowHosts(hostsInput)
 	if errText != "" {
 		return fail(errText)
 	}
-	corsAllowOrigin, errText := normalizeCORSAllowOrigin(asString(cfgMap["corsAllowOrigin"]))
+	corsAllowOriginInput := current.CORSAllowOrigin
+	if _, ok := cfgMap["corsAllowOrigin"]; ok {
+		corsAllowOriginInput = asString(cfgMap["corsAllowOrigin"])
+	}
+	corsAllowOrigin, errText := normalizeCORSAllowOrigin(corsAllowOriginInput)
 	if errText != "" {
 		return fail(errText)
 	}
-	trafficCaptureFile, errText := normalizeTrafficCaptureFile(asString(cfgMap["trafficCaptureFile"]), defaults.TrafficCaptureFile)
+	trafficCaptureFileInput := current.TrafficCaptureFile
+	if _, ok := cfgMap["trafficCaptureFile"]; ok {
+		trafficCaptureFileInput = asString(cfgMap["trafficCaptureFile"])
+	}
+	trafficCaptureFile, errText := normalizeTrafficCaptureFile(trafficCaptureFileInput, defaults.TrafficCaptureFile)
 	if errText != "" {
 		return fail(errText)
 	}
-	emosMatchHostsInput := defaults.EmosMatchHosts
+	emosMatchHostsInput := current.EmosMatchHosts
 	if _, ok := cfgMap["emosMatchHosts"]; ok {
 		emosMatchHostsInput = asString(cfgMap["emosMatchHosts"])
 	}
@@ -492,7 +512,7 @@ func (h *Handler) configSet(ctx context.Context, body map[string]any) map[string
 	if errText != "" {
 		return fail(errText)
 	}
-	emosProxyIDInput := defaults.EmosProxyID
+	emosProxyIDInput := current.EmosProxyID
 	if _, ok := cfgMap["emosProxyId"]; ok {
 		emosProxyIDInput = asString(cfgMap["emosProxyId"])
 	}
@@ -500,7 +520,7 @@ func (h *Handler) configSet(ctx context.Context, body map[string]any) map[string
 	if errText != "" {
 		return fail(errText)
 	}
-	emosProxyNameInput := defaults.EmosProxyName
+	emosProxyNameInput := current.EmosProxyName
 	if _, ok := cfgMap["emosProxyName"]; ok {
 		emosProxyNameInput = asString(cfgMap["emosProxyName"])
 	}
@@ -508,26 +528,39 @@ func (h *Handler) configSet(ctx context.Context, body map[string]any) map[string
 	if errText != "" {
 		return fail(errText)
 	}
-	logAccess := defaults.LogAccess
+	logAccess := current.LogAccess
 	if _, ok := cfgMap["logAccess"]; ok {
 		logAccess = validators.ToBool(cfgMap["logAccess"])
 	}
+	imageProxyLimitEnabled := current.ImageProxyLimitEnabled
+	if _, ok := cfgMap["imageProxyLimitEnabled"]; ok {
+		imageProxyLimitEnabled = validators.ToBool(cfgMap["imageProxyLimitEnabled"])
+	}
+	imageCacheEnabled := current.ImageCacheEnabled
+	if _, ok := cfgMap["imageCacheEnabled"]; ok {
+		imageCacheEnabled = validators.ToBool(cfgMap["imageCacheEnabled"])
+	}
 	cfg := storage.SystemConfig{
-		LogLevel:                logLevel,
-		LogAccess:               logAccess,
-		CapyStripEmby:           normalizeBinaryFlag(cfgMap["capyStripEmby"], defaults.CapyStripEmby),
-		EmosCompat:              validators.ToBool(cfgMap["emosCompat"]),
-		EmosMatchHosts:          emosMatchHosts,
-		EmosProxyID:             emosProxyID,
-		EmosProxyName:           emosProxyName,
-		CORSAllowOrigin:         corsAllowOrigin,
-		ExternalAllowHosts:      hosts,
-		ExternalAllowAny:        validators.ToBool(cfgMap["externalAllowAny"]),
-		TrustProxy:              validators.ToBool(cfgMap["trustProxy"]),
-		TrafficCaptureEnabled:   validators.ToBool(cfgMap["trafficCaptureEnabled"]),
-		TrafficCaptureFile:      trafficCaptureFile,
-		TrafficCaptureBodyMax:   defaults.TrafficCaptureBodyMax,
-		TrafficCaptureTextTypes: defaults.TrafficCaptureTextTypes,
+		LogLevel:                    logLevel,
+		LogAccess:                   logAccess,
+		CapyStripEmby:               normalizeBinaryFlag(cfgMap["capyStripEmby"], current.CapyStripEmby),
+		EmosCompat:                  boolValue(cfgMap, "emosCompat", current.EmosCompat),
+		EmosMatchHosts:              emosMatchHosts,
+		EmosProxyID:                 emosProxyID,
+		EmosProxyName:               emosProxyName,
+		CORSAllowOrigin:             corsAllowOrigin,
+		ExternalAllowHosts:          hosts,
+		ExternalAllowAny:            boolValue(cfgMap, "externalAllowAny", current.ExternalAllowAny),
+		TrustProxy:                  boolValue(cfgMap, "trustProxy", current.TrustProxy),
+		ImageProxyLimitEnabled:      imageProxyLimitEnabled,
+		ImageProxyMaxConcurrent:     clamp(intValue(cfgMap["imageProxyMaxConcurrent"], current.ImageProxyMaxConcurrent), 1, 32),
+		ImageProxyRequestIntervalMS: clamp(intValue(cfgMap["imageProxyRequestIntervalMs"], current.ImageProxyRequestIntervalMS), 0, 5000),
+		ImageCacheEnabled:           imageCacheEnabled,
+		ImageCacheTTLDays:           clamp(intValue(cfgMap["imageCacheTtlDays"], current.ImageCacheTTLDays), 1, 365),
+		TrafficCaptureEnabled:       boolValue(cfgMap, "trafficCaptureEnabled", current.TrafficCaptureEnabled),
+		TrafficCaptureFile:          trafficCaptureFile,
+		TrafficCaptureBodyMax:       current.TrafficCaptureBodyMax,
+		TrafficCaptureTextTypes:     current.TrafficCaptureTextTypes,
 	}
 	if err := h.store.SaveSystemConfig(ctx, cfg); err != nil {
 		return fail(err.Error())
@@ -860,6 +893,13 @@ func intValue(value any, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func boolValue(values map[string]any, key string, fallback bool) bool {
+	if _, ok := values[key]; !ok {
+		return fallback
+	}
+	return validators.ToBool(values[key])
 }
 
 func floatValue(value any, fallback float64) float64 {

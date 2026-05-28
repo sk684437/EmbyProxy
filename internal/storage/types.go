@@ -43,21 +43,26 @@ type TGConfig struct {
 }
 
 type SystemConfig struct {
-	LogLevel                string `json:"logLevel"`
-	LogAccess               bool   `json:"logAccess"`
-	CapyStripEmby           string `json:"capyStripEmby"`
-	EmosCompat              bool   `json:"emosCompat"`
-	EmosMatchHosts          string `json:"emosMatchHosts"`
-	EmosProxyID             string `json:"emosProxyId"`
-	EmosProxyName           string `json:"emosProxyName"`
-	CORSAllowOrigin         string `json:"corsAllowOrigin"`
-	ExternalAllowHosts      string `json:"externalAllowHosts"`
-	ExternalAllowAny        bool   `json:"externalAllowAny"`
-	TrustProxy              bool   `json:"trustProxy"`
-	TrafficCaptureEnabled   bool   `json:"trafficCaptureEnabled"`
-	TrafficCaptureFile      string `json:"trafficCaptureFile"`
-	TrafficCaptureBodyMax   int64  `json:"trafficCaptureBodyMax"`
-	TrafficCaptureTextTypes string `json:"trafficCaptureTextTypes"`
+	LogLevel                    string `json:"logLevel"`
+	LogAccess                   bool   `json:"logAccess"`
+	CapyStripEmby               string `json:"capyStripEmby"`
+	EmosCompat                  bool   `json:"emosCompat"`
+	EmosMatchHosts              string `json:"emosMatchHosts"`
+	EmosProxyID                 string `json:"emosProxyId"`
+	EmosProxyName               string `json:"emosProxyName"`
+	CORSAllowOrigin             string `json:"corsAllowOrigin"`
+	ExternalAllowHosts          string `json:"externalAllowHosts"`
+	ExternalAllowAny            bool   `json:"externalAllowAny"`
+	TrustProxy                  bool   `json:"trustProxy"`
+	ImageProxyLimitEnabled      bool   `json:"imageProxyLimitEnabled"`
+	ImageProxyMaxConcurrent     int    `json:"imageProxyMaxConcurrent"`
+	ImageProxyRequestIntervalMS int    `json:"imageProxyRequestIntervalMs"`
+	ImageCacheEnabled           bool   `json:"imageCacheEnabled"`
+	ImageCacheTTLDays           int    `json:"imageCacheTtlDays"`
+	TrafficCaptureEnabled       bool   `json:"trafficCaptureEnabled"`
+	TrafficCaptureFile          string `json:"trafficCaptureFile"`
+	TrafficCaptureBodyMax       int64  `json:"trafficCaptureBodyMax"`
+	TrafficCaptureTextTypes     string `json:"trafficCaptureTextTypes"`
 }
 
 const DefaultTrafficCaptureTextTypes = "application/json,application/xml,text/xml," +
@@ -68,13 +73,18 @@ var targetSplitRE = regexp.MustCompile(`\r?\n|[;,，；|]+`)
 
 func DefaultSystemConfig() SystemConfig {
 	return SystemConfig{
-		LogLevel:                "info",
-		LogAccess:               true,
-		CapyStripEmby:           "0",
-		TrustProxy:              false,
-		TrafficCaptureFile:      "./data/traffic-captures.jsonl",
-		TrafficCaptureBodyMax:   262144,
-		TrafficCaptureTextTypes: DefaultTrafficCaptureTextTypes,
+		LogLevel:                    "info",
+		LogAccess:                   true,
+		CapyStripEmby:               "0",
+		TrustProxy:                  false,
+		ImageProxyLimitEnabled:      false,
+		ImageProxyMaxConcurrent:     4,
+		ImageProxyRequestIntervalMS: 250,
+		ImageCacheEnabled:           false,
+		ImageCacheTTLDays:           7,
+		TrafficCaptureFile:          "./data/traffic-captures.jsonl",
+		TrafficCaptureBodyMax:       262144,
+		TrafficCaptureTextTypes:     DefaultTrafficCaptureTextTypes,
 	}
 }
 

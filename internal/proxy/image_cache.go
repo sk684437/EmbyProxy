@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -15,9 +16,13 @@ import (
 	"time"
 
 	"embyproxy/internal/config"
+	"embyproxy/internal/storage"
 )
 
-const imageCacheDirName = "image-cache"
+const (
+	imageCacheDirName      = "image-cache"
+	imageCacheTTLDaysLimit = 365
+)
 
 var imageCacheIgnoredQueryParams = map[string]bool{
 	"api_key":                       true,
@@ -61,16 +66,45 @@ type imageCachePaths struct {
 	meta string
 }
 
-func newImageCacheFromConfig(cfg config.Config) *imageDiskCache {
-	if cfg.Defaults.ImageCacheTTL <= 0 {
+func newImageCacheFromSystemConfig(cfg config.Config, sys storage.SystemConfig) *imageDiskCache {
+	if !sys.ImageCacheEnabled {
 		return nil
 	}
+	return newImageDiskCache(imageCacheDir(cfg), imageCacheTTL(sys))
+}
+
+func (h *Handler) ensureImageCache(ctx context.Context) *imageDiskCache {
+	sys := h.systemConfig(ctx)
+	if !sys.ImageCacheEnabled {
+		h.imageCacheMu.Lock()
+		h.imageCache = nil
+		h.imageCacheMu.Unlock()
+		return nil
+	}
+	dir := imageCacheDir(h.cfg)
+	ttl := imageCacheTTL(sys)
+	h.imageCacheMu.Lock()
+	defer h.imageCacheMu.Unlock()
+	cache := h.imageCache
+	if cache == nil || !cache.matches(dir, ttl) {
+		cache = newImageDiskCache(dir, ttl)
+		h.imageCache = cache
+	}
+	return cache
+}
+
+func imageCacheDir(cfg config.Config) string {
 	cwd := strings.TrimSpace(cfg.CWD)
 	dir := filepath.Join("data", imageCacheDirName)
 	if cwd != "" {
 		dir = filepath.Join(cwd, "data", imageCacheDirName)
 	}
-	return newImageDiskCache(dir, time.Duration(cfg.Defaults.ImageCacheTTL)*time.Second)
+	return dir
+}
+
+func imageCacheTTL(sys storage.SystemConfig) time.Duration {
+	days := clampImageConfigInt(sys.ImageCacheTTLDays, 1, imageCacheTTLDaysLimit)
+	return time.Duration(days) * 24 * time.Hour
 }
 
 func newImageDiskCache(dir string, ttl time.Duration) *imageDiskCache {
@@ -79,6 +113,10 @@ func newImageDiskCache(dir string, ttl time.Duration) *imageDiskCache {
 		return nil
 	}
 	return &imageDiskCache{dir: dir, ttl: ttl, now: time.Now}
+}
+
+func (c *imageDiskCache) matches(dir string, ttl time.Duration) bool {
+	return c != nil && c.dir == strings.TrimSpace(dir) && c.ttl == ttl
 }
 
 func imageCacheKey(nodeName string, target *url.URL) string {

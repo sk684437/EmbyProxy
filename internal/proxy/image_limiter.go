@@ -10,10 +10,12 @@ import (
 )
 
 const (
-	imageProxyMaxConcurrent  = 4
-	imageProxyStartInterval  = 250 * time.Millisecond
-	imageProxyDefaultBackoff = 10 * time.Second
-	imageProxyMaxBackoff     = 30 * time.Second
+	imageProxyMaxConcurrent        = 4
+	imageProxyStartInterval        = 250 * time.Millisecond
+	imageProxyDefaultBackoff       = 10 * time.Second
+	imageProxyMaxBackoff           = 30 * time.Second
+	imageProxyMaxConcurrentLimit   = 32
+	imageProxyRequestIntervalLimit = 5000
 )
 
 type imageRequestLimiter struct {
@@ -42,24 +44,55 @@ func newImageRequestLimiter(maxConcurrent int, startInterval time.Duration) *ima
 }
 
 func (h *Handler) acquireImageRequestSlot(ctx context.Context, nodeName string) (func(), error) {
-	limiter := h.ensureImageRequestLimiter()
+	limiter := h.ensureImageRequestLimiter(ctx)
+	if limiter == nil {
+		return func() {}, nil
+	}
 	return limiter.acquire(ctx, nodeName)
 }
 
 func (h *Handler) noteImageRateLimited(nodeName, retryAfter string) time.Duration {
-	limiter := h.ensureImageRequestLimiter()
+	h.imageLimiterMu.Lock()
+	limiter := h.imageLimiter
+	h.imageLimiterMu.Unlock()
+	if limiter == nil {
+		return 0
+	}
 	return limiter.noteRateLimited(nodeName, retryAfter)
 }
 
-func (h *Handler) ensureImageRequestLimiter() *imageRequestLimiter {
+func (h *Handler) ensureImageRequestLimiter(ctx context.Context) *imageRequestLimiter {
+	cfg := h.systemConfig(ctx)
+	if !cfg.ImageProxyLimitEnabled {
+		h.imageLimiterMu.Lock()
+		h.imageLimiter = nil
+		h.imageLimiterMu.Unlock()
+		return nil
+	}
+	maxConcurrent := clampImageConfigInt(cfg.ImageProxyMaxConcurrent, 1, imageProxyMaxConcurrentLimit)
+	startInterval := time.Duration(clampImageConfigInt(cfg.ImageProxyRequestIntervalMS, 0, imageProxyRequestIntervalLimit)) * time.Millisecond
 	h.imageLimiterMu.Lock()
 	defer h.imageLimiterMu.Unlock()
 	limiter := h.imageLimiter
-	if limiter == nil {
-		limiter = newImageRequestLimiter(imageProxyMaxConcurrent, imageProxyStartInterval)
+	if limiter == nil || !limiter.matches(maxConcurrent, startInterval) {
+		limiter = newImageRequestLimiter(maxConcurrent, startInterval)
 		h.imageLimiter = limiter
 	}
 	return limiter
+}
+
+func (l *imageRequestLimiter) matches(maxConcurrent int, startInterval time.Duration) bool {
+	return l != nil && l.maxConcurrent == maxConcurrent && l.startInterval == startInterval
+}
+
+func clampImageConfigInt(value, minValue, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func (l *imageRequestLimiter) acquire(ctx context.Context, key string) (func(), error) {

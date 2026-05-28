@@ -132,9 +132,11 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		stage = "additionalparts-proxy"
 	}
 	cacheKey := ""
+	var imageCache *imageDiskCache
 	if isImageAPI {
+		imageCache = h.ensureImageCache(ctx)
 		cacheKey = imageCacheKey(parsed.Name, finalURL)
-		if h.imageCache == nil {
+		if imageCache == nil {
 			SetAccessLogField(ctx, "imageCache", "disabled")
 		} else if !imageCacheLookupMethod(r.Method) {
 			SetAccessLogField(ctx, "imageCache", "bypass")
@@ -142,7 +144,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		} else if r.Header.Get("Range") != "" {
 			SetAccessLogField(ctx, "imageCache", "bypass")
 			SetAccessLogField(ctx, "imageCacheReason", "range")
-		} else if cached, ok := h.imageCache.get(r, cacheKey, reqOrigin, env); ok {
+		} else if cached, ok := imageCache.get(r, cacheKey, reqOrigin, env); ok {
 			SetAccessLogField(ctx, "imageCache", "hit")
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-cache-hit", "targetUrl": finalURL.String()})
 			return cached, nil
@@ -207,8 +209,8 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		headers.Del("Set-Cookie")
 		headers.Del("Vary")
 		setImageCacheControl(headers, res.StatusCode, "public, max-age=60, s-maxage=60")
-		if h.imageCache != nil {
-			h.imageCache.wrapStore(r, cacheKey, res, headers)
+		if imageCache != nil {
+			imageCache.wrapStore(r, cacheKey, res, headers)
 		}
 	}
 	_ = h.store.LogPlayback(ctx, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: headers, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method})

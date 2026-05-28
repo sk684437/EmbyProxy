@@ -32,6 +32,7 @@ type Handler struct {
 	playbackDedup    *ttlMap
 	imageLimiterMu   sync.Mutex
 	imageLimiter     *imageRequestLimiter
+	imageCacheMu     sync.Mutex
 	imageCache       *imageDiskCache
 	activeMu         sync.Mutex
 	activeTarget     map[string]string
@@ -55,6 +56,11 @@ const (
 )
 
 func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *logging.Logger) *Handler {
+	defaults := storage.DefaultSystemConfig()
+	var imageLimiter *imageRequestLimiter
+	if defaults.ImageProxyLimitEnabled {
+		imageLimiter = newImageRequestLimiter(defaults.ImageProxyMaxConcurrent, time.Duration(defaults.ImageProxyRequestIntervalMS)*time.Millisecond)
+	}
 	return &Handler{
 		cfg:              cfg,
 		store:            store,
@@ -63,8 +69,8 @@ func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *lo
 		lineBan:          newTTLMap(),
 		progressThrottle: newTTLMap(),
 		playbackDedup:    newTTLMap(),
-		imageLimiter:     newImageRequestLimiter(imageProxyMaxConcurrent, imageProxyStartInterval),
-		imageCache:       newImageCacheFromConfig(cfg),
+		imageLimiter:     imageLimiter,
+		imageCache:       newImageCacheFromSystemConfig(cfg, defaults),
 		activeTarget:     map[string]string{},
 		manualClient:     newProxyHTTPClient(false),
 		followClient:     newProxyHTTPClient(true),
@@ -255,8 +261,8 @@ func (h *Handler) CleanupTTLMaps() {
 	h.lineBan.Cleanup()
 	h.progressThrottle.Cleanup()
 	h.playbackDedup.Cleanup()
-	if h.imageCache != nil {
-		h.imageCache.CleanupExpired()
+	if imageCache := h.ensureImageCache(context.Background()); imageCache != nil {
+		imageCache.CleanupExpired()
 	}
 }
 
@@ -698,6 +704,21 @@ func (h *Handler) trustsProxy(ctx context.Context) bool {
 		return defaults.TrustProxy
 	}
 	return cfg.TrustProxy
+}
+
+func (h *Handler) systemConfig(ctx context.Context) storage.SystemConfig {
+	defaults := h.defaultSystemConfig()
+	if h.store == nil {
+		return defaults
+	}
+	cfg, err := h.store.GetSystemConfig(ctx, defaults)
+	if err != nil {
+		if h.log != nil {
+			h.log.Warn("proxy", "system config lookup failed", map[string]any{"error": err.Error()})
+		}
+		return defaults
+	}
+	return cfg
 }
 
 func (h *Handler) defaultSystemConfig() storage.SystemConfig {

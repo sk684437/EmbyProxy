@@ -2,8 +2,13 @@ package proxy
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"embyproxy/internal/config"
+	"embyproxy/internal/logging"
+	"embyproxy/internal/storage"
 )
 
 func TestImageRequestLimiterSpacesStarts(t *testing.T) {
@@ -77,4 +82,61 @@ func TestImageRequestLimiterBacksOffAfterRateLimit(t *testing.T) {
 	if elapsed := time.Since(started); elapsed < backoff/2 {
 		t.Fatalf("image request started after %s, want backoff near %s", elapsed, backoff)
 	}
+}
+
+func TestHandlerImageRequestLimiterDisabledByDefault(t *testing.T) {
+	ctx := context.Background()
+	store := newProxyTestStore(t)
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	if limiter := h.ensureImageRequestLimiter(ctx); limiter != nil {
+		t.Fatalf("default limiter = %+v, want nil", limiter)
+	}
+	release, err := h.acquireImageRequestSlot(ctx, "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+}
+
+func TestHandlerImageRequestLimiterUsesSystemConfig(t *testing.T) {
+	ctx := context.Background()
+	store := newProxyTestStore(t)
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+
+	cfg := storage.DefaultSystemConfig()
+	cfg.ImageProxyLimitEnabled = true
+	cfg.ImageProxyMaxConcurrent = 1
+	cfg.ImageProxyRequestIntervalMS = 20
+	if err := store.SaveSystemConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	limiter := h.ensureImageRequestLimiter(ctx)
+	if limiter.maxConcurrent != 1 || limiter.startInterval != 20*time.Millisecond {
+		t.Fatalf("limiter = concurrent %d interval %s", limiter.maxConcurrent, limiter.startInterval)
+	}
+
+	cfg.ImageProxyMaxConcurrent = 3
+	cfg.ImageProxyRequestIntervalMS = 0
+	if err := store.SaveSystemConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	updated := h.ensureImageRequestLimiter(ctx)
+	if updated == limiter {
+		t.Fatal("limiter was not rebuilt after config change")
+	}
+	if updated.maxConcurrent != 3 || updated.startInterval != 0 {
+		t.Fatalf("updated limiter = concurrent %d interval %s", updated.maxConcurrent, updated.startInterval)
+	}
+}
+
+func newProxyTestStore(t *testing.T) *storage.Store {
+	t.Helper()
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	return store
 }

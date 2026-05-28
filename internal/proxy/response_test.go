@@ -271,8 +271,12 @@ func TestHandleMediaProxyDoesNotCacheImageErrors(t *testing.T) {
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
-	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.imageLimiter = newImageRequestLimiter(imageProxyMaxConcurrent, 0)
+	sys := storage.DefaultSystemConfig()
+	sys.ImageCacheEnabled = true
+	if err := store.SaveSystemConfig(ctx, sys); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
 	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return bytesResponse(http.StatusTooManyRequests, []byte("rate limited"), http.Header{
 			"Cache-Control": []string{"public, max-age=60"},
@@ -295,6 +299,45 @@ func TestHandleMediaProxyDoesNotCacheImageErrors(t *testing.T) {
 	}
 }
 
+func TestHandleMediaProxySkipsImageCacheWhenDisabled(t *testing.T) {
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
+	upstreamCalls := 0
+	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		upstreamCalls++
+		return bytesResponse(http.StatusOK, []byte("image"), http.Header{"Content-Type": []string{"image/jpeg"}}), nil
+	})}
+
+	var lastCtx context.Context
+	for i := 0; i < 2; i++ {
+		reqCtx := WithAccessLogFields(context.Background())
+		lastCtx = reqCtx
+		req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary?tag=disabled", nil).WithContext(reqCtx)
+		finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=disabled")
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := h.handleMediaProxy(reqCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+		if err != nil {
+			t.Fatalf("handleMediaProxy() error = %v", err)
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+	}
+	if upstreamCalls != 2 {
+		t.Fatalf("upstream calls = %d, want 2", upstreamCalls)
+	}
+	if got := AccessLogFields(lastCtx)["imageCache"]; got != "disabled" {
+		t.Fatalf("imageCache log field = %v, want disabled", got)
+	}
+}
+
 func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
@@ -304,9 +347,15 @@ func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 	t.Cleanup(func() {
 		_ = store.Close()
 	})
-	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.imageCache = newImageDiskCache(filepath.Join(t.TempDir(), "image-cache"), time.Hour)
-	h.imageLimiter = newImageRequestLimiter(1, 0)
+	sys := storage.DefaultSystemConfig()
+	sys.ImageProxyLimitEnabled = true
+	sys.ImageProxyMaxConcurrent = 1
+	sys.ImageProxyRequestIntervalMS = 0
+	sys.ImageCacheEnabled = true
+	if err := store.SaveSystemConfig(ctx, sys); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
 	upstreamCalls := 0
 	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		upstreamCalls++
@@ -339,7 +388,6 @@ func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 	if got := AccessLogFields(ctx)["imageCache"]; got != "miss" {
 		t.Fatalf("first imageCache log field = %v, want miss", got)
 	}
-	h.imageLimiter = newImageRequestLimiter(1, time.Hour)
 	release, err := h.acquireImageRequestSlot(context.Background(), "node")
 	if err != nil {
 		t.Fatal(err)
