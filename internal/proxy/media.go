@@ -21,6 +21,7 @@ var errProxyRewriteBodyTooLarge = errors.New("rewritable upstream response body 
 
 func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, body []byte, env config.ProxyEnv) (*http.Response, error) {
 	headers := cloneHeader(r.Header)
+	stripClientIPHeaders(headers)
 	headers.Del("Range")
 	headers.Del("If-Range")
 	applyIdentity(h.ids, headers, node, true)

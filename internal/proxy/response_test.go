@@ -200,6 +200,83 @@ func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
 	}
 }
 
+func TestHandleNodeStripsClientIPHeadersFromForwardedRequest(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	var upstreamHeaders http.Header
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	h.manualClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		upstreamHeaders = cloneHeader(req.Header)
+		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/System/Ping", nil)
+	req.Header.Set("Remote-Host", "203.0.113.10")
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	req.Header.Set("CF-Connecting-IP", "203.0.113.10")
+	req.Header.Set("X-Remote-Addr", "203.0.113.10")
+	req.Header.Set("CloudFront-Viewer-Address", "203.0.113.10:4430")
+	req.Header.Set("X-Azure-ClientIP", "203.0.113.10")
+	req.Header.Set("X-Envoy-External-Address", "203.0.113.10")
+	req.Header.Set("X-Original-Forwarded-For", "203.0.113.10")
+	req.Header.Set("Proxy-Client-IP", "203.0.113.10")
+	req.Header.Set("Ali-Cdn-Real-IP", "203.0.113.10")
+	req.Header.Set("Ali-Real-Client-IP", "203.0.113.10")
+	req.Header.Set("Client-Real-IP", "203.0.113.10")
+	req.Header.Set("X-Client-Real-IP", "203.0.113.10")
+
+	res, err := h.handleNode(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/System/Ping"}, nil, config.ProxyEnv{})
+	if err != nil {
+		t.Fatalf("handleNode() error = %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	assertHeadersAbsent(t, upstreamHeaders, "Remote-Host", "X-Forwarded-For", "CF-Connecting-IP", "X-Remote-Addr", "CloudFront-Viewer-Address", "X-Azure-ClientIP", "X-Envoy-External-Address", "X-Original-Forwarded-For", "Proxy-Client-IP", "Ali-Cdn-Real-IP", "Ali-Real-Client-IP", "Client-Real-IP", "X-Client-Real-IP")
+}
+
+func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
+	var upstreamHeaders http.Header
+	h := &Handler{
+		followClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			upstreamHeaders = cloneHeader(req.Header)
+			return bytesResponse(http.StatusForbidden, []byte("forbidden"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+		})},
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/movie.strm", nil)
+	req.Header.Set("Remote-Host", "203.0.113.10")
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	req.Header.Set("CF-Connecting-IP", "203.0.113.10")
+	req.Header.Set("X-Remote-Addr", "203.0.113.10")
+	req.Header.Set("CloudFront-Viewer-Address", "203.0.113.10:4430")
+	req.Header.Set("X-Azure-ClientIP", "203.0.113.10")
+	req.Header.Set("X-Envoy-External-Address", "203.0.113.10")
+	req.Header.Set("X-Original-Forwarded-For", "203.0.113.10")
+	req.Header.Set("Proxy-Client-IP", "203.0.113.10")
+	req.Header.Set("Ali-Cdn-Real-IP", "203.0.113.10")
+	req.Header.Set("Ali-Real-Client-IP", "203.0.113.10")
+	req.Header.Set("Client-Real-IP", "203.0.113.10")
+	req.Header.Set("X-Client-Real-IP", "203.0.113.10")
+	finalURL, err := url.Parse("https://upstream.example/movie.strm")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.handleSTRM(context.Background(), req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/movie.strm"}, finalURL, nil, config.ProxyEnv{})
+	if err != nil {
+		t.Fatalf("handleSTRM() error = %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	assertHeadersAbsent(t, upstreamHeaders, "Remote-Host", "X-Forwarded-For", "CF-Connecting-IP", "X-Remote-Addr", "CloudFront-Viewer-Address", "X-Azure-ClientIP", "X-Envoy-External-Address", "X-Original-Forwarded-For", "Proxy-Client-IP", "Ali-Cdn-Real-IP", "Ali-Real-Client-IP", "Client-Real-IP", "X-Client-Real-IP")
+}
+
 func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
@@ -483,4 +560,13 @@ func (repeatingReader) Read(p []byte) (int, error) {
 		p[i] = 'x'
 	}
 	return len(p), nil
+}
+
+func assertHeadersAbsent(t *testing.T, headers http.Header, keys ...string) {
+	t.Helper()
+	for _, key := range keys {
+		if got := headers.Get(key); got != "" {
+			t.Fatalf("%s was forwarded as %q", key, got)
+		}
+	}
 }
