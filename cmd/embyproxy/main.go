@@ -80,7 +80,7 @@ func main() {
 			stop()
 			return
 		}
-		log.Info("startup", "server listening", map[string]any{"addr": "http://" + cfg.Addr(), "db": cfg.DBPath})
+		log.Info("startup", "server listening", map[string]any{"addr": cfg.Addr(), "db": cfg.DBPath})
 		logIdentityProfiles(log, ids)
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("startup", "server failed", map[string]any{"error": err.Error()})
