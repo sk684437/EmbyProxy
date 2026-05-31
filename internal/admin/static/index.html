@@ -67,6 +67,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .rail-button.active{background:#fff;color:var(--pine-2)}
 .rail-button.active::before{background:var(--pine)}
 .rail-bottom{margin-top:auto;width:100%;display:flex;flex-direction:column;gap:10px}
+.rail-version{width:100%;min-height:32px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.08);color:rgba(255,255,255,.74);display:flex;align-items:center;justify-content:center;text-align:center;padding:6px 8px;font:900 11px/1.2 "Cascadia Code","SFMono-Regular",Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rail-version.has-build{color:#fff}
 .rail-mini{height:44px;border-radius:16px;background:rgba(255,255,255,.08);color:#fff;cursor:pointer;font-size:11px;font-weight:900}
 .rail-mini:hover{background:rgba(255,255,255,.14)}
 .rail-mini.danger{color:#ffd7d2}
@@ -273,6 +275,7 @@ tr:last-child td{border-bottom:0}
   .command-rail{height:auto;position:sticky;top:0;flex-direction:row;padding:10px 12px;justify-content:space-between}
   .rail-nav,.rail-bottom{width:auto;flex-direction:row;margin-top:0}
   .rail-button{width:86px;height:50px;border-radius:16px}
+  .rail-version{width:auto;min-width:80px;height:42px;padding:0 10px}
   .rail-mini{width:64px;height:42px}
   .ops-surface{padding:16px}
   .batch-tray.visible{left:50%;width:calc(100vw - 32px)}
@@ -290,6 +293,7 @@ tr:last-child td{border-bottom:0}
   .command-rail{gap:8px;overflow-x:auto}
   .rail-logo{display:none}
   .rail-button{width:72px;min-width:72px}
+  .rail-version{min-width:70px}
   .rail-mini{width:56px;min-width:56px}
   .auth-tiles,.signal-grid,.stats-grid,.status-strip,.context-panel,.form-grid,.section-grid,.tg-row,.identity-policy{grid-template-columns:1fr}
   .query-pack,.action-pack{display:grid;grid-template-columns:1fr;width:100%}
@@ -365,6 +369,7 @@ tr:last-child td{border-bottom:0}
         <button class="rail-mini" onclick="openConfigModal()">配置</button>
         <button class="rail-mini" onclick="openTgModal()">通知</button>
         <button class="rail-mini danger" onclick="doLogout()">退出</button>
+        <div class="rail-version" id="appVersion" title="版本信息">dev</div>
       </div>
     </aside>
 
@@ -873,6 +878,7 @@ let draggingNode = '';
 let nodeChecks = {};
 let visibleProxyUrls = new Set();
 let focusedNodeName = '';
+let appBuild = null;
 
 const HIDDEN_PROXY_TEXT = '••••••••••••••••••••••••••••••••';
 const IMPERSONATE_LABELS = { yamby: 'Yamby Android', hills_android: 'Hills Android', hills_windows: 'Hills Windows' };
@@ -940,10 +946,23 @@ function switchTab(name, btn) {
 async function loadNodes() {
   const r = await api('list');
   if (!r.ok) { toast('加载节点失败: ' + r.error, 'err'); return; }
+  setAppVersion(r.build);
   allNodes = r.nodes || [];
   syncNodeState();
   renderTagFilter();
   filterNodes();
+}
+
+function setAppVersion(build) {
+  if (build) appBuild = build;
+  const el = document.getElementById('appVersion');
+  if (!el || !appBuild) return;
+  const version = appBuild.version || 'dev';
+  const commit = appBuild.commit || 'unknown';
+  const builtAt = appBuild.builtAt || 'unknown';
+  el.textContent = version;
+  el.title = `版本: ${version}\nCommit: ${commit}\n构建时间: ${builtAt}`;
+  el.classList.add('has-build');
 }
 
 function syncNodeState() {

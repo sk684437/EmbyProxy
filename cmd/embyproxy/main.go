@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"embyproxy/internal/admin"
 	"embyproxy/internal/auth"
+	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
 	"embyproxy/internal/identity"
@@ -24,12 +26,18 @@ import (
 )
 
 func main() {
+	if shouldPrintVersion(os.Args[1:]) {
+		fmt.Println(buildinfo.String())
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		panic(err)
 	}
 	defaultSystemCfg := storage.DefaultSystemConfig()
 	log := logging.New(defaultSystemCfg.LogLevel, defaultSystemCfg.LogAccess)
+	logBuildInfo(log)
 	store, err := storage.New(cfg.DBPath)
 	if err != nil {
 		log.Error("startup", "database init failed", map[string]any{"error": err.Error()})
@@ -93,6 +101,23 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "server shutdown failed", map[string]any{"error": err.Error()})
+	}
+}
+
+func logBuildInfo(log *logging.Logger) {
+	info := buildinfo.Current()
+	log.Info("startup", "EmbyProxy starting", map[string]any{"version": info.Version, "commit": info.Commit, "builtAt": info.BuiltAt})
+}
+
+func shouldPrintVersion(args []string) bool {
+	if len(args) != 1 {
+		return false
+	}
+	switch args[0] {
+	case "version", "--version", "-v":
+		return true
+	default:
+		return false
 	}
 }
 

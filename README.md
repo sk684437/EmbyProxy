@@ -48,6 +48,12 @@ ADMIN_TOKEN=请改成足够长的随机字符串
 
 `ADMIN_TOKEN` 用于登录管理界面和访问管理 API，请不要继续使用默认值。程序默认监听 `8787` 端口，只有需要改端口时才设置 `PORT`。
 
+查看当前程序版本：
+
+```text
+embyproxy --version
+```
+
 ## Docker Compose
 
 Docker Compose 部署只需要下载 `compose.yml` 和 `.env.example`，并将两个文件放在同一个目录下：

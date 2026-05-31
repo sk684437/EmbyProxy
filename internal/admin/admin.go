@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"embyproxy/internal/auth"
+	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
@@ -259,7 +260,7 @@ func (h *Handler) list(ctx context.Context, uid string) map[string]any {
 			nodes[i].LastPlayAt = lastMap[uid+":"+strings.ToLower(nodes[i].Name)]
 		}
 	}
-	return map[string]any{"ok": true, "nodes": nodes, "uid": uid}
+	return map[string]any{"ok": true, "nodes": nodes, "uid": uid, "build": buildinfo.Current()}
 }
 
 func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map[string]any {

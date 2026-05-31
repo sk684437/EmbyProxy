@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"embyproxy/internal/auth"
+	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/storage"
@@ -43,6 +44,30 @@ func TestServeAdminWithConfiguredTokenReturnsIndex(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `id="loginWrap"`) {
 		t.Fatal("expected admin index content")
+	}
+	if !strings.Contains(rec.Body.String(), `id="appVersion"`) {
+		t.Fatal("expected version display container")
+	}
+}
+
+func TestListIncludesBuildInfo(t *testing.T) {
+	ctx := context.Background()
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
+
+	oldVersion, oldCommit, oldBuiltAt := buildinfo.Version, buildinfo.Commit, buildinfo.BuiltAt
+	buildinfo.Version, buildinfo.Commit, buildinfo.BuiltAt = "v-test", "abc1234", "2026-05-31T00:00:00Z"
+	defer func() {
+		buildinfo.Version, buildinfo.Commit, buildinfo.BuiltAt = oldVersion, oldCommit, oldBuiltAt
+	}()
+
+	res := handler.list(ctx, "admin")
+	got, ok := res["build"].(buildinfo.Info)
+	if !ok {
+		t.Fatalf("build info type = %T, want buildinfo.Info", res["build"])
+	}
+	if got.Version != "v-test" || got.Commit != "abc1234" || got.BuiltAt != "2026-05-31T00:00:00Z" {
+		t.Fatalf("build info = %+v", got)
 	}
 }
 
