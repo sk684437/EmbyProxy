@@ -532,6 +532,67 @@ func TestFinishGeneralResponseBlocksPrivateCrossHostLocationDirect(t *testing.T)
 	}
 }
 
+func TestFinishGeneralResponseTrustsSmartSTRMPublicLocationDirect(t *testing.T) {
+	tests := []struct {
+		name         string
+		location     string
+		wantStatus   int
+		wantRawCalls int
+	}{
+		{
+			name:         "public target",
+			location:     "http://8.8.8.8/video.mkv?sign=abc",
+			wantStatus:   http.StatusOK,
+			wantRawCalls: 1,
+		},
+		{
+			name:         "private target",
+			location:     "http://127.0.0.1/private",
+			wantStatus:   http.StatusForbidden,
+			wantRawCalls: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = store.Close()
+			})
+			rawCalls := 0
+			h := New(config.Config{}, store, nil, logging.New("silent", false))
+			h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				rawCalls++
+				if req.URL.String() != tt.location {
+					t.Fatalf("raw URL = %q, want %q", req.URL.String(), tt.location)
+				}
+				return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+			})}
+			req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/smartstrm?item_id=1&media_id=2", nil)
+			finalURL, err := url.Parse("https://upstream.example/emby/smartstrm?item_id=1&media_id=2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := textResponse(http.StatusFound, "", http.Header{"Location": []string{tt.location}})
+
+			out, err := h.finishGeneralResponse(ctx, req, res, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/smartstrm"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+			if err != nil {
+				t.Fatalf("finishGeneralResponse() error = %v", err)
+			}
+			defer out.Body.Close()
+			if out.StatusCode != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", out.StatusCode, tt.wantStatus)
+			}
+			if rawCalls != tt.wantRawCalls {
+				t.Fatalf("raw direct calls = %d, want %d", rawCalls, tt.wantRawCalls)
+			}
+		})
+	}
+}
+
 func TestServeHTTPRewritesSystemInfoAddressesWithTargetPathPrefix(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))

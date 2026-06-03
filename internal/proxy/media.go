@@ -283,6 +283,11 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 		if direct {
 			_ = res.Body.Close()
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": parsed.Name, "secret": node.Secret, "stage": "location-direct", "targetUrl": directURL})
+			if isTrustedSmartSTRMPath(parsed.Path) {
+				trustedEnv := env
+				trustedEnv.ExternalAllowAny = true
+				return h.handleDirect(ctx, r, directURL, trustedEnv, node, nil)
+			}
 			return h.handleDirect(ctx, r, directURL, env, node, nil)
 		}
 		if rewritten != "" {
@@ -366,6 +371,11 @@ func (h *Handler) rewriteLocation(r *http.Request, location string, node storage
 		return "", true, loc.String()
 	}
 	return loc.String(), false, ""
+}
+
+func isTrustedSmartSTRMPath(path string) bool {
+	path = strings.ToLower(strings.TrimRight(strings.TrimSpace(path), "/"))
+	return path == "/smartstrm" || path == "/emby/smartstrm"
 }
 
 func (h *Handler) rewriteBodyLinks(ctx context.Context, text, requestURL string, currentNode storage.Node, currentName, currentKey string) string {
