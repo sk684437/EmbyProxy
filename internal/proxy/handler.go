@@ -338,7 +338,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			lastRes = nil
 			h.markTargetHealthy(nodeKey, targets, target, expectedActive)
 			targetMs := time.Since(started).Milliseconds()
-			h.log.Info("proxy", "target headers received", withAccessLogFields(ctx, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": targetMs}))
+			h.log.Info("proxy", "target headers received", targetHeadersReceivedLogFields(ctx, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": targetMs}))
 			SetAccessLogField(ctx, "targetMs", targetMs)
 			return res, nil
 		}
@@ -955,6 +955,20 @@ func retryableStatusLogFields(res *http.Response, fields map[string]any) map[str
 	if res != nil && res.Request != nil && res.Request.URL != nil {
 		fields["effectiveTarget"] = logging.FormatTarget(res.Request.URL.String())
 	}
+	return fields
+}
+
+func targetHeadersReceivedLogFields(ctx context.Context, fields map[string]any) map[string]any {
+	fields = withAccessLogFields(ctx, fields)
+	effectiveTarget, _ := fields["effectiveTarget"].(string)
+	if effectiveTarget == "" {
+		return fields
+	}
+	if target, ok := fields["target"]; ok && target != effectiveTarget {
+		fields["nodeTarget"] = target
+	}
+	fields["target"] = effectiveTarget
+	delete(fields, "effectiveTarget")
 	return fields
 }
 

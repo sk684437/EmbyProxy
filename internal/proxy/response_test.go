@@ -237,6 +237,33 @@ func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
 	}
 }
 
+func TestTargetHeadersReceivedLogFieldsUsesEffectiveTarget(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	SetAccessLogField(ctx, "effectiveTarget", "https://www.google.com")
+	SetAccessLogField(ctx, "targetMs", int64(68))
+
+	fields := targetHeadersReceivedLogFields(ctx, map[string]any{
+		"id":     "req-1",
+		"node":   "node",
+		"target": "https://emby.example",
+		"status": http.StatusOK,
+		"ms":     int64(71),
+	})
+
+	if fields["target"] != "https://www.google.com" {
+		t.Fatalf("target = %v, want effective target", fields["target"])
+	}
+	if fields["nodeTarget"] != "https://emby.example" {
+		t.Fatalf("nodeTarget = %v, want original node target", fields["nodeTarget"])
+	}
+	if _, ok := fields["effectiveTarget"]; ok {
+		t.Fatalf("effectiveTarget should be folded into target for success log: %v", fields["effectiveTarget"])
+	}
+	if fields["targetMs"] != int64(68) {
+		t.Fatalf("targetMs = %v, want direct target duration", fields["targetMs"])
+	}
+}
+
 func TestHandleNodeStripsClientIPHeadersFromForwardedRequest(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
@@ -352,7 +379,7 @@ func TestHandleSTRMBlocksPrivateDirectTarget(t *testing.T) {
 }
 
 func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithAccessLogFields(context.Background())
 	rawCalls := 0
 	h := &Handler{
 		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
@@ -377,6 +404,9 @@ func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
 	}
 	if rawCalls != 1 {
 		t.Fatalf("raw direct calls = %d, want 1", rawCalls)
+	}
+	if got := AccessLogFields(ctx)["effectiveTarget"]; got != "http://8.8.8.8" {
+		t.Fatalf("effectiveTarget = %v, want direct target host", got)
 	}
 }
 
