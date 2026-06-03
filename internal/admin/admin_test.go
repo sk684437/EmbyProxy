@@ -32,7 +32,7 @@ func TestServeAdminReportsMissingAdminToken(t *testing.T) {
 }
 
 func TestServeAdminWithConfiguredTokenReturnsIndex(t *testing.T) {
-	cfg := config.Config{AdminToken: "secret"}
+	cfg := config.Config{AdminToken: "strong-random-admin-token"}
 	handler := New(cfg, nil, auth.NewChecker(cfg, nil), nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	rec := httptest.NewRecorder()
@@ -47,6 +47,22 @@ func TestServeAdminWithConfiguredTokenReturnsIndex(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `id="appVersion"`) {
 		t.Fatal("expected version display container")
+	}
+}
+
+func TestServeAdminReportsDefaultAdminToken(t *testing.T) {
+	cfg := config.Config{AdminToken: "change-me-please"}
+	handler := New(cfg, nil, auth.NewChecker(cfg, nil), nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(rec.Body.String(), auth.AdminTokenDefault) {
+		t.Fatalf("body does not include default token error: %q", rec.Body.String())
 	}
 }
 

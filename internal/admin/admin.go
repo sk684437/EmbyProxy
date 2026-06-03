@@ -52,8 +52,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	if r.Method == http.MethodGet && (path == "/admin" || path == "") {
 		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-page"})
-		if strings.TrimSpace(h.cfg.AdminToken) == "" {
-			h.serveAdminTokenError(w)
+		if errText := auth.ValidateAdminToken(h.cfg.AdminToken); errText != "" {
+			h.serveAdminTokenError(w, errText)
 			return
 		}
 		h.serveIndex(w, r)
@@ -77,7 +77,7 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(indexHTML))
 }
 
-func (h *Handler) serveAdminTokenError(w http.ResponseWriter) {
+func (h *Handler) serveAdminTokenError(w http.ResponseWriter, errText string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusInternalServerError)
 	_, _ = w.Write([]byte(`<!doctype html>
@@ -96,9 +96,9 @@ code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#9d2f2a}
 </head>
 <body>
 <main>
-<h1>管理 Token 未配置</h1>
-<p>` + auth.AdminTokenNotConfigured + `。</p>
-<p>请设置 <code>ADMIN_TOKEN</code> 后重启 EmbyProxy。</p>
+<h1>管理 Token 配置无效</h1>
+<p>` + errText + `。</p>
+<p>请设置安全的 <code>ADMIN_TOKEN</code> 后重启 EmbyProxy。</p>
 </main>
 </body>
 </html>`))

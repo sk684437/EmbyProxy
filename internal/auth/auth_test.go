@@ -29,13 +29,13 @@ func TestCheckReturnsConfigErrorWhenAdminTokenMissing(t *testing.T) {
 }
 
 func TestCheckAcceptsConfiguredAdminToken(t *testing.T) {
-	checker := NewChecker(config.Config{AdminToken: "secret"}, nil)
+	checker := NewChecker(config.Config{AdminToken: "strong-random-admin-token"}, nil)
 	req, err := http.NewRequest(http.MethodPost, "/admin/api", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.RemoteAddr = "127.0.0.1:12345"
-	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Authorization", "Bearer strong-random-admin-token")
 
 	res := checker.Check(req)
 	if !res.OK {
@@ -43,6 +43,46 @@ func TestCheckAcceptsConfiguredAdminToken(t *testing.T) {
 	}
 	if res.UID != "admin" || res.Role != "admin" {
 		t.Fatalf("identity = %q/%q, want admin/admin", res.UID, res.Role)
+	}
+}
+
+func TestCheckAcceptsNonDefaultAdminToken(t *testing.T) {
+	for _, token := range []string{"ok", "secret"} {
+		t.Run(token, func(t *testing.T) {
+			checker := NewChecker(config.Config{AdminToken: token}, nil)
+			req, err := http.NewRequest(http.MethodPost, "/admin/api", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.RemoteAddr = "127.0.0.1:12345"
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			res := checker.Check(req)
+			if !res.OK {
+				t.Fatalf("expected auth success, got status %d error %q", res.Status, res.Error)
+			}
+		})
+	}
+}
+
+func TestCheckRejectsDefaultAdminTokenConfig(t *testing.T) {
+	checker := NewChecker(config.Config{AdminToken: "change-me-please"}, nil)
+	req, err := http.NewRequest(http.MethodPost, "/admin/api", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer change-me-please")
+
+	res := checker.Check(req)
+	if res.OK {
+		t.Fatal("expected weak admin token config to fail")
+	}
+	if res.Status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", res.Status, http.StatusInternalServerError)
+	}
+	if res.Error != AdminTokenDefault {
+		t.Fatalf("error = %q, want %q", res.Error, AdminTokenDefault)
 	}
 }
 

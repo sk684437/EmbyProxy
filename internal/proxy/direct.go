@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,19 +14,50 @@ import (
 	"embyproxy/internal/storage"
 )
 
+var errForbiddenDirectHost = errors.New("forbidden direct host")
+
 func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte) (*http.Response, error) {
-	return h.handleDirectWithClient(ctx, r, rawPath, env, node, body, h.followClient)
+	return h.handleProtectedDirect(ctx, r, rawPath, env, node, body)
 }
 
 func (h *Handler) handleRawDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte) (*http.Response, error) {
-	client := h.rawClient
-	if client == nil {
-		client = newRawHTTPClient()
-	}
-	return h.handleDirectWithClient(ctx, r, rawPath, env, node, body, client)
+	return h.handleProtectedDirect(ctx, r, rawPath, env, node, body)
 }
 
-func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, client *http.Client) (*http.Response, error) {
+func (h *Handler) handleProtectedDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte) (*http.Response, error) {
+	return h.handleDirectWithClient(ctx, r, rawPath, env, node, body, h.protectedDirectClient(node, env), true)
+}
+
+func (h *Handler) protectedDirectClient(node storage.Node, env config.ProxyEnv) *http.Client {
+	base := h.rawClient
+	if base == nil {
+		base = newRawHTTPClient()
+	}
+	transport := base.Transport
+	if transport == nil {
+		transport = newProxyTransport(true)
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   base.Timeout,
+		Jar:       base.Jar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if !h.directURLAllowed(req.Context(), node, req.URL, env) {
+				return errForbiddenDirectHost
+			}
+			return nil
+		},
+	}
+}
+
+func (h *Handler) directURLAllowed(ctx context.Context, node storage.Node, u *url.URL, env config.ProxyEnv) bool {
+	if u == nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	return h.rawHostAllowed(ctx, node, u, env)
+}
+
+func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, client *http.Client, protectDirect bool) (*http.Response, error) {
 	if client == nil {
 		client = h.followClient
 	}
@@ -55,12 +87,21 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		}
 		applyIdentityToURL(h.ids, u, node)
 		targetURL := u.String()
+		if protectDirect && !h.directURLAllowed(ctx, node, u, env) {
+			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-forbidden", "targetUrl": targetURL})
+			lastErr = errForbiddenDirectHost
+			continue
+		}
 		headers := buildDirectOutboundHeaders(h.ids, r.Header, u, env, node, "normal")
 		headers.Set("Accept-Encoding", "identity")
 		currentHeaders := headers
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-normal", "targetUrl": targetURL, "outboundHeaders": headers})
 		res, err := h.doFetch(ctx, client, u, method, headers, body)
 		if err != nil {
+			if errors.Is(err, errForbiddenDirectHost) {
+				capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-forbidden-redirect", "targetUrl": targetURL})
+				return textResponse(http.StatusForbidden, "Forbidden direct host", nil), nil
+			}
 			h.log.Warn("direct", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "ms": time.Since(started).Milliseconds(), "error": err.Error()})
 			lastErr = err
 			continue
@@ -149,7 +190,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 							h.closeBody(lastRes)
 							lastRes = nil
 							capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-location-follow", "targetUrl": abs.String()})
-							return h.handleDirectWithClient(ctx, r, abs.String(), env, node, body, client)
+							return h.handleDirectWithClient(ctx, r, abs.String(), env, node, body, client, protectDirect)
 						}
 						rh.Set("Location", abs.String())
 					}
@@ -171,6 +212,10 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		return lastRes, nil
 	}
 	if lastErr != nil {
+		if errors.Is(lastErr, errForbiddenDirectHost) {
+			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-forbidden", "targetUrl": rawPath})
+			return textResponse(http.StatusForbidden, "Forbidden direct host", nil), nil
+		}
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-all-failed", "targetUrl": rawPath, "meta": map[string]any{"error": lastErr.Error()}})
 		return nil, lastErr
 	}

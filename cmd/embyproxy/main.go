@@ -38,6 +38,10 @@ func main() {
 	defaultSystemCfg := storage.DefaultSystemConfig()
 	log := logging.New(defaultSystemCfg.LogLevel, defaultSystemCfg.LogAccess)
 	logBuildInfo(log)
+	if errText := auth.ValidateAdminToken(cfg.AdminToken); errText != "" {
+		log.Error("startup", "admin token config invalid", map[string]any{"error": errText})
+		os.Exit(1)
+	}
 	store, err := storage.New(cfg.DBPath)
 	if err != nil {
 		log.Error("startup", "database init failed", map[string]any{"error": err.Error()})

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"net"
 	"net/http"
@@ -22,6 +23,9 @@ type Result struct {
 }
 
 const AdminTokenNotConfigured = "ADMIN_TOKEN 未配置，请在 .env 或环境变量中设置后重启服务"
+const AdminTokenDefault = "ADMIN_TOKEN 不能使用默认值，请在 .env 或环境变量中修改后重启服务"
+
+const defaultAdminToken = "change-me-please"
 
 type Checker struct {
 	cfg   config.Config
@@ -60,8 +64,8 @@ func (c *Checker) Check(r *http.Request) Result {
 	}
 	got := ExtractToken(r)
 	admin := strings.TrimSpace(c.cfg.AdminToken)
-	if admin == "" {
-		return Result{Status: http.StatusInternalServerError, Error: AdminTokenNotConfigured}
+	if errText := ValidateAdminToken(admin); errText != "" {
+		return Result{Status: http.StatusInternalServerError, Error: errText}
 	}
 	if got != "" && SafeEqual(got, admin) {
 		delete(c.fails, ip)
@@ -102,10 +106,20 @@ func (c *Checker) Middleware(next http.Handler) http.Handler {
 }
 
 func SafeEqual(a, b string) bool {
-	if len(a) != len(b) {
-		return false
+	aSha := sha256.Sum256([]byte(a))
+	bSha := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(aSha[:], bSha[:]) == 1
+}
+
+func ValidateAdminToken(value string) string {
+	token := strings.TrimSpace(value)
+	if token == "" {
+		return AdminTokenNotConfigured
 	}
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+	if strings.EqualFold(token, defaultAdminToken) {
+		return AdminTokenDefault
+	}
+	return ""
 }
 
 func ExtractToken(r *http.Request) string {

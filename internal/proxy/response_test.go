@@ -277,6 +277,69 @@ func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
 	assertHeadersAbsent(t, upstreamHeaders, "Remote-Host", "X-Forwarded-For", "CF-Connecting-IP", "X-Remote-Addr", "CloudFront-Viewer-Address", "X-Azure-ClientIP", "X-Envoy-External-Address", "X-Original-Forwarded-For", "Proxy-Client-IP", "Ali-Cdn-Real-IP", "Ali-Real-Client-IP", "Client-Real-IP", "X-Client-Real-IP")
 }
 
+func TestHandleSTRMBlocksPrivateDirectTarget(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	rawCalls := 0
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return bytesResponse(http.StatusOK, []byte("http://127.0.0.1/private"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+	h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rawCalls++
+		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/movie.strm", nil)
+	finalURL, err := url.Parse("https://upstream.example/movie.strm")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.handleSTRM(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/movie.strm"}, finalURL, nil, config.ProxyEnv{ExternalAllowAny: true})
+	if err != nil {
+		t.Fatalf("handleSTRM() error = %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusForbidden)
+	}
+	if rawCalls != 0 {
+		t.Fatalf("raw direct calls = %d, want 0", rawCalls)
+	}
+}
+
+func TestHandleDirectBlocksPrivateRedirect(t *testing.T) {
+	ctx := context.Background()
+	rawCalls := 0
+	h := &Handler{
+		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
+		log: logging.New("silent", false),
+		rawClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			rawCalls++
+			return textResponse(http.StatusFound, "", http.Header{"Location": []string{"http://127.0.0.1/private"}}), nil
+		})},
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/__raw__/http%3A%2F%2F8.8.8.8%2Fstart", nil)
+
+	res, err := h.handleDirect(ctx, req, "http://8.8.8.8/start", config.ProxyEnv{ExternalAllowAny: true}, storage.Node{Name: "node", Target: "https://upstream.example"}, nil)
+	if err != nil {
+		t.Fatalf("handleDirect() error = %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusForbidden)
+	}
+	if rawCalls != 1 {
+		t.Fatalf("raw direct calls = %d, want 1", rawCalls)
+	}
+}
+
 func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
@@ -312,6 +375,41 @@ func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 	}
 	if payload["LocalAddress"] != want {
 		t.Fatalf("LocalAddress = %q, want %q", payload["LocalAddress"], want)
+	}
+}
+
+func TestFinishGeneralResponseBlocksPrivateCrossHostLocationDirect(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	rawCalls := 0
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rawCalls++
+		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/redirect", nil)
+	finalURL, err := url.Parse("https://upstream.example/emby/redirect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := textResponse(http.StatusFound, "", http.Header{"Location": []string{"http://127.0.0.1/private"}})
+
+	out, err := h.finishGeneralResponse(ctx, req, res, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/redirect"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{ExternalAllowAny: true}, "", false, false, false)
+	if err != nil {
+		t.Fatalf("finishGeneralResponse() error = %v", err)
+	}
+	defer out.Body.Close()
+	if out.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", out.StatusCode, http.StatusForbidden)
+	}
+	if rawCalls != 0 {
+		t.Fatalf("raw direct calls = %d, want 0", rawCalls)
 	}
 }
 
