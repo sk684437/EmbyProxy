@@ -351,6 +351,60 @@ func TestHandleSTRMBlocksPrivateDirectTarget(t *testing.T) {
 	}
 }
 
+func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
+	ctx := context.Background()
+	rawCalls := 0
+	h := &Handler{
+		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
+		log: logging.New("silent", false),
+		rawClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			rawCalls++
+			if req.URL.String() != "http://8.8.8.8/video.mkv?sign=abc" {
+				t.Fatalf("raw URL = %q, want direct URL without request query", req.URL.String())
+			}
+			return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+		})},
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/smartstrm?item_id=1&media_id=2", nil)
+
+	res, err := h.handleDirect(ctx, req, "http://8.8.8.8/video.mkv?sign=abc", config.ProxyEnv{ExternalAllowAny: true}, storage.Node{Name: "node", Target: "https://upstream.example"}, nil)
+	if err != nil {
+		t.Fatalf("handleDirect() error = %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+	}
+	if rawCalls != 1 {
+		t.Fatalf("raw direct calls = %d, want 1", rawCalls)
+	}
+}
+
+func TestRetryableStatusReasonDetectsLocalForbiddenResponses(t *testing.T) {
+	res := localForbiddenResponse("direct", "https://115.example/video.mkv?sign=abc")
+
+	fields := retryableStatusLogFields(res, map[string]any{})
+	if fields["reason"] != "direct-host-not-allowed" {
+		t.Fatalf("reason = %v, want direct-host-not-allowed", fields["reason"])
+	}
+	if fields["effectiveTarget"] != "https://115.example" {
+		t.Fatalf("effectiveTarget = %v", fields["effectiveTarget"])
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "Forbidden direct host" {
+		t.Fatalf("body = %q, want original body", body)
+	}
+
+	res = localForbiddenResponse("raw", "https://raw.example/video.mkv")
+	fields = retryableStatusLogFields(res, map[string]any{})
+	if fields["reason"] != "raw-host-not-allowed" {
+		t.Fatalf("raw reason = %v, want raw-host-not-allowed", fields["reason"])
+	}
+}
+
 func TestHandleDirectBlocksPrivateRedirect(t *testing.T) {
 	ctx := context.Background()
 	rawCalls := 0

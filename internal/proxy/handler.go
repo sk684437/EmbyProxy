@@ -343,7 +343,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)
-		h.log.Warn("proxy", "target returned retryable status", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": time.Since(started).Milliseconds()})
+		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": time.Since(started).Milliseconds()}))
 		h.setLastResponse(&lastRes, res)
 	}
 	if tried == 0 {
@@ -414,7 +414,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		}
 		if !h.rawHostAllowed(ctx, node, u, env) {
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "raw-forbidden", "targetUrl": u.String()})
-			return textResponse(http.StatusForbidden, "Forbidden raw host", nil), nil
+			return localForbiddenResponse("raw", u.String()), nil
 		}
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": parsed.Name, "secret": node.Secret, "stage": "raw-direct", "targetUrl": u.String()})
 		return h.handleRawDirect(ctx, r, raw, env, node, body)
@@ -943,6 +943,45 @@ func (h *Handler) closeBody(res *http.Response) {
 	if res != nil && res.Body != nil {
 		_ = res.Body.Close()
 	}
+}
+
+func retryableStatusLogFields(res *http.Response, fields map[string]any) map[string]any {
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	if reason := retryableStatusReason(res); reason != "" {
+		fields["reason"] = reason
+	}
+	if res != nil && res.Request != nil && res.Request.URL != nil {
+		fields["effectiveTarget"] = logging.FormatTarget(res.Request.URL.String())
+	}
+	return fields
+}
+
+func retryableStatusReason(res *http.Response) string {
+	if res == nil {
+		return ""
+	}
+	switch res.StatusCode {
+	case http.StatusForbidden:
+		status := strings.ToLower(res.Status)
+		if strings.Contains(status, "forbidden direct host") {
+			return "direct-host-not-allowed"
+		}
+		if strings.Contains(status, "forbidden raw host") {
+			return "raw-host-not-allowed"
+		}
+		return "upstream-forbidden"
+	case http.StatusNotFound:
+		return "not-found"
+	case http.StatusRequestedRangeNotSatisfiable:
+		return "range-not-satisfiable"
+	default:
+		if res.StatusCode >= 500 {
+			return "upstream-server-error"
+		}
+	}
+	return ""
 }
 
 func (h *Handler) setLastResponse(slot **http.Response, res *http.Response) {
