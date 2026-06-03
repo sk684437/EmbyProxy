@@ -338,8 +338,10 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			lastRes = nil
 			h.markTargetHealthy(nodeKey, targets, target, expectedActive)
 			targetMs := time.Since(started).Milliseconds()
-			h.log.Info("proxy", "target headers received", targetHeadersReceivedLogFields(ctx, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": targetMs}))
+			logFields := targetHeadersReceivedLogFields(ctx, res, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": targetMs})
+			h.log.Info("proxy", "target headers received", logFields)
 			SetAccessLogField(ctx, "targetMs", targetMs)
+			setAccessLogTargetFields(ctx, logFields)
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)
@@ -952,24 +954,42 @@ func retryableStatusLogFields(res *http.Response, fields map[string]any) map[str
 	if reason := retryableStatusReason(res); reason != "" {
 		fields["reason"] = reason
 	}
-	if res != nil && res.Request != nil && res.Request.URL != nil {
-		fields["effectiveTarget"] = logging.FormatTarget(res.Request.URL.String())
-	}
+	fields = foldActualTargetLogField(fields, responseLogTarget(res))
 	return fields
 }
 
-func targetHeadersReceivedLogFields(ctx context.Context, fields map[string]any) map[string]any {
+func targetHeadersReceivedLogFields(ctx context.Context, res *http.Response, fields map[string]any) map[string]any {
 	fields = withAccessLogFields(ctx, fields)
-	effectiveTarget, _ := fields["effectiveTarget"].(string)
-	if effectiveTarget == "" {
+	return foldActualTargetLogField(fields, responseLogTarget(res))
+}
+
+func responseLogTarget(res *http.Response) string {
+	if res == nil || res.Request == nil || res.Request.URL == nil {
+		return ""
+	}
+	return logging.FormatTarget(res.Request.URL.String())
+}
+
+func foldActualTargetLogField(fields map[string]any, actualTarget string) map[string]any {
+	if actualTarget == "" {
 		return fields
 	}
-	if target, ok := fields["target"]; ok && target != effectiveTarget {
+	if target, ok := fields["target"]; ok && target != actualTarget {
 		fields["nodeTarget"] = target
 	}
-	fields["target"] = effectiveTarget
-	delete(fields, "effectiveTarget")
+	fields["target"] = actualTarget
 	return fields
+}
+
+func setAccessLogTargetFields(ctx context.Context, fields map[string]any) {
+	nodeTarget, ok := fields["nodeTarget"]
+	if !ok {
+		return
+	}
+	if target, ok := fields["target"]; ok {
+		SetAccessLogField(ctx, "target", target)
+	}
+	SetAccessLogField(ctx, "nodeTarget", nodeTarget)
 }
 
 func retryableStatusReason(res *http.Response) string {

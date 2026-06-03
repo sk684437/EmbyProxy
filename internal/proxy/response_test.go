@@ -237,12 +237,13 @@ func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
 	}
 }
 
-func TestTargetHeadersReceivedLogFieldsUsesEffectiveTarget(t *testing.T) {
+func TestTargetHeadersReceivedLogFieldsUsesResponseTarget(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
-	SetAccessLogField(ctx, "effectiveTarget", "https://www.google.com")
 	SetAccessLogField(ctx, "targetMs", int64(68))
+	req := httptest.NewRequest(http.MethodGet, "https://www.google.com/search?q=emby", nil)
+	res := &http.Response{StatusCode: http.StatusOK, Request: req}
 
-	fields := targetHeadersReceivedLogFields(ctx, map[string]any{
+	fields := targetHeadersReceivedLogFields(ctx, res, map[string]any{
 		"id":     "req-1",
 		"node":   "node",
 		"target": "https://emby.example",
@@ -251,13 +252,10 @@ func TestTargetHeadersReceivedLogFieldsUsesEffectiveTarget(t *testing.T) {
 	})
 
 	if fields["target"] != "https://www.google.com" {
-		t.Fatalf("target = %v, want effective target", fields["target"])
+		t.Fatalf("target = %v, want actual target", fields["target"])
 	}
 	if fields["nodeTarget"] != "https://emby.example" {
 		t.Fatalf("nodeTarget = %v, want original node target", fields["nodeTarget"])
-	}
-	if _, ok := fields["effectiveTarget"]; ok {
-		t.Fatalf("effectiveTarget should be folded into target for success log: %v", fields["effectiveTarget"])
 	}
 	if fields["targetMs"] != int64(68) {
 		t.Fatalf("targetMs = %v, want direct target duration", fields["targetMs"])
@@ -379,7 +377,7 @@ func TestHandleSTRMBlocksPrivateDirectTarget(t *testing.T) {
 }
 
 func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
-	ctx := WithAccessLogFields(context.Background())
+	ctx := context.Background()
 	rawCalls := 0
 	h := &Handler{
 		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
@@ -405,20 +403,20 @@ func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
 	if rawCalls != 1 {
 		t.Fatalf("raw direct calls = %d, want 1", rawCalls)
 	}
-	if got := AccessLogFields(ctx)["effectiveTarget"]; got != "http://8.8.8.8" {
-		t.Fatalf("effectiveTarget = %v, want direct target host", got)
-	}
 }
 
 func TestRetryableStatusReasonDetectsLocalForbiddenResponses(t *testing.T) {
 	res := localForbiddenResponse("direct", "https://115.example/video.mkv?sign=abc")
 
-	fields := retryableStatusLogFields(res, map[string]any{})
+	fields := retryableStatusLogFields(res, map[string]any{"target": "https://emby.example"})
 	if fields["reason"] != "direct-host-not-allowed" {
 		t.Fatalf("reason = %v, want direct-host-not-allowed", fields["reason"])
 	}
-	if fields["effectiveTarget"] != "https://115.example" {
-		t.Fatalf("effectiveTarget = %v", fields["effectiveTarget"])
+	if fields["target"] != "https://115.example" {
+		t.Fatalf("target = %v, want actual target", fields["target"])
+	}
+	if fields["nodeTarget"] != "https://emby.example" {
+		t.Fatalf("nodeTarget = %v, want original node target", fields["nodeTarget"])
 	}
 	body, err := io.ReadAll(res.Body)
 	if err != nil {

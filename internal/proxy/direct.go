@@ -207,7 +207,6 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		formattedTarget := logging.FormatTarget(targetURL)
 		h.log.Info("direct", "target headers received", map[string]any{"id": requestID, "node": nodeName, "target": formattedTarget, "status": res.StatusCode, "ms": targetMs})
 		SetAccessLogField(ctx, "targetMs", targetMs)
-		SetAccessLogField(ctx, "effectiveTarget", formattedTarget)
 		res.Header = rh
 		h.closeBody(lastRes)
 		lastRes = nil
