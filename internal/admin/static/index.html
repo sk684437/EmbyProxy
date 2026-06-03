@@ -403,8 +403,6 @@ tr:last-child td{border-bottom:0}
                 <button class="btn" onclick="openImportModal()">导入</button>
                 <button class="btn" onclick="doExport()" title="未选择时导出全部，已选择时导出选中节点">导出</button>
                 <button class="btn" onclick="doSaveOrder()" title="拖动节点后保存当前排序">保存排序</button>
-                <button class="btn" id="btnCheckSel" onclick="checkSelectedStatus()" style="display:none">检测选中</button>
-                <button class="btn btn-danger" id="btnDelSel" onclick="deleteSelected()" style="display:none">删除选中</button>
               </div>
             </div>
 
@@ -417,7 +415,8 @@ tr:last-child td{border-bottom:0}
                 <button class="btn btn-sm" onclick="clearSel()">取消</button>
                 <button class="btn btn-sm" onclick="batchTagSelected()">打标签</button>
                 <button class="btn btn-sm" onclick="doExport()">导出</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteSelected()">删除</button>
+                <button class="btn btn-sm" onclick="checkSelectedStatus()">检测选中</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteSelected()">删除选中</button>
               </div>
             </div>
 
@@ -1231,8 +1230,6 @@ function updateSelBar() {
   const n = selectedNodes.size;
   document.getElementById('selCount').textContent = n;
   bar.classList.toggle('visible', n > 0);
-  document.getElementById('btnCheckSel').style.display = n ? '' : 'none';
-  document.getElementById('btnDelSel').style.display = n ? '' : 'none';
 }
 
 function selectAll() {
