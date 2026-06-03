@@ -4,14 +4,17 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"embyproxy/internal/auth"
 	"embyproxy/internal/buildinfo"
+	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
+	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
 
@@ -84,6 +87,66 @@ func TestListIncludesBuildInfo(t *testing.T) {
 	}
 	if got.Version != "v-test" || got.Commit != "abc1234" || got.BuiltAt != "2026-05-31T00:00:00Z" {
 		t.Fatalf("build info = %+v", got)
+	}
+}
+
+func TestDispatchLogsListReturnsBufferedLogs(t *testing.T) {
+	ctx := context.Background()
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
+
+	handler.log.Configure("info", false)
+	handler.log.Info("admin", "config saved", map[string]any{"status": "ok"})
+	res, status := handler.dispatch(ctx, "admin", "logs.list", map[string]any{"limit": 10})
+
+	if status != http.StatusOK || res["ok"] != true {
+		t.Fatalf("dispatch logs.list status=%d res=%+v", status, res)
+	}
+	logs, ok := res["logs"].([]logging.LogEntry)
+	if !ok {
+		t.Fatalf("logs type = %T, want []logging.LogEntry", res["logs"])
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs len = %d, want 1", len(logs))
+	}
+	if logs[0].Level != "info" || logs[0].Scope != "admin" || !strings.Contains(logs[0].Line, "config saved") {
+		t.Fatalf("log entry = %+v", logs[0])
+	}
+}
+
+func TestHandleAPISuppressesLogsListAccessLogAndTrafficCapture(t *testing.T) {
+	cwd := t.TempDir()
+	store, err := storage.New(filepath.Join(cwd, "proxy.db"))
+	if err != nil {
+		t.Fatalf("storage.New() error = %v", err)
+	}
+	defer store.Close()
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatalf("SaveSystemConfig() error = %v", err)
+	}
+	handler := New(config.Config{}, nil, nil, nil, logging.New("info", false), nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	ctx := requestlog.WithAccessLogState(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/admin/api", strings.NewReader(`{"action":"logs.list"}`)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	captureSuppressed := false
+
+	recorder.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.handleAPI(w, r, "admin")
+		captureSuppressed = capture.Suppressed(r)
+	})).ServeHTTP(rec, req)
+
+	if !requestlog.AccessLogSuppressed(ctx) {
+		t.Fatal("logs.list should suppress its access log entry")
+	}
+	if !captureSuppressed {
+		t.Fatal("logs.list should suppress its traffic capture record")
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "data", "traffic-captures.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("traffic capture file should not be written, stat err = %v", err)
 	}
 }
 

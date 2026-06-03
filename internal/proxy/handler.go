@@ -19,6 +19,7 @@ import (
 	"embyproxy/internal/config"
 	"embyproxy/internal/identity"
 	"embyproxy/internal/logging"
+	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
 
@@ -212,6 +213,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Node not found", http.StatusNotFound)
 		return
 	}
+	requestlog.SetRequestURI(ctx, logging.RedactProxyURL(r.URL.RequestURI(), parsed.Name, node.Secret))
 	parsed.Secret = node.Secret
 	strip := 1
 	if node.Secret != "" {

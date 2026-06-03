@@ -18,6 +18,7 @@ import (
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
+	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
 	"embyproxy/internal/validators"
@@ -114,6 +115,10 @@ func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) 
 	}
 	capture.RememberParsedBody(r, body)
 	action := strings.TrimSpace(asString(body["action"]))
+	if action == "logs.list" {
+		capture.Suppress(r)
+		requestlog.SuppressAccessLog(ctx)
+	}
 	capture.SetMeta(r, map[string]any{"mode": "admin", "adminAction": action, "stage": "admin-api"})
 	if uid == "" {
 		uid = "admin"
@@ -240,8 +245,33 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 			return fail(err.Error()), http.StatusInternalServerError
 		}
 		return map[string]any{"ok": true, "stats": stats}, http.StatusOK
+	case "logs.list":
+		return h.listLogs(body), http.StatusOK
 	default:
 		return fail("未知 action: " + action), http.StatusOK
+	}
+}
+
+func (h *Handler) listLogs(body map[string]any) map[string]any {
+	if h.log == nil {
+		return map[string]any{"ok": true, "logs": []logging.LogEntry{}, "capacity": 0, "hasOlder": false}
+	}
+	limit := clamp(intValue(body["limit"], h.log.BufferCapacity()), 1, h.log.BufferCapacity())
+	page := h.log.Page(limit, uint64Value(body["before"]))
+	oldestID := uint64(0)
+	newestID := uint64(0)
+	if len(page.Entries) > 0 {
+		oldestID = page.Entries[0].ID
+		newestID = page.Entries[len(page.Entries)-1].ID
+	}
+	return map[string]any{
+		"ok":       true,
+		"logs":     page.Entries,
+		"capacity": h.log.BufferCapacity(),
+		"hasOlder": page.HasOlder,
+		"oldestId": oldestID,
+		"newestId": newestID,
+		"history":  page.History,
 	}
 }
 
@@ -894,6 +924,34 @@ func intValue(value any, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func uint64Value(value any) uint64 {
+	if value == nil || strings.TrimSpace(asString(value)) == "" {
+		return 0
+	}
+	switch v := value.(type) {
+	case uint64:
+		return v
+	case int:
+		if v > 0 {
+			return uint64(v)
+		}
+	case int64:
+		if v > 0 {
+			return uint64(v)
+		}
+	case float64:
+		if v > 0 {
+			return uint64(v)
+		}
+	case string:
+		n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		if err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 func boolValue(values map[string]any, key string, fallback bool) bool {

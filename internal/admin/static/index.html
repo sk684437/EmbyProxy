@@ -98,6 +98,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .btn:hover{border-color:var(--pine);color:var(--pine);background:var(--pine-wash)}
 .primary-action,.btn-primary{background:var(--pine);border-color:var(--pine);color:#fff}
 .primary-action:hover,.btn-primary:hover{background:var(--pine-2);border-color:var(--pine-2);color:#fff}
+.btn:disabled,.primary-action:disabled{cursor:not-allowed;opacity:.46;background:var(--paper-2);border-color:var(--line);color:var(--ink-3)}
 .btn-danger{background:var(--red-wash);border-color:rgba(168,59,50,.20);color:var(--red)}
 .btn-danger:hover{background:#fff;border-color:var(--red);color:var(--red)}
 .btn-sm{min-height:34px;border-radius:12px;padding:0 11px;font-size:12px}
@@ -179,6 +180,20 @@ th{background:var(--paper-2);color:var(--ink-3);font-size:11px;text-transform:up
 td{color:var(--ink-2)}
 .table-empty{text-align:center;color:var(--ink-3)}
 tr:last-child td{border-bottom:0}
+.logs-deck{display:grid;gap:16px;min-width:0}
+.logs-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:rgba(255,253,248,.72);border:1px solid rgba(255,253,248,.88);border-radius:30px;padding:12px;box-shadow:0 16px 50px rgba(58,48,32,.07)}
+.logs-meter{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
+.log-pill{min-height:42px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 14px;display:inline-flex;align-items:center;color:var(--ink-3);font-size:12px;font-weight:900;white-space:nowrap}
+.log-switch{min-height:42px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 14px;display:inline-flex;align-items:center;gap:9px;color:var(--ink-2);font-size:13px;font-weight:900;cursor:pointer;white-space:nowrap}
+.log-switch input{width:18px;height:18px;accent-color:var(--pine);cursor:pointer}
+.log-console{height:calc(100vh - 250px);min-height:420px;border-radius:30px;border:1px solid rgba(30,33,29,.84);background:#151713;color:#dde8d9;padding:14px;overflow:auto;box-shadow:0 22px 64px rgba(30,33,29,.22);font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px;line-height:1.55}
+.log-line{display:block;min-height:25px;border-left:4px solid transparent;border-radius:10px;padding:4px 9px;white-space:pre-wrap;word-break:break-word;color:#dfe7db}
+.log-line + .log-line{margin-top:3px}
+.log-line.log-debug{color:#aab8a5}
+.log-line.log-info{border-left-color:#6ea587}
+.log-line.log-warn{border-left-color:#d39248;background:rgba(211,146,72,.10);color:#ffe4bd}
+.log-line.log-error{border-left-color:#d9635b;background:rgba(217,99,91,.12);color:#ffd4d0}
+.log-empty{height:100%;min-height:360px;display:grid;place-items:center;text-align:center;color:#9ca996;font-weight:900}
 .sheet-layer{position:fixed;inset:0;background:rgba(30,33,29,.42);z-index:300;display:flex;align-items:stretch;justify-content:flex-end;padding:14px;backdrop-filter:blur(12px)}
 .sheet{width:min(760px,100%);height:100%;overflow:auto;background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:32px;padding:28px;box-shadow:var(--shadow)}
 .config-sheet{width:min(1040px,100%);display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;padding:0;background:linear-gradient(135deg,#fffdf8 0%,#f6f0e4 100%)}
@@ -284,6 +299,9 @@ tr:last-child td{border-bottom:0}
   .auth-manifest{min-height:360px;padding:36px}
   .auth-manifest h1{font-size:46px}
   .login-box{padding:36px}
+  .logs-top{grid-template-columns:1fr}
+  .logs-top .action-pack{justify-content:flex-start}
+  .log-console{height:60vh;min-height:360px}
 }
 @media (max-width:680px){
   #loginWrap{padding:14px}
@@ -317,6 +335,8 @@ tr:last-child td{border-bottom:0}
   .config-group > .tg-row{grid-template-columns:1fr}
   .config-index{min-width:32px;height:22px}
   .config-sheet .form-actions{padding:18px}
+  .logs-meter{display:grid;grid-template-columns:1fr;width:100%}
+  .log-pill,.log-switch{width:100%;justify-content:center}
   #toastRoot{left:14px;right:14px;bottom:14px}
   .toast{max-width:none}
 }
@@ -364,6 +384,7 @@ tr:last-child td{border-bottom:0}
       <nav class="rail-nav">
         <button class="rail-button active" onclick="switchTab('nodes',this)">节点</button>
         <button class="rail-button" onclick="switchTab('stats',this)">统计</button>
+        <button class="rail-button" onclick="switchTab('logs',this)">日志</button>
       </nav>
       <div class="rail-bottom">
         <button class="rail-mini" onclick="openConfigModal()">配置</button>
@@ -449,6 +470,29 @@ tr:last-child td{border-bottom:0}
               <thead><tr><th>日期</th><th>Emby 节点</th><th>客户端</th><th>播放次数</th><th>会话数</th></tr></thead>
               <tbody id="statsBody"></tbody>
             </table>
+          </div>
+        </section>
+
+        <section id="tabLogs" class="logs-deck" style="display:none">
+          <div class="logs-top">
+            <div class="logs-meter">
+              <span class="log-pill" id="logCount">0 条日志</span>
+              <span class="log-pill" id="logCapacity">容量 0</span>
+              <label class="log-switch" for="logAutoRefresh">
+                <input type="checkbox" id="logAutoRefresh" onchange="setLogAutoRefresh(this.checked)"/>
+                <span>自动刷新</span>
+              </label>
+            </div>
+            <div class="action-pack">
+              <button class="primary-action" onclick="loadLogs(true)">刷新</button>
+              <button class="btn" id="logLatestBtn" onclick="loadLatestLogs(true)">最新</button>
+              <button class="btn" id="logNewerBtn" onclick="loadNewerLogs()">下一页</button>
+              <button class="btn" id="logOlderBtn" onclick="loadOlderLogs()">更早</button>
+              <button class="btn" onclick="copyLogs()">复制</button>
+            </div>
+          </div>
+          <div class="log-console" id="logConsole">
+            <div class="log-empty">暂无控制台日志</div>
           </div>
         </section>
       </main>
@@ -878,6 +922,13 @@ let nodeChecks = {};
 let visibleProxyUrls = new Set();
 let focusedNodeName = '';
 let appBuild = null;
+let currentTab = 'nodes';
+let logRefreshTimer = null;
+let lastLogLines = [];
+let currentLogBefore = 0;
+let currentLogOldestId = 0;
+let currentLogHasOlder = false;
+let logPageStack = [];
 
 const HIDDEN_PROXY_TEXT = '••••••••••••••••••••••••••••••••';
 const IMPERSONATE_LABELS = { yamby: 'Yamby Android', hills_android: 'Hills Android', hills_windows: 'Hills Windows' };
@@ -908,6 +959,7 @@ document.getElementById('tokenInput').addEventListener('keydown', e => { if (e.k
 function doLogout() {
   localStorage.removeItem('ep_token');
   TOKEN = '';
+  stopLogAutoRefresh();
   document.getElementById('app').style.display = 'none';
   document.getElementById('loginWrap').style.display = 'grid';
 }
@@ -915,6 +967,8 @@ function doLogout() {
 function initApp() {
   document.getElementById('loginWrap').style.display = 'none';
   document.getElementById('app').style.display = 'block';
+  const nodeBtn = document.querySelector('.rail-button');
+  if (nodeBtn) switchTab('nodes', nodeBtn);
   loadNodes();
 }
 
@@ -932,14 +986,32 @@ async function api(action, data = {}, tok = TOKEN) {
 }
 
 function switchTab(name, btn) {
+  currentTab = name;
   document.querySelectorAll('.rail-button').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  document.getElementById('tabNodes').style.display = name === 'nodes' ? '' : 'none';
-  document.getElementById('tabStats').style.display = name === 'stats' ? '' : 'none';
-  document.getElementById('pageKicker').textContent = name === 'nodes' ? '媒体中枢' : '播放统计';
-  document.getElementById('pageTitle').textContent = name === 'nodes' ? 'Emby 服务器管理' : '播放统计';
-  document.getElementById('pageSubtitle').textContent = name === 'nodes' ? '统一管理 Emby 服务器访问、线路与策略' : '查看近期播放次数、会话数与客户端分布';
-  if (name === 'stats') loadStats(); else renderHeadStatus();
+  const tabs = { nodes: 'tabNodes', stats: 'tabStats', logs: 'tabLogs' };
+  for (const [key, id] of Object.entries(tabs)) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = key === name ? '' : 'none';
+  }
+  const meta = {
+    nodes: ['媒体中枢', 'Emby 服务器管理', '统一管理 Emby 服务器访问、线路与策略'],
+    stats: ['播放统计', '播放统计', '查看近期播放次数、会话数与客户端分布'],
+    logs: ['控制台日志', '控制台日志', '查看服务运行期间输出到控制台的日志'],
+  }[name] || ['媒体中枢', 'Emby 服务器管理', '统一管理 Emby 服务器访问、线路与策略'];
+  document.getElementById('pageKicker').textContent = meta[0];
+  document.getElementById('pageTitle').textContent = meta[1];
+  document.getElementById('pageSubtitle').textContent = meta[2];
+  if (name === 'stats') {
+    stopLogAutoRefresh();
+    loadStats();
+  } else if (name === 'logs') {
+    loadLogs();
+    if (document.getElementById('logAutoRefresh')?.checked) startLogAutoRefresh();
+  } else {
+    stopLogAutoRefresh();
+    renderHeadStatus();
+  }
 }
 
 async function loadNodes() {
@@ -1601,6 +1673,115 @@ async function loadStats() {
   tbody.innerHTML = stats.length ? stats.map(s => `
     <tr><td>${s.day}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td></tr>
   `).join('') : '<tr><td class="table-empty" colspan="5">暂无数据</td></tr>';
+}
+
+async function loadLogs(showToast = false, before = currentLogBefore) {
+  currentLogBefore = Number(before || 0);
+  const payload = { limit: 2000 };
+  if (currentLogBefore > 0) payload.before = currentLogBefore;
+  const r = await api('logs.list', payload);
+  if (!r.ok) {
+    toast('加载日志失败: ' + (r.error || ''), 'err');
+    return;
+  }
+  const logs = Array.isArray(r.logs) ? r.logs : [];
+  lastLogLines = logs.map(x => x.line || '');
+  currentLogOldestId = Number(r.oldestId || 0);
+  currentLogHasOlder = !!r.hasOlder;
+  renderLogs(logs, r);
+  renderLogHeadStatus(logs);
+  if (showToast) toast('日志已刷新', 'ok');
+}
+
+function renderLogs(logs, meta = {}) {
+  const countEl = document.getElementById('logCount');
+  const capacityEl = document.getElementById('logCapacity');
+  const consoleEl = document.getElementById('logConsole');
+  const pageText = currentLogBefore > 0 ? '历史页' : '最新页';
+  if (countEl) countEl.textContent = `${pageText} ${logs.length} 条`;
+  if (capacityEl) capacityEl.textContent = `内存 ${Number(meta.capacity || 0)} / 历史 ${meta.history ? '轮转' : '内存'}`;
+  updateLogPager();
+  if (!consoleEl) return;
+  if (!logs.length) {
+    consoleEl.innerHTML = '<div class="log-empty">暂无控制台日志</div>';
+    return;
+  }
+  consoleEl.innerHTML = logs.map(log => `<div class="log-line log-${attr(log.level || 'info')}">${esc(log.line || '')}</div>`).join('');
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+function updateLogPager() {
+  const latestBtn = document.getElementById('logLatestBtn');
+  const newerBtn = document.getElementById('logNewerBtn');
+  const olderBtn = document.getElementById('logOlderBtn');
+  if (latestBtn) latestBtn.disabled = currentLogBefore === 0;
+  if (newerBtn) newerBtn.disabled = logPageStack.length === 0;
+  if (olderBtn) olderBtn.disabled = !currentLogHasOlder || currentLogOldestId <= 0;
+}
+
+function loadLatestLogs(showToast = false) {
+  logPageStack = [];
+  currentLogBefore = 0;
+  loadLogs(showToast, 0);
+}
+
+function loadOlderLogs() {
+  if (!currentLogHasOlder || currentLogOldestId <= 0) return;
+  disableLogAutoRefresh();
+  logPageStack.push(currentLogBefore);
+  loadLogs(false, currentLogOldestId);
+}
+
+function loadNewerLogs() {
+  if (!logPageStack.length) return;
+  currentLogBefore = logPageStack.pop() || 0;
+  loadLogs(false, currentLogBefore);
+}
+
+function renderLogHeadStatus(logs) {
+  const latest = logs.length ? String(logs[logs.length - 1].level || '-').toUpperCase() : '-';
+  document.getElementById('headStatus').innerHTML = statusCells([
+    [logs.length, '日志'],
+    [latest, '最新等级'],
+  ]);
+}
+
+function setLogAutoRefresh(enabled) {
+  if (enabled && currentLogBefore > 0) {
+    disableLogAutoRefresh();
+    toast('历史页不启用自动刷新，请切回最新页', 'info');
+    return;
+  }
+  if (enabled && currentTab === 'logs') startLogAutoRefresh();
+  else stopLogAutoRefresh();
+}
+
+function startLogAutoRefresh() {
+  stopLogAutoRefresh();
+  logRefreshTimer = setInterval(() => {
+    if (currentTab === 'logs' && currentLogBefore === 0) loadLogs();
+  }, 5000);
+}
+
+function stopLogAutoRefresh() {
+  if (logRefreshTimer) {
+    clearInterval(logRefreshTimer);
+    logRefreshTimer = null;
+  }
+}
+
+function disableLogAutoRefresh() {
+  const el = document.getElementById('logAutoRefresh');
+  if (el) el.checked = false;
+  stopLogAutoRefresh();
+}
+
+function copyLogs() {
+  if (!lastLogLines.length) {
+    toast('没有可复制的日志', 'info');
+    return;
+  }
+  copyText(lastLogLines.join('\n'));
 }
 
 function testKeepaliveFromButton(btn) {

@@ -38,6 +38,7 @@ type state struct {
 	ResponseBody  bytes.Buffer
 	ResponseBytes int64
 	Truncated     bool
+	Suppressed    bool
 }
 
 type BodySummary struct {
@@ -97,6 +98,9 @@ func (r *Recorder) Middleware(next http.Handler) http.Handler {
 		req = req.WithContext(context.WithValue(req.Context(), contextKey{}, st))
 		cw := &captureWriter{ResponseWriter: w, state: st, status: http.StatusOK, max: captureBodyMax(captureCfg)}
 		next.ServeHTTP(cw, req)
+		if Suppressed(req) {
+			return
+		}
 		r.appendHTTP(req, cw, captureCfg)
 	})
 }
@@ -143,6 +147,21 @@ func RememberParsedBody(req *http.Request, value any) {
 		return
 	}
 	st.ParsedBody = value
+}
+
+// Suppress skips persisting the current request in traffic capture output.
+func Suppress(req *http.Request) {
+	st := State(req)
+	if st == nil {
+		return
+	}
+	st.Suppressed = true
+}
+
+// Suppressed reports whether the current request should be skipped by capture.
+func Suppressed(req *http.Request) bool {
+	st := State(req)
+	return st != nil && st.Suppressed
 }
 
 func State(req *http.Request) *state {

@@ -1,14 +1,26 @@
 package logging
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+)
+
+const (
+	DefaultBufferCapacity      = 2000
+	DefaultHistoryEntriesFile  = 2000
+	DefaultHistoryRotatedFiles = 10
 )
 
 var levels = map[string]int{
@@ -30,10 +42,45 @@ type Logger struct {
 	level     atomic.Int64
 	accessLog atomic.Bool
 	seq       atomic.Uint64
+	buffer    *logBuffer
+	history   *logHistory
+}
+
+type LogEntry struct {
+	ID      uint64 `json:"id"`
+	Time    string `json:"time"`
+	Level   string `json:"level"`
+	Scope   string `json:"scope"`
+	Message string `json:"message"`
+	Line    string `json:"line"`
+}
+
+type logBuffer struct {
+	mu       sync.Mutex
+	next     uint64
+	start    int
+	entries  []LogEntry
+	capacity int
+}
+
+type LogPage struct {
+	Entries  []LogEntry
+	HasOlder bool
+	History  bool
+}
+
+type logHistory struct {
+	mu              sync.Mutex
+	path            string
+	entriesPerFile  int
+	maxFiles        int
+	entryCount      int
+	retainedEntries int
+	oldestID        uint64
 }
 
 func New(level string, accessLog bool) *Logger {
-	l := &Logger{}
+	l := &Logger{buffer: newLogBuffer(DefaultBufferCapacity)}
 	l.Configure(level, accessLog)
 	return l
 }
@@ -60,6 +107,61 @@ func (l *Logger) Enabled(level string) bool {
 	return int(l.level.Load()) >= levels[normalizeLevel(level)]
 }
 
+func (l *Logger) Entries(limit int) []LogEntry {
+	if l == nil || l.buffer == nil {
+		return nil
+	}
+	return l.buffer.Entries(limit)
+}
+
+func (l *Logger) BufferCapacity() int {
+	if l == nil || l.buffer == nil {
+		return 0
+	}
+	return l.buffer.Capacity()
+}
+
+func (l *Logger) EnableHistory(path string, entriesPerFile, maxFiles int) error {
+	if l == nil {
+		return nil
+	}
+	history, err := newLogHistory(path, entriesPerFile, maxFiles)
+	if err != nil {
+		return err
+	}
+	l.history = history
+	return nil
+}
+
+func (l *Logger) Page(limit int, before uint64) LogPage {
+	if l == nil {
+		return LogPage{}
+	}
+	if l.buffer != nil {
+		entries, hasOlder := l.buffer.EntriesBefore(limit, before)
+		if before == 0 || len(entries) > 0 {
+			if l.history != nil {
+				if len(entries) > 0 && l.history.HasBefore(entries[0].ID) {
+					hasOlder = true
+				}
+				return LogPage{Entries: entries, HasOlder: hasOlder, History: true}
+			}
+			return LogPage{Entries: entries, HasOlder: hasOlder}
+		}
+	}
+	if l.history != nil {
+		entries, hasOlder, err := l.history.Page(limit, before)
+		if err == nil {
+			return LogPage{Entries: entries, HasOlder: hasOlder, History: true}
+		}
+	}
+	if l.buffer == nil {
+		return LogPage{}
+	}
+	entries, hasOlder := l.buffer.EntriesBefore(limit, before)
+	return LogPage{Entries: entries, HasOlder: hasOlder}
+}
+
 func (l *Logger) Debug(scope, msg string, meta map[string]any) { l.write("debug", scope, msg, meta) }
 func (l *Logger) Info(scope, msg string, meta map[string]any)  { l.write("info", scope, msg, meta) }
 func (l *Logger) Warn(scope, msg string, meta map[string]any)  { l.write("warn", scope, msg, meta) }
@@ -78,11 +180,252 @@ func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 		parts = append(parts, formatted)
 	}
 	line := strings.Join(parts, " ")
+	entry := LogEntry{Time: parts[0], Level: level, Scope: scope, Message: RedactText(msg), Line: line}
+	if l.buffer != nil {
+		entry = l.buffer.Append(entry)
+	}
+	if l.history != nil {
+		_ = l.history.Append(entry)
+	}
 	if level == "error" || level == "warn" {
 		fmt.Fprintln(os.Stderr, line)
 		return
 	}
 	fmt.Fprintln(os.Stdout, line)
+}
+
+func newLogBuffer(capacity int) *logBuffer {
+	if capacity < 1 {
+		capacity = 1
+	}
+	return &logBuffer{capacity: capacity, entries: make([]LogEntry, 0, capacity)}
+}
+
+func (b *logBuffer) Append(entry LogEntry) LogEntry {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.next++
+	entry.ID = b.next
+	if len(b.entries) < b.capacity {
+		b.entries = append(b.entries, entry)
+		return entry
+	}
+	b.entries[b.start] = entry
+	b.start = (b.start + 1) % b.capacity
+	return entry
+}
+
+func (b *logBuffer) Entries(limit int) []LogEntry {
+	entries, _ := b.EntriesBefore(limit, 0)
+	return entries
+}
+
+func (b *logBuffer) EntriesBefore(limit int, before uint64) ([]LogEntry, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	total := len(b.entries)
+	if limit <= 0 || limit > total {
+		limit = total
+	}
+	all := make([]LogEntry, 0, total)
+	for i := 0; i < total; i++ {
+		idx := (b.start + i) % b.capacity
+		entry := b.entries[idx]
+		if before == 0 || entry.ID < before {
+			all = append(all, entry)
+		}
+	}
+	if limit <= 0 || limit > len(all) {
+		limit = len(all)
+	}
+	hasOlder := len(all) > limit
+	if hasOlder {
+		all = all[len(all)-limit:]
+	}
+	return all, hasOlder
+}
+
+func (b *logBuffer) Capacity() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.capacity
+}
+
+func newLogHistory(path string, entriesPerFile, maxFiles int) (*logHistory, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, fmt.Errorf("log history path is empty")
+	}
+	if entriesPerFile < 1 {
+		entriesPerFile = DefaultHistoryEntriesFile
+	}
+	if maxFiles < 1 {
+		maxFiles = DefaultHistoryRotatedFiles
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		return nil, err
+	}
+	h := &logHistory{path: path, entriesPerFile: entriesPerFile, maxFiles: maxFiles}
+	if err := h.reset(); err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+func (h *logHistory) reset() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, path := range h.pathsNewestFirst() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	h.entryCount = 0
+	h.retainedEntries = 0
+	h.oldestID = 0
+	return nil
+}
+
+func (h *logHistory) Append(entry LogEntry) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.entryCount >= h.entriesPerFile {
+		if err := h.rotateLocked(); err != nil {
+			return err
+		}
+	}
+	b, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(h.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	h.entryCount++
+	h.retainedEntries++
+	if h.oldestID == 0 || h.retainedEntries == 1 {
+		h.oldestID = entry.ID
+	}
+	return nil
+}
+
+func (h *logHistory) HasBefore(id uint64) bool {
+	if h == nil || id == 0 {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.retainedEntries > 0 && h.oldestID > 0 && h.oldestID < id
+}
+
+func (h *logHistory) Page(limit int, before uint64) ([]LogEntry, bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if limit <= 0 {
+		limit = h.entriesPerFile
+	}
+	entries := []LogEntry{}
+	for _, path := range h.pathsOldestFirst() {
+		if err := readLogEntries(path, before, &entries); err != nil {
+			return nil, false, err
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	if limit > len(entries) {
+		limit = len(entries)
+	}
+	hasOlder := len(entries) > limit
+	if hasOlder {
+		entries = entries[len(entries)-limit:]
+	}
+	return entries, hasOlder, nil
+}
+
+func (h *logHistory) rotateLocked() error {
+	if h.maxFiles <= 1 {
+		if err := os.Remove(h.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		h.entryCount = 0
+		h.retainedEntries = 0
+		h.oldestID = 0
+		return nil
+	}
+	oldest := rotatedLogPath(h.path, h.maxFiles-1)
+	if err := os.Remove(oldest); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if capacity := h.entriesPerFile * h.maxFiles; h.retainedEntries >= capacity {
+		h.retainedEntries -= h.entriesPerFile
+		h.oldestID += uint64(h.entriesPerFile)
+	}
+	for i := h.maxFiles - 2; i >= 1; i-- {
+		from := rotatedLogPath(h.path, i)
+		to := rotatedLogPath(h.path, i+1)
+		if err := os.Rename(from, to); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := os.Rename(h.path, rotatedLogPath(h.path, 1)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	h.entryCount = 0
+	return nil
+}
+
+func (h *logHistory) pathsNewestFirst() []string {
+	paths := []string{h.path}
+	for i := 1; i < h.maxFiles; i++ {
+		paths = append(paths, rotatedLogPath(h.path, i))
+	}
+	return paths
+}
+
+func (h *logHistory) pathsOldestFirst() []string {
+	paths := make([]string, 0, h.maxFiles)
+	for i := h.maxFiles - 1; i >= 1; i-- {
+		paths = append(paths, rotatedLogPath(h.path, i))
+	}
+	paths = append(paths, h.path)
+	return paths
+}
+
+func rotatedLogPath(path string, index int) string {
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	return base + "." + strconv.Itoa(index) + ext
+}
+
+func readLogEntries(path string, before uint64, out *[]LogEntry) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var entry LogEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry.ID == 0 || (before > 0 && entry.ID >= before) {
+			continue
+		}
+		*out = append(*out, entry)
+	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		return err
+	}
+	return nil
 }
 
 func RedactURL(raw string) string {

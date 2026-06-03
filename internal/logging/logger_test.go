@@ -1,6 +1,8 @@
 package logging
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -28,4 +30,109 @@ func TestFormatValueRedactsEmbeddedURLInErrorMeta(t *testing.T) {
 	if !strings.Contains(got, "X-Emby-Token=<redacted>") {
 		t.Fatalf("formatValue() = %q, want redacted token", got)
 	}
+}
+
+func TestLoggerEntriesReturnsRedactedConsoleLines(t *testing.T) {
+	log := New("debug", true)
+	log.Info("proxy", "target headers received", map[string]any{
+		"target": "https://emby.example/Items?api_key=secret-key&Fields=Name",
+		"status": 200,
+	})
+
+	entries := log.Entries(10)
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	got := entries[0]
+	if got.ID != 1 || got.Level != "info" || got.Scope != "proxy" {
+		t.Fatalf("entry metadata = %+v", got)
+	}
+	if strings.Contains(got.Line, "secret-key") {
+		t.Fatalf("entry line leaked sensitive query value: %q", got.Line)
+	}
+	for _, want := range []string{"INFO", "[proxy]", "status=200", "api_key=<redacted>", "Fields=Name"} {
+		if !strings.Contains(got.Line, want) {
+			t.Fatalf("entry line = %q, want to contain %q", got.Line, want)
+		}
+	}
+}
+
+func TestLoggerEntriesHonorsLimit(t *testing.T) {
+	log := New("debug", true)
+	log.Info("test", "one", nil)
+	log.Warn("test", "two", nil)
+	log.Error("test", "three", nil)
+
+	entries := log.Entries(2)
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want 2", len(entries))
+	}
+	if entries[0].Message != "two" || entries[1].Message != "three" {
+		t.Fatalf("entries = %+v, want last two messages", entries)
+	}
+}
+
+func TestLoggerHistoryPagesOlderEntries(t *testing.T) {
+	log := New("debug", true)
+	if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 3); err != nil {
+		t.Fatalf("EnableHistory() error = %v", err)
+	}
+	for i := 1; i <= 5; i++ {
+		log.Info("test", fmt.Sprintf("line-%d", i), nil)
+	}
+
+	latest := log.Page(2, 0)
+	if !latest.History || !latest.HasOlder {
+		t.Fatalf("latest page metadata = %+v", latest)
+	}
+	if messages(latest.Entries) != "line-4,line-5" {
+		t.Fatalf("latest messages = %q", messages(latest.Entries))
+	}
+
+	older := log.Page(2, latest.Entries[0].ID)
+	if !older.HasOlder {
+		t.Fatalf("older page metadata = %+v", older)
+	}
+	if messages(older.Entries) != "line-2,line-3" {
+		t.Fatalf("older messages = %q", messages(older.Entries))
+	}
+
+	oldest := log.Page(2, older.Entries[0].ID)
+	if oldest.HasOlder {
+		t.Fatalf("oldest page metadata = %+v", oldest)
+	}
+	if messages(oldest.Entries) != "line-1" {
+		t.Fatalf("oldest messages = %q", messages(oldest.Entries))
+	}
+}
+
+func TestLoggerLatestPageUsesMemoryBufferWhenHistoryRotatedAway(t *testing.T) {
+	log := New("debug", true)
+	if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 1); err != nil {
+		t.Fatalf("EnableHistory() error = %v", err)
+	}
+	for i := 1; i <= 5; i++ {
+		log.Info("test", fmt.Sprintf("line-%d", i), nil)
+	}
+
+	latest := log.Page(2, 0)
+	if !latest.History || !latest.HasOlder {
+		t.Fatalf("latest page metadata = %+v", latest)
+	}
+	if messages(latest.Entries) != "line-4,line-5" {
+		t.Fatalf("latest messages = %q", messages(latest.Entries))
+	}
+
+	older := log.Page(2, latest.Entries[0].ID)
+	if messages(older.Entries) != "line-2,line-3" {
+		t.Fatalf("older messages = %q", messages(older.Entries))
+	}
+}
+
+func messages(entries []LogEntry) string {
+	values := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		values = append(values, entry.Message)
+	}
+	return strings.Join(values, ",")
 }

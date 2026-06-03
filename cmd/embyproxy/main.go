@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"embyproxy/internal/identity"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
+	"embyproxy/internal/requestlog"
 	"embyproxy/internal/scheduler"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
@@ -37,6 +39,9 @@ func main() {
 	}
 	defaultSystemCfg := storage.DefaultSystemConfig()
 	log := logging.New(defaultSystemCfg.LogLevel, defaultSystemCfg.LogAccess)
+	if err := log.EnableHistory(filepath.Join(cfg.CWD, "data", "console-logs.jsonl"), logging.DefaultHistoryEntriesFile, logging.DefaultHistoryRotatedFiles); err != nil {
+		log.Warn("startup", "console log history disabled", map[string]any{"error": err.Error()})
+	}
 	logBuildInfo(log)
 	if errText := auth.ValidateAdminToken(cfg.AdminToken); errText != "" {
 		log.Error("startup", "admin token config invalid", map[string]any{"error": errText})
@@ -188,15 +193,20 @@ func requestMiddleware(log *logging.Logger, store *storage.Store, next http.Hand
 		id := log.NextRequestID("")
 		ctx := context.WithValue(r.Context(), "requestID", id)
 		ctx = proxy.WithAccessLogFields(ctx)
+		ctx = requestlog.WithAccessLogState(ctx)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		started := time.Now()
 		next.ServeHTTP(sw, r.WithContext(ctx))
-		if log.AccessEnabled() {
+		if log.AccessEnabled() && !requestlog.AccessLogSuppressed(ctx) {
 			meta := map[string]any{"id": id, "status": sw.status, "bytes": sw.bytes, "ms": time.Since(started).Milliseconds(), "ip": auth.ClientIP(r, trustsProxy(ctx, store))}
 			for key, value := range proxy.AccessLogFields(ctx) {
 				meta[key] = value
 			}
-			log.Info("access", r.Method+" "+logging.RedactURL(r.URL.RequestURI()), meta)
+			requestURI := logging.RedactURL(r.URL.RequestURI())
+			if uri, ok := requestlog.RequestURI(ctx); ok {
+				requestURI = uri
+			}
+			log.Info("access", r.Method+" "+requestURI, meta)
 		}
 	})
 }

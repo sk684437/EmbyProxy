@@ -15,6 +15,7 @@ import (
 
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
+	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
 
@@ -75,6 +76,42 @@ func TestFetchTargetDoesNotDowngradeHTTPS(t *testing.T) {
 	}
 	if body.closed {
 		t.Fatal("returned response body was closed too early")
+	}
+}
+
+func TestServeHTTPMarksAccessLogURIWithRedactedSecret(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatalf("storage.New() error = %v", err)
+	}
+	defer store.Close()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+	if err := store.SaveNode(ctx, "admin", storage.Node{Name: "node", Secret: "raw-secret", Target: upstream.URL}); err != nil {
+		t.Fatalf("SaveNode() error = %v", err)
+	}
+	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
+	reqCtx := requestlog.WithAccessLogState(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/node/raw-secret/emby/System/Info?api_key=token", nil).WithContext(reqCtx)
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	got, ok := requestlog.RequestURI(reqCtx)
+	if !ok {
+		t.Fatal("request URI was not marked for access log")
+	}
+	if strings.Contains(got, "raw-secret") || strings.Contains(got, "token") {
+		t.Fatalf("redacted URI leaked sensitive data: %q", got)
+	}
+	if got != "/node/<secret>/emby/System/Info?api_key=<redacted>" {
+		t.Fatalf("redacted URI = %q", got)
 	}
 }
 
