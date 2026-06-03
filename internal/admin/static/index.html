@@ -1386,7 +1386,12 @@ function formatCheckResult(result) {
   if (!result) return { type: 'err', text: '失败' };
   const msValue = Number(result.ms);
   const ms = Number.isFinite(msValue) ? `${Math.round(msValue)}ms` : '';
-  if (result.error) return { type: 'err', text: ms ? `${result.error} · ${ms}` : result.error };
+  if (result.error) {
+    const error = String(result.error);
+    const lowerError = error.toLowerCase();
+    if (lowerError.includes('timeout') || lowerError.includes('deadline')) return { type: 'err', text: '超时' };
+    return { type: 'err', text: ms ? `${error} · ${ms}` : error };
+  }
   if (Number.isFinite(msValue) && msValue > 9999) return { type: 'err', text: '超时' };
   const status = Number(result.status || 0);
   if (status >= 200 && status < 400) return { type: 'ok', text: ms || '正常' };
