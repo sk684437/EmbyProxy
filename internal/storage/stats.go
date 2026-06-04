@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +29,77 @@ type PlaybackInput struct {
 	Mode       string
 	RequestURL string
 	Method     string
+}
+
+const (
+	playbackAsyncQueueSize    = 4096
+	playbackAsyncWriteTimeout = 5 * time.Second
+)
+
+func (s *Store) startPlaybackAsyncLogger() {
+	if s == nil {
+		return
+	}
+	s.playbackQueue = make(chan PlaybackInput, playbackAsyncQueueSize)
+	s.playbackWG.Add(1)
+	go s.runPlaybackAsyncLogger()
+}
+
+func (s *Store) closePlaybackAsyncLogger() {
+	if s == nil {
+		return
+	}
+	s.playbackMu.Lock()
+	if !s.playbackClosed {
+		s.playbackClosed = true
+		if s.playbackQueue != nil {
+			close(s.playbackQueue)
+		}
+	}
+	s.playbackMu.Unlock()
+	s.playbackWG.Wait()
+}
+
+func (s *Store) runPlaybackAsyncLogger() {
+	defer s.playbackWG.Done()
+	for in := range s.playbackQueue {
+		ctx, cancel := context.WithTimeout(context.Background(), playbackAsyncWriteTimeout)
+		_ = s.LogPlayback(ctx, in)
+		cancel()
+	}
+}
+
+func (s *Store) LogPlaybackAsync(in PlaybackInput) bool {
+	if s == nil || !in.IsPlayback {
+		return true
+	}
+	in = clonePlaybackInput(in)
+	s.playbackMu.RLock()
+	defer s.playbackMu.RUnlock()
+	if s.playbackClosed || s.playbackQueue == nil {
+		return false
+	}
+	select {
+	case s.playbackQueue <- in:
+		return true
+	default:
+		atomic.AddUint64(&s.playbackDropped, 1)
+		return false
+	}
+}
+
+func clonePlaybackInput(in PlaybackInput) PlaybackInput {
+	in.Headers = cloneHTTPHeader(in.Headers)
+	in.RespHeader = cloneHTTPHeader(in.RespHeader)
+	return in
+}
+
+func cloneHTTPHeader(in http.Header) http.Header {
+	out := http.Header{}
+	for key, values := range in {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {

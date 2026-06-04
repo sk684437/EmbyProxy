@@ -513,7 +513,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	if nodeDirect && isPlaybackAPI && !isAdditionalPartsAPI && isGetLike {
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": parsed.Name, "secret": node.Secret, "stage": "playback-direct-302", "targetUrl": finalURL.String(), "outboundHeaders": headers})
 		res := textResponse(http.StatusFound, "", http.Header{"Location": []string{finalURL.String()}, "Cache-Control": []string{"no-store"}, "X-FD-Stage": []string{"playback-direct-302"}})
-		_ = h.store.LogPlayback(ctx, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: res.Header, IsPlayback: true, Mode: "direct", RequestURL: r.URL.RequestURI(), Method: r.Method})
+		h.logPlayback(storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: res.Header, IsPlayback: true, Mode: "direct", RequestURL: r.URL.RequestURI(), Method: r.Method})
 		return res, nil
 	}
 	shouldProxyMedia := (!nodeDirect && (isPlaybackAPI || isImageAPI || isAdditionalPartsAPI)) || (nodeDirect && (isAdditionalPartsAPI || isImageAPI))
@@ -554,6 +554,13 @@ func (h *Handler) requestBodyForReplay(w http.ResponseWriter, r *http.Request) (
 		return nil, nil
 	}
 	return capture.DrainAndRemember(r, h.cfg.Defaults.MaxRetryBodyBytes)
+}
+
+func (h *Handler) logPlayback(in storage.PlaybackInput) {
+	if h == nil || h.store == nil {
+		return
+	}
+	_ = h.store.LogPlaybackAsync(in)
 }
 
 func (h *Handler) sendResponse(w http.ResponseWriter, res *http.Response) {

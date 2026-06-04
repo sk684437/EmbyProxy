@@ -66,7 +66,7 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 	if directRes.StatusCode >= 300 && directRes.StatusCode < 400 {
 		mode = "direct"
 	}
-	_ = h.store.LogPlayback(ctx, storage.PlaybackInput{Node: node, RequestIP: authClientIP(h, r), Headers: r.Header, Status: directRes.StatusCode, RespHeader: directRes.Header, IsPlayback: true, Mode: mode, RequestURL: r.URL.RequestURI(), Method: r.Method})
+	h.logPlayback(storage.PlaybackInput{Node: node, RequestIP: authClientIP(h, r), Headers: r.Header, Status: directRes.StatusCode, RespHeader: directRes.Header, IsPlayback: true, Mode: mode, RequestURL: r.URL.RequestURI(), Method: r.Method})
 	return directRes, nil
 }
 
@@ -243,7 +243,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		}
 		finishImageCacheFill()
 	}
-	_ = h.store.LogPlayback(ctx, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: headers, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method})
+	h.logPlayback(storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: headers, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method})
 	res.Header = headers
 	return res, nil
 }

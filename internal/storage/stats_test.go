@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestLogPlaybackConcurrentSessionDedup(t *testing.T) {
@@ -73,5 +74,61 @@ func TestLogPlaybackConcurrentSessionDedup(t *testing.T) {
 	}
 	if counter != "1" {
 		t.Fatalf("proxy play counter = %q; want 1", counter)
+	}
+}
+
+func TestLogPlaybackAsyncDoesNotWaitForDatabase(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+
+	input := PlaybackInput{
+		Node:       Node{Name: "async"},
+		RequestIP:  "127.0.0.1",
+		Headers:    http.Header{"User-Agent": {"async-client"}},
+		Status:     http.StatusOK,
+		RespHeader: http.Header{"Content-Length": {"2048"}},
+		IsPlayback: true,
+		Mode:       "proxy",
+		RequestURL: "/emby/videos/2/stream",
+		Method:     http.MethodGet,
+	}
+
+	started := time.Now()
+	if ok := store.LogPlaybackAsync(input); !ok {
+		t.Fatal("LogPlaybackAsync() returned false")
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("LogPlaybackAsync() took %s; want it to avoid waiting for the database", elapsed)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var plays int64
+		err := store.db.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(plays), 0)
+			FROM play_stats
+			WHERE node = ? AND client = ?
+		`, "async", "async-client").Scan(&plays)
+		if err == nil && plays == 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("async playback stat was not written in time; plays=%d err=%v", plays, err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

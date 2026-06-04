@@ -18,13 +18,18 @@ import (
 )
 
 type Store struct {
-	db             *sql.DB
-	mu             sync.RWMutex
-	nodeCache      map[string]cacheEntry[*Node]
-	nodeListCache  map[string]cacheEntry[[]Node]
-	hostIndexCache map[string]cacheEntry[map[string]HostMatch]
-	sysConfigCache systemConfigCacheEntry
-	sysConfigGen   uint64
+	db              *sql.DB
+	mu              sync.RWMutex
+	nodeCache       map[string]cacheEntry[*Node]
+	nodeListCache   map[string]cacheEntry[[]Node]
+	hostIndexCache  map[string]cacheEntry[map[string]HostMatch]
+	sysConfigCache  systemConfigCacheEntry
+	sysConfigGen    uint64
+	playbackMu      sync.RWMutex
+	playbackClosed  bool
+	playbackQueue   chan PlaybackInput
+	playbackWG      sync.WaitGroup
+	playbackDropped uint64
 }
 
 type KV struct {
@@ -73,6 +78,7 @@ func New(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	store.startPlaybackAsyncLogger()
 	return store, nil
 }
 
@@ -80,6 +86,7 @@ func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	s.closePlaybackAsyncLogger()
 	return s.db.Close()
 }
 
