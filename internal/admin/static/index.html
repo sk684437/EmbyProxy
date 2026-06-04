@@ -1468,7 +1468,7 @@ function formatCheckResult(result) {
 }
 
 async function checkSelectedStatus() {
-  for (const name of selectedNodes) await checkNodeStatus(name);
+  await Promise.all([...selectedNodes].map(name => checkNodeStatus(name)));
 }
 
 function openImportModal() {
