@@ -219,11 +219,9 @@ func sendCORSPreflight(w http.ResponseWriter, reqOrigin string, env config.Proxy
 	h.Set("Access-Control-Allow-Origin", ao)
 	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	h.Set("Access-Control-Allow-Headers", "*")
-	h.Set("Access-Control-Allow-Private-Network", "true")
 	h.Set("Access-Control-Max-Age", "86400")
 	h.Set("Cache-Control", "no-store")
 	if ao != "*" {
-		h.Set("Access-Control-Allow-Credentials", "true")
 		h.Set("Vary", "Origin")
 	}
 	w.WriteHeader(http.StatusOK)
