@@ -628,11 +628,16 @@ func resolveTargetURL(base *url.URL, path, rawQuery string) *url.URL {
 		u.Path = basePath + ensureLeadingSlash(path)
 	}
 	if rawQuery != "" {
+		if u.RawQuery == "" {
+			u.RawQuery = rawQuery
+			return &u
+		}
 		q := u.Query()
 		incoming, _ := url.ParseQuery(rawQuery)
 		for key, values := range incoming {
+			q.Del(key)
 			for _, value := range values {
-				q.Set(key, value)
+				q.Add(key, value)
 			}
 		}
 		u.RawQuery = q.Encode()

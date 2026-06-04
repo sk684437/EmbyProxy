@@ -84,6 +84,47 @@ func TestIsEmosNodeRequiresCompat(t *testing.T) {
 	}
 }
 
+func TestResolveTargetURLCarriesRawQueryWithoutParsingWhenBaseHasNoQuery(t *testing.T) {
+	base, err := url.Parse("https://emby.example.test/base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawQuery := "Fields=Path&Fields=MediaSources&X-Emby-Token=abc%2F123"
+
+	got := resolveTargetURL(base, "/emby/Items", rawQuery)
+
+	if got.String() != "https://emby.example.test/base/emby/Items?"+rawQuery {
+		t.Fatalf("resolveTargetURL() = %q", got.String())
+	}
+	if got.RawQuery != rawQuery {
+		t.Fatalf("RawQuery = %q, want %q", got.RawQuery, rawQuery)
+	}
+}
+
+func TestResolveTargetURLMergesBaseQueryAndKeepsRepeatedRequestValues(t *testing.T) {
+	base, err := url.Parse("https://emby.example.test/base?api_key=node-key&lang=zh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveTargetURL(base, "/emby/Items", "api_key=req-key&Fields=Path&Fields=MediaSources")
+	query := got.Query()
+
+	if got.Path != "/base/emby/Items" {
+		t.Fatalf("Path = %q, want %q", got.Path, "/base/emby/Items")
+	}
+	if gotAPIKey := query.Get("api_key"); gotAPIKey != "req-key" {
+		t.Fatalf("api_key = %q, want req-key", gotAPIKey)
+	}
+	if gotLang := query.Get("lang"); gotLang != "zh" {
+		t.Fatalf("lang = %q, want zh", gotLang)
+	}
+	fields := query["Fields"]
+	if len(fields) != 2 || fields[0] != "Path" || fields[1] != "MediaSources" {
+		t.Fatalf("Fields = %#v, want [Path MediaSources]", fields)
+	}
+}
+
 func TestRawHostAllowedBlocksPrivateDestinations(t *testing.T) {
 	h := &Handler{}
 	node := storage.Node{Target: "https://example.test"}
