@@ -82,6 +82,55 @@ func TestFetchTargetDoesNotDowngradeHTTPS(t *testing.T) {
 	}
 }
 
+func TestSendResponsePreservesContentLengthForPassthrough(t *testing.T) {
+	body := []byte("media-body")
+	wantLength := fmt.Sprintf("%d", len(body))
+	res := bytesResponse(http.StatusPartialContent, body, http.Header{
+		"Accept-Ranges":  []string{"bytes"},
+		"Content-Length": []string{wantLength},
+		"Content-Range":  []string{"bytes 0-9/100"},
+		"Content-Type":   []string{"video/mp4"},
+	})
+	rec := httptest.NewRecorder()
+
+	(&Handler{}).sendResponse(rec, res)
+
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPartialContent)
+	}
+	if got := rec.Header().Get("Content-Length"); got != wantLength {
+		t.Fatalf("Content-Length = %q, want %q", got, wantLength)
+	}
+	if got := rec.Header().Get("Content-Range"); got != "bytes 0-9/100" {
+		t.Fatalf("Content-Range = %q", got)
+	}
+	if got := rec.Body.String(); got != string(body) {
+		t.Fatalf("body = %q, want %q", got, string(body))
+	}
+}
+
+func TestSendResponseDropsContentLengthForDecodedBody(t *testing.T) {
+	res := bytesResponse(http.StatusOK, []byte("decoded"), http.Header{
+		"Content-Encoding": []string{"gzip"},
+		"Content-Length":   []string{"99"},
+		"Content-Type":     []string{"text/plain"},
+	})
+	res.Uncompressed = true
+	rec := httptest.NewRecorder()
+
+	(&Handler{}).sendResponse(rec, res)
+
+	if got := rec.Header().Get("Content-Length"); got != "" {
+		t.Fatalf("Content-Length = %q, want empty", got)
+	}
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want empty", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("Content-Type = %q, want text/plain", got)
+	}
+}
+
 func TestServeHTTPMarksAccessLogURIWithRedactedSecret(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
@@ -531,6 +580,9 @@ func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 		t.Fatalf("finishGeneralResponse() error = %v", err)
 	}
 	defer out.Body.Close()
+	if got := out.Header.Get("Content-Length"); got != "" {
+		t.Fatalf("Content-Length = %q, want empty after body rewrite", got)
+	}
 	body, err := io.ReadAll(out.Body)
 	if err != nil {
 		t.Fatal(err)

@@ -562,7 +562,7 @@ func (h *Handler) sendResponse(w http.ResponseWriter, res *http.Response) {
 		return
 	}
 	defer res.Body.Close()
-	copyResponseHeaders(w.Header(), res.Header)
+	copyResponseHeaders(w.Header(), res.Header, res.Uncompressed)
 	w.WriteHeader(res.StatusCode)
 	if res.Body != nil {
 		_, _ = io.Copy(w, res.Body)

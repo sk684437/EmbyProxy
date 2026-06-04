@@ -246,10 +246,14 @@ func rewriteSetCookieHeaders(headers http.Header, prefix string) {
 	}
 }
 
-func copyResponseHeaders(dst http.Header, src http.Header) {
+func copyResponseHeaders(dst http.Header, src http.Header, bodyDecoded bool) {
+	skipContentLength := bodyDecoded || src.Get("Content-Encoding") != "" || src.Get("Transfer-Encoding") != ""
 	for key, values := range src {
 		lower := strings.ToLower(key)
-		if lower == "transfer-encoding" || lower == "content-encoding" || lower == "content-length" || lower == "content-md5" {
+		if lower == "transfer-encoding" || lower == "content-encoding" || lower == "content-md5" {
+			continue
+		}
+		if lower == "content-length" && skipContentLength {
 			continue
 		}
 		for _, value := range values {
