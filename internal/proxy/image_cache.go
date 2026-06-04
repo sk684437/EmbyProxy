@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	imageCacheDirName      = "image-cache"
-	imageCacheTTLDaysLimit = 365
+	imageCacheDirName           = "image-cache"
+	imageCacheTTLDaysLimit      = 365
+	imageCacheMetaCacheTTL      = time.Minute
+	imageCacheMetaCacheMaxItems = 4096
 )
 
 var imageCacheIgnoredQueryParams = map[string]bool{
@@ -50,6 +52,10 @@ type imageDiskCache struct {
 	now         func() time.Time
 	cleanupMu   sync.Mutex
 	lastCleanup time.Time
+	fillMu      sync.Mutex
+	fills       map[string]*imageCacheFill
+	metaMu      sync.RWMutex
+	metaCache   map[string]imageMetaCacheEntry
 }
 
 type imageCacheMeta struct {
@@ -61,9 +67,21 @@ type imageCacheMeta struct {
 }
 
 type imageCachePaths struct {
+	hash string
 	dir  string
 	body string
 	meta string
+}
+
+type imageCacheFill struct {
+	hash string
+	done chan struct{}
+	once sync.Once
+}
+
+type imageMetaCacheEntry struct {
+	meta imageCacheMeta
+	exp  time.Time
 }
 
 func newImageCacheFromSystemConfig(cfg config.Config, sys storage.SystemConfig) *imageDiskCache {
@@ -158,14 +176,23 @@ func (c *imageDiskCache) get(r *http.Request, key string, reqOrigin string, env 
 	headers.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length, Content-Type")
 	headers.Del("Vary")
 	if imageClientCacheFresh(r, headers) {
+		if !c.cachedBodyExists(paths) {
+			c.remove(paths)
+			return nil, false
+		}
 		headers.Del("Content-Length")
 		return textResponse(http.StatusNotModified, "", headers), true
 	}
 	if strings.EqualFold(r.Method, http.MethodHead) {
+		if !c.cachedBodyExists(paths) {
+			c.remove(paths)
+			return nil, false
+		}
 		return textResponse(meta.Status, "", headers), true
 	}
 	body, err := os.Open(paths.body)
 	if err != nil {
+		c.remove(paths)
 		return nil, false
 	}
 	return &http.Response{
@@ -176,40 +203,48 @@ func (c *imageDiskCache) get(r *http.Request, key string, reqOrigin string, env 
 	}, true
 }
 
-func (c *imageDiskCache) wrapStore(r *http.Request, key string, res *http.Response, headers http.Header) {
+func (c *imageDiskCache) wrapStore(r *http.Request, key string, res *http.Response, headers http.Header, onDone ...func()) bool {
 	if c == nil || key == "" || r == nil || res == nil || res.Body == nil {
-		return
+		return false
 	}
 	if !strings.EqualFold(r.Method, http.MethodGet) || r.Header.Get("Range") != "" || res.StatusCode != http.StatusOK {
-		return
+		return false
 	}
 	if !imageCacheableContent(headers) {
-		return
+		return false
 	}
 	paths := c.paths(key)
 	if err := os.MkdirAll(paths.dir, 0o755); err != nil {
-		return
+		return false
 	}
 	tmp, err := os.CreateTemp(paths.dir, filepath.Base(paths.body)+".*.tmp")
 	if err != nil {
-		return
+		return false
+	}
+	var done func()
+	if len(onDone) > 0 {
+		done = onDone[0]
 	}
 	now := c.now().Unix()
 	meta := imageCacheMeta{
-		KeyHash:   imageCacheKeyHash(key),
+		KeyHash:   paths.hash,
 		Status:    res.StatusCode,
 		Header:    imageCacheStoredHeaders(headers),
 		CreatedAt: now,
 		ExpiresAt: now + int64(c.ttl.Seconds()),
 	}
 	res.Body = &imageCacheWriteCloser{
+		cache:    c,
 		src:      res.Body,
 		file:     tmp,
+		keyHash:  paths.hash,
 		tmpBody:  tmp.Name(),
 		bodyPath: paths.body,
 		metaPath: paths.meta,
 		meta:     meta,
+		onDone:   done,
 	}
+	return true
 }
 
 func (c *imageDiskCache) CleanupExpired() {
@@ -245,12 +280,17 @@ func (c *imageDiskCache) CleanupExpired() {
 			body := strings.TrimSuffix(path, ".json") + ".body"
 			_ = os.Remove(path)
 			_ = os.Remove(body)
+			c.deleteCachedMeta(strings.TrimSuffix(d.Name(), ".json"))
 		}
 		return nil
 	})
 }
 
 func (c *imageDiskCache) readMeta(paths imageCachePaths, key string) (imageCacheMeta, bool) {
+	now := c.now()
+	if meta, ok := c.cachedMeta(paths.hash, now); ok {
+		return meta, true
+	}
 	data, err := os.ReadFile(paths.meta)
 	if err != nil {
 		return imageCacheMeta{}, false
@@ -264,10 +304,11 @@ func (c *imageDiskCache) readMeta(paths imageCachePaths, key string) (imageCache
 		c.remove(paths)
 		return imageCacheMeta{}, false
 	}
-	if _, err := os.Stat(paths.body); err != nil {
+	if !c.cachedBodyExists(paths) {
 		c.remove(paths)
 		return imageCacheMeta{}, false
 	}
+	c.setCachedMeta(paths.hash, meta, now)
 	return meta, true
 }
 
@@ -285,23 +326,137 @@ func (c *imageDiskCache) expired(meta imageCacheMeta, now time.Time) bool {
 
 func (c *imageDiskCache) paths(key string) imageCachePaths {
 	hex := imageCacheKeyHash(key)
+	return c.pathsForHash(hex)
+}
+
+func (c *imageDiskCache) pathsForHash(hex string) imageCachePaths {
 	dir := filepath.Join(c.dir, hex[:2])
 	base := filepath.Join(dir, hex)
-	return imageCachePaths{dir: dir, body: base + ".body", meta: base + ".json"}
+	return imageCachePaths{hash: hex, dir: dir, body: base + ".body", meta: base + ".json"}
 }
 
 func (c *imageDiskCache) remove(paths imageCachePaths) {
 	_ = os.Remove(paths.meta)
 	_ = os.Remove(paths.body)
+	c.deleteCachedMeta(paths.hash)
+}
+
+func (c *imageDiskCache) cachedBodyExists(paths imageCachePaths) bool {
+	_, err := os.Stat(paths.body)
+	return err == nil
+}
+
+func (c *imageDiskCache) beginFill(key string) (*imageCacheFill, bool) {
+	if c == nil || key == "" {
+		return nil, true
+	}
+	hash := imageCacheKeyHash(key)
+	c.fillMu.Lock()
+	defer c.fillMu.Unlock()
+	if c.fills == nil {
+		c.fills = map[string]*imageCacheFill{}
+	}
+	if fill := c.fills[hash]; fill != nil {
+		return fill, false
+	}
+	fill := &imageCacheFill{hash: hash, done: make(chan struct{})}
+	c.fills[hash] = fill
+	return fill, true
+}
+
+func (c *imageDiskCache) waitFill(ctx context.Context, fill *imageCacheFill) error {
+	if fill == nil {
+		return nil
+	}
+	select {
+	case <-fill.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *imageDiskCache) finishFill(fill *imageCacheFill) {
+	if c == nil || fill == nil {
+		return
+	}
+	fill.once.Do(func() {
+		c.fillMu.Lock()
+		if c.fills[fill.hash] == fill {
+			delete(c.fills, fill.hash)
+		}
+		c.fillMu.Unlock()
+		close(fill.done)
+	})
+}
+
+func (c *imageDiskCache) cachedMeta(hash string, now time.Time) (imageCacheMeta, bool) {
+	if c == nil || hash == "" {
+		return imageCacheMeta{}, false
+	}
+	c.metaMu.RLock()
+	entry, ok := c.metaCache[hash]
+	c.metaMu.RUnlock()
+	if !ok {
+		return imageCacheMeta{}, false
+	}
+	if now.After(entry.exp) {
+		c.deleteCachedMeta(hash)
+		return imageCacheMeta{}, false
+	}
+	return cloneImageCacheMeta(entry.meta), true
+}
+
+func (c *imageDiskCache) setCachedMeta(hash string, meta imageCacheMeta, now time.Time) {
+	if c == nil || hash == "" {
+		return
+	}
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+	if c.metaCache == nil {
+		c.metaCache = map[string]imageMetaCacheEntry{}
+	}
+	c.metaCache[hash] = imageMetaCacheEntry{meta: cloneImageCacheMeta(meta), exp: now.Add(imageCacheMetaCacheTTL)}
+	if len(c.metaCache) <= imageCacheMetaCacheMaxItems {
+		return
+	}
+	for key, entry := range c.metaCache {
+		if now.After(entry.exp) {
+			delete(c.metaCache, key)
+		}
+	}
+	for len(c.metaCache) > imageCacheMetaCacheMaxItems {
+		for key := range c.metaCache {
+			delete(c.metaCache, key)
+			break
+		}
+	}
+}
+
+func (c *imageDiskCache) deleteCachedMeta(hash string) {
+	if c == nil || hash == "" {
+		return
+	}
+	c.metaMu.Lock()
+	delete(c.metaCache, hash)
+	c.metaMu.Unlock()
+}
+
+func cloneImageCacheMeta(meta imageCacheMeta) imageCacheMeta {
+	meta.Header = cloneHeader(meta.Header)
+	return meta
 }
 
 type imageCacheWriteCloser struct {
+	cache    *imageDiskCache
 	src      io.ReadCloser
 	file     *os.File
+	keyHash  string
 	tmpBody  string
 	bodyPath string
 	metaPath string
 	meta     imageCacheMeta
+	onDone   func()
 	done     bool
 	failed   bool
 }
@@ -331,6 +486,7 @@ func (w *imageCacheWriteCloser) commit() {
 		return
 	}
 	w.done = true
+	defer w.finish()
 	if w.failed {
 		_ = w.file.Close()
 		_ = os.Remove(w.tmpBody)
@@ -357,6 +513,10 @@ func (w *imageCacheWriteCloser) commit() {
 	if err := os.Rename(tmpMeta, w.metaPath); err != nil {
 		_ = os.Remove(tmpMeta)
 		_ = os.Remove(w.bodyPath)
+		return
+	}
+	if w.cache != nil {
+		w.cache.setCachedMeta(w.keyHash, w.meta, w.cache.now())
 	}
 }
 
@@ -364,6 +524,16 @@ func (w *imageCacheWriteCloser) abort() {
 	w.done = true
 	_ = w.file.Close()
 	_ = os.Remove(w.tmpBody)
+	w.finish()
+}
+
+func (w *imageCacheWriteCloser) finish() {
+	if w.onDone == nil {
+		return
+	}
+	done := w.onDone
+	w.onDone = nil
+	done()
 }
 
 func imageCacheLookupMethod(method string) bool {

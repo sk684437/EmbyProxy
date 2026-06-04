@@ -743,7 +743,7 @@ tr:last-child td{border-bottom:0}
               <div class="form-group">
                 <label for="cfg-imageCacheTtlDays">缓存保留时长（天）</label>
                 <input type="number" id="cfg-imageCacheTtlDays" min="1" max="365" step="1"/>
-                <div class="form-hint">关闭时不读写磁盘缓存；开启后图片最多保留该天数，默认 7 天</div>
+                <div class="form-hint">关闭时不读写磁盘缓存；开启后图片最多保留该天数，默认 30 天</div>
               </div>
             </div>
           </div>
@@ -1559,7 +1559,7 @@ async function openConfigModal() {
     document.getElementById('cfg-imageProxyMaxConcurrent').value = c.imageProxyMaxConcurrent ?? 4;
     document.getElementById('cfg-imageProxyRequestIntervalMs').value = c.imageProxyRequestIntervalMs ?? 250;
     document.getElementById('cfg-imageCacheEnabled').checked = c.imageCacheEnabled === true;
-    document.getElementById('cfg-imageCacheTtlDays').value = c.imageCacheTtlDays ?? 7;
+    document.getElementById('cfg-imageCacheTtlDays').value = c.imageCacheTtlDays ?? 30;
     document.getElementById('cfg-corsAllowOrigin').value = formatCORSAllowOrigin(c.corsAllowOrigin);
     document.getElementById('cfg-externalAllowHosts').value = formatExternalAllowHosts(c.externalAllowHosts);
     document.getElementById('cfg-externalAllowAny').checked = !!c.externalAllowAny;
@@ -1596,7 +1596,7 @@ async function saveConfig() {
     imageProxyMaxConcurrent: parseInt(document.getElementById('cfg-imageProxyMaxConcurrent').value || '4'),
     imageProxyRequestIntervalMs: parseInt(document.getElementById('cfg-imageProxyRequestIntervalMs').value || '250'),
     imageCacheEnabled: document.getElementById('cfg-imageCacheEnabled').checked,
-    imageCacheTtlDays: parseInt(document.getElementById('cfg-imageCacheTtlDays').value || '7'),
+    imageCacheTtlDays: parseInt(document.getElementById('cfg-imageCacheTtlDays').value || '30'),
     corsAllowOrigin: document.getElementById('cfg-corsAllowOrigin').value.trim(),
     externalAllowHosts: document.getElementById('cfg-externalAllowHosts').value.trim(),
     externalAllowAny: document.getElementById('cfg-externalAllowAny').checked,

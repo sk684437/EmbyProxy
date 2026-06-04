@@ -81,7 +81,7 @@ func DefaultSystemConfig() SystemConfig {
 		ImageProxyMaxConcurrent:     4,
 		ImageProxyRequestIntervalMS: 250,
 		ImageCacheEnabled:           false,
-		ImageCacheTTLDays:           7,
+		ImageCacheTTLDays:           30,
 		TrafficCaptureFile:          "./data/traffic-captures.jsonl",
 		TrafficCaptureBodyMax:       262144,
 		TrafficCaptureTextTypes:     DefaultTrafficCaptureTextTypes,

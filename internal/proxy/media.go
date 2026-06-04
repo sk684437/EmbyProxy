@@ -134,6 +134,8 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	}
 	cacheKey := ""
 	var imageCache *imageDiskCache
+	var imageCacheFill *imageCacheFill
+	finishImageCacheFill := func() {}
 	if isImageAPI {
 		imageCache = h.ensureImageCache(ctx)
 		cacheKey = imageCacheKey(parsed.Name, finalURL)
@@ -150,10 +152,31 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-cache-hit", "targetUrl": finalURL.String()})
 			return cached, nil
 		} else {
-			SetAccessLogField(ctx, "imageCache", "miss")
+			fill, leader := imageCache.beginFill(cacheKey)
+			if !leader {
+				SetAccessLogField(ctx, "imageCache", "wait")
+				if err := imageCache.waitFill(ctx, fill); err != nil {
+					return nil, err
+				}
+				if cached, ok := imageCache.get(r, cacheKey, reqOrigin, env); ok {
+					SetAccessLogField(ctx, "imageCache", "hit")
+					SetAccessLogField(ctx, "imageCacheCoalesced", true)
+					capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-cache-hit", "targetUrl": finalURL.String()})
+					return cached, nil
+				}
+				SetAccessLogField(ctx, "imageCache", "miss")
+				SetAccessLogField(ctx, "imageCacheCoalesced", true)
+			} else {
+				imageCacheFill = fill
+				finishImageCacheFill = func() {
+					imageCache.finishFill(imageCacheFill)
+				}
+				SetAccessLogField(ctx, "imageCache", "miss")
+			}
 		}
 		release, err := h.acquireImageRequestSlot(ctx, parsed.Name)
 		if err != nil {
+			finishImageCacheFill()
 			return nil, err
 		}
 		defer release()
@@ -161,6 +184,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": finalURL.String(), "outboundHeaders": hClean})
 	res, err := h.fetchTarget(ctx, finalURL, r.Method, hClean, body, true)
 	if err != nil {
+		finishImageCacheFill()
 		return nil, err
 	}
 	if isImageAPI && res.StatusCode == http.StatusForbidden {
@@ -175,6 +199,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-clean", "targetUrl": finalURL.String(), "outboundHeaders": hImg})
 		res, err = h.fetchTarget(ctx, finalURL, r.Method, hImg, nil, false)
 		if err != nil {
+			finishImageCacheFill()
 			return nil, err
 		}
 		if res.StatusCode == http.StatusForbidden {
@@ -185,6 +210,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-origin", "targetUrl": finalURL.String(), "outboundHeaders": hImg2})
 			res, err = h.fetchTarget(ctx, finalURL, r.Method, hImg2, nil, false)
 			if err != nil {
+				finishImageCacheFill()
 				return nil, err
 			}
 		}
@@ -211,8 +237,11 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		headers.Del("Vary")
 		setImageCacheControl(headers, res.StatusCode, "public, max-age=60, s-maxage=60")
 		if imageCache != nil {
-			imageCache.wrapStore(r, cacheKey, res, headers)
+			if imageCache.wrapStore(r, cacheKey, res, headers, finishImageCacheFill) {
+				finishImageCacheFill = func() {}
+			}
 		}
+		finishImageCacheFill()
 	}
 	_ = h.store.LogPlayback(ctx, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: headers, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method})
 	res.Header = headers

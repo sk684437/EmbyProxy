@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -852,6 +854,82 @@ func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 	}
 	if upstreamCalls != 1 {
 		t.Fatalf("upstream calls = %d, want 1", upstreamCalls)
+	}
+}
+
+func TestHandleMediaProxyCoalescesConcurrentImageCacheMisses(t *testing.T) {
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	sys := storage.DefaultSystemConfig()
+	sys.ImageCacheEnabled = true
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
+	var upstreamMu sync.Mutex
+	upstreamCalls := 0
+	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		upstreamMu.Lock()
+		upstreamCalls++
+		upstreamMu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		return bytesResponse(http.StatusOK, []byte("coalesced-image"), http.Header{
+			"Content-Type": []string{"image/jpeg"},
+			"ETag":         []string{`"coalesced-v1"`},
+		}), nil
+	})}
+
+	const requestCount = 8
+	start := make(chan struct{})
+	errs := make(chan error, requestCount)
+	var wg sync.WaitGroup
+	for i := 0; i < requestCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			reqCtx, cancel := context.WithTimeout(WithAccessLogFields(context.Background()), 2*time.Second)
+			defer cancel()
+			req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary?tag=coalesced", nil).WithContext(reqCtx)
+			finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=coalesced")
+			if err != nil {
+				errs <- err
+				return
+			}
+			res, err := h.handleMediaProxy(reqCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+			if err != nil {
+				errs <- err
+				return
+			}
+			body, err := io.ReadAll(res.Body)
+			_ = res.Body.Close()
+			if err != nil {
+				errs <- err
+				return
+			}
+			if string(body) != "coalesced-image" {
+				errs <- fmt.Errorf("body = %q, want coalesced-image", body)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	upstreamMu.Lock()
+	gotCalls := upstreamCalls
+	upstreamMu.Unlock()
+	if gotCalls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", gotCalls)
 	}
 }
 
