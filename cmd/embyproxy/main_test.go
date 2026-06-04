@@ -88,6 +88,9 @@ func TestRequestMiddlewareUsesRedactedRequestURI(t *testing.T) {
 	if !strings.Contains(entries[0].Line, "/node/<secret>/emby/Items?X-Emby-Token=<redacted>") {
 		t.Fatalf("access log line = %q, want redacted URI", entries[0].Line)
 	}
+	if err := log.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
 	history, err := os.ReadFile(historyPath)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)

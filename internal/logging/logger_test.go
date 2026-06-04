@@ -77,6 +77,7 @@ func TestLoggerHistoryPagesOlderEntries(t *testing.T) {
 	if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 3); err != nil {
 		t.Fatalf("EnableHistory() error = %v", err)
 	}
+	t.Cleanup(func() { _ = log.Close() })
 	for i := 1; i <= 5; i++ {
 		log.Info("test", fmt.Sprintf("line-%d", i), nil)
 	}
@@ -111,6 +112,7 @@ func TestLoggerLatestPageUsesMemoryBufferWhenHistoryRotatedAway(t *testing.T) {
 	if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 1); err != nil {
 		t.Fatalf("EnableHistory() error = %v", err)
 	}
+	t.Cleanup(func() { _ = log.Close() })
 	for i := 1; i <= 5; i++ {
 		log.Info("test", fmt.Sprintf("line-%d", i), nil)
 	}
@@ -127,6 +129,21 @@ func TestLoggerLatestPageUsesMemoryBufferWhenHistoryRotatedAway(t *testing.T) {
 	if messages(older.Entries) != "line-2,line-3" {
 		t.Fatalf("older messages = %q", messages(older.Entries))
 	}
+}
+
+func TestLoggerEnableHistoryClosesPreviousHistory(t *testing.T) {
+	log := New("debug", true)
+	historyPath := filepath.Join(t.TempDir(), "console-logs.jsonl")
+	t.Cleanup(func() { _ = log.Close() })
+	if err := log.EnableHistory(historyPath, 10, 2); err != nil {
+		t.Fatalf("EnableHistory() error = %v", err)
+	}
+	log.Info("test", "before", nil)
+
+	if err := log.EnableHistory(historyPath, 10, 2); err != nil {
+		t.Fatalf("second EnableHistory() error = %v", err)
+	}
+	log.Info("test", "after", nil)
 }
 
 func messages(entries []LogEntry) string {

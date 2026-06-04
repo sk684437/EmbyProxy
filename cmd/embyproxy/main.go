@@ -39,6 +39,7 @@ func main() {
 	}
 	defaultSystemCfg := storage.DefaultSystemConfig()
 	log := logging.New(defaultSystemCfg.LogLevel, defaultSystemCfg.LogAccess)
+	defer log.Close()
 	if err := log.EnableHistory(filepath.Join(cfg.CWD, "data", "console-logs.jsonl"), logging.DefaultHistoryEntriesFile, logging.DefaultHistoryRotatedFiles); err != nil {
 		log.Warn("startup", "console log history disabled", map[string]any{"error": err.Error()})
 	}

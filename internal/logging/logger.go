@@ -21,6 +21,8 @@ const (
 	DefaultBufferCapacity      = 2000
 	DefaultHistoryEntriesFile  = 2000
 	DefaultHistoryRotatedFiles = 10
+	logHistoryBufferSize       = 64 * 1024
+	logHistoryFlushInterval    = time.Second
 )
 
 var levels = map[string]int{
@@ -77,6 +79,10 @@ type logHistory struct {
 	entryCount      int
 	retainedEntries int
 	oldestID        uint64
+	file            *os.File
+	writer          *bufio.Writer
+	closed          bool
+	done            chan struct{}
 }
 
 func New(level string, accessLog bool) *Logger {
@@ -125,12 +131,25 @@ func (l *Logger) EnableHistory(path string, entriesPerFile, maxFiles int) error 
 	if l == nil {
 		return nil
 	}
+	if l.history != nil {
+		if err := l.history.Close(); err != nil {
+			return err
+		}
+		l.history = nil
+	}
 	history, err := newLogHistory(path, entriesPerFile, maxFiles)
 	if err != nil {
 		return err
 	}
 	l.history = history
 	return nil
+}
+
+func (l *Logger) Close() error {
+	if l == nil || l.history == nil {
+		return nil
+	}
+	return l.history.Close()
 }
 
 func (l *Logger) Page(limit int, before uint64) LogPage {
@@ -265,16 +284,20 @@ func newLogHistory(path string, entriesPerFile, maxFiles int) (*logHistory, erro
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return nil, err
 	}
-	h := &logHistory{path: path, entriesPerFile: entriesPerFile, maxFiles: maxFiles}
+	h := &logHistory{path: path, entriesPerFile: entriesPerFile, maxFiles: maxFiles, done: make(chan struct{})}
 	if err := h.reset(); err != nil {
 		return nil, err
 	}
+	go h.flushLoop()
 	return h, nil
 }
 
 func (h *logHistory) reset() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if err := h.closeWriterLocked(); err != nil {
+		return err
+	}
 	for _, path := range h.pathsNewestFirst() {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
@@ -289,6 +312,9 @@ func (h *logHistory) reset() error {
 func (h *logHistory) Append(entry LogEntry) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
 	if h.entryCount >= h.entriesPerFile {
 		if err := h.rotateLocked(); err != nil {
 			return err
@@ -298,12 +324,13 @@ func (h *logHistory) Append(entry LogEntry) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(h.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
+	if err := h.ensureWriterLocked(); err != nil {
 		return err
 	}
-	defer f.Close()
-	if _, err := f.Write(append(b, '\n')); err != nil {
+	if _, err := h.writer.Write(b); err != nil {
+		return err
+	}
+	if err := h.writer.WriteByte('\n'); err != nil {
 		return err
 	}
 	h.entryCount++
@@ -312,6 +339,79 @@ func (h *logHistory) Append(entry LogEntry) error {
 		h.oldestID = entry.ID
 	}
 	return nil
+}
+
+func (h *logHistory) Close() error {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
+	h.closed = true
+	close(h.done)
+	return h.closeWriterLocked()
+}
+
+func (h *logHistory) flushLoop() {
+	ticker := time.NewTicker(logHistoryFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			h.mu.Lock()
+			if h.closed {
+				h.mu.Unlock()
+				return
+			}
+			_ = h.flushWriterLocked()
+			h.mu.Unlock()
+		case <-h.done:
+			return
+		}
+	}
+}
+
+func (h *logHistory) ensureWriterLocked() error {
+	if h.writer != nil && h.file != nil {
+		return nil
+	}
+	f, err := os.OpenFile(h.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	h.file = f
+	h.writer = bufio.NewWriterSize(f, logHistoryBufferSize)
+	return nil
+}
+
+func (h *logHistory) flushWriterLocked() error {
+	if h.writer == nil {
+		return nil
+	}
+	if err := h.writer.Flush(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *logHistory) closeWriterLocked() error {
+	var firstErr error
+	if h.writer != nil {
+		if err := h.writer.Flush(); err != nil {
+			firstErr = err
+		}
+		h.writer = nil
+	}
+	if h.file != nil {
+		if err := h.file.Close(); firstErr == nil && err != nil {
+			firstErr = err
+		}
+		h.file = nil
+	}
+	return firstErr
 }
 
 func (h *logHistory) HasBefore(id uint64) bool {
@@ -326,6 +426,9 @@ func (h *logHistory) HasBefore(id uint64) bool {
 func (h *logHistory) Page(limit int, before uint64) ([]LogEntry, bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if err := h.flushWriterLocked(); err != nil {
+		return nil, false, err
+	}
 	if limit <= 0 {
 		limit = h.entriesPerFile
 	}
@@ -347,6 +450,9 @@ func (h *logHistory) Page(limit int, before uint64) ([]LogEntry, bool, error) {
 }
 
 func (h *logHistory) rotateLocked() error {
+	if err := h.closeWriterLocked(); err != nil {
+		return err
+	}
 	if h.maxFiles <= 1 {
 		if err := os.Remove(h.path); err != nil && !os.IsNotExist(err) {
 			return err
