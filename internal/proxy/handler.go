@@ -560,6 +560,9 @@ func (h *Handler) logPlayback(in storage.PlaybackInput) {
 	if h == nil || h.store == nil {
 		return
 	}
+	if in.OccurredAt <= 0 {
+		in.OccurredAt = time.Now().UnixMilli()
+	}
 	_ = h.store.LogPlaybackAsync(in)
 }
 

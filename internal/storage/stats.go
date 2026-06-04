@@ -29,6 +29,7 @@ type PlaybackInput struct {
 	Mode       string
 	RequestURL string
 	Method     string
+	OccurredAt int64
 }
 
 const (
@@ -106,7 +107,7 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	if !in.IsPlayback {
 		return nil
 	}
-	now := time.Now().UnixMilli()
+	now := playbackOccurredAt(in)
 	day := BeijingDate(now)
 	uid := "admin"
 	nodeName := strings.ToLower(strings.TrimSpace(in.Node.Name))
@@ -189,7 +190,7 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 				bytes = bytes + excluded.bytes,
 				sessions = sessions + excluded.sessions,
 				errors = errors + excluded.errors,
-				updated_at = excluded.updated_at
+				updated_at = MAX(play_stats.updated_at, excluded.updated_at)
 		`, day, nodeName, client, playInc, bytes, sessInc, errInc, now); err != nil {
 			return err
 		}
@@ -203,12 +204,19 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 			INSERT INTO proxy_kv (k, v, updated_at) VALUES (?, ?, ?)
 			ON CONFLICT(k) DO UPDATE SET
 				v = CAST(CAST(proxy_kv.v AS INTEGER) + CAST(excluded.v AS INTEGER) AS TEXT),
-				updated_at = excluded.updated_at
+				updated_at = MAX(proxy_kv.updated_at, excluded.updated_at)
 		`, key, strconv.FormatInt(playInc, 10), now); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+func playbackOccurredAt(in PlaybackInput) int64 {
+	if in.OccurredAt > 0 {
+		return in.OccurredAt
+	}
+	return time.Now().UnixMilli()
 }
 
 func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) {

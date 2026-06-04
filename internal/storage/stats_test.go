@@ -132,3 +132,70 @@ func TestLogPlaybackAsyncDoesNotWaitForDatabase(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestLogPlaybackAsyncUsesOccurredAtForStatsTime(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	occurredAt := time.Date(2000, 1, 2, 15, 59, 59, 0, time.UTC).UnixMilli()
+	input := PlaybackInput{
+		Node:       Node{Name: "occurred"},
+		RequestIP:  "127.0.0.1",
+		Headers:    http.Header{"User-Agent": {"time-client"}},
+		Status:     http.StatusOK,
+		RespHeader: http.Header{"Content-Length": {"4096"}},
+		IsPlayback: true,
+		Mode:       "proxy",
+		RequestURL: "/emby/videos/3/stream",
+		Method:     http.MethodGet,
+		OccurredAt: occurredAt,
+	}
+	if ok := store.LogPlaybackAsync(input); !ok {
+		t.Fatal("LogPlaybackAsync() returned false")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var day string
+		var updatedAt int64
+		err := store.db.QueryRowContext(ctx, `
+			SELECT day, updated_at
+			FROM play_stats
+			WHERE node = ? AND client = ?
+		`, "occurred", "time-client").Scan(&day, &updatedAt)
+		if err == nil && day == "2000-01-02" && updatedAt == occurredAt {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("async playback stat used wrong time; day=%q updatedAt=%d err=%v", day, updatedAt, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var lastPlayAt int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT last_play_ts FROM keepalive_state WHERE node = ?
+	`, "admin:occurred").Scan(&lastPlayAt); err != nil {
+		t.Fatalf("query keepalive_state error = %v", err)
+	}
+	if lastPlayAt != occurredAt {
+		t.Fatalf("last_play_ts = %d; want %d", lastPlayAt, occurredAt)
+	}
+
+	var counter string
+	var counterUpdatedAt int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT v, updated_at FROM proxy_kv WHERE k = ?
+	`, "stats:proxyPlays:2000-01-02").Scan(&counter, &counterUpdatedAt); err != nil {
+		t.Fatalf("query proxy play counter error = %v", err)
+	}
+	if counter != "1" || counterUpdatedAt != occurredAt {
+		t.Fatalf("proxy play counter = %q updatedAt=%d; want 1 updatedAt=%d", counter, counterUpdatedAt, occurredAt)
+	}
+}
