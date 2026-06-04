@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -161,6 +162,57 @@ func TestNewProxyHTTPClientUsesTransportTimeouts(t *testing.T) {
 	if followClient.CheckRedirect != nil {
 		t.Fatal("follow client should use default redirect behavior")
 	}
+}
+
+func TestDialWebSocketTimesOutWaitingForUpgradeResponse(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		<-stop
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	target, err := url.Parse("http://" + ln.Addr().String() + "/emby/socket")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, conn, _, err := (&Handler{}).dialWebSocket(ctx, target, http.Header{})
+		if conn != nil {
+			_ = conn.Close()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("dialWebSocket() error = nil, want timeout")
+		}
+	case <-time.After(750 * time.Millisecond):
+		close(stop)
+		_ = ln.Close()
+		<-done
+		t.Fatal("dialWebSocket() did not time out waiting for upgrade response")
+	}
+	close(stop)
+	_ = ln.Close()
+	<-done
 }
 
 func TestRawHTTPClientUsesProtectedDirectDialer(t *testing.T) {

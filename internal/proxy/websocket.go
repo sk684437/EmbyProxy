@@ -20,6 +20,11 @@ import (
 	"embyproxy/internal/storage"
 )
 
+const (
+	webSocketDialTimeout      = 15 * time.Second
+	webSocketHandshakeTimeout = 60 * time.Second
+)
+
 func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request, node storage.Node, parsed parsedRoute) {
 	ctx := r.Context()
 	requestID := requestID(r, h.log)
@@ -138,6 +143,10 @@ func (h *Handler) dialWebSocket(ctx context.Context, target *url.URL, headers ht
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if err := conn.SetDeadline(webSocketHandshakeDeadline(ctx)); err != nil {
+		_ = conn.Close()
+		return nil, nil, nil, err
+	}
 	reqURL := *target
 	if reqURL.Scheme == "ws" {
 		reqURL.Scheme = "http"
@@ -163,11 +172,18 @@ func (h *Handler) dialWebSocket(ctx context.Context, target *url.URL, headers ht
 		_ = conn.Close()
 		return nil, nil, nil, err
 	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		if res.Body != nil {
+			_ = res.Body.Close()
+		}
+		return nil, nil, nil, err
+	}
 	return res, conn, reader, nil
 }
 
 func dialWebSocketConn(ctx context.Context, target *url.URL) (net.Conn, error) {
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{Timeout: webSocketDialTimeout, KeepAlive: 30 * time.Second}
 	addr := target.Host
 	if !strings.Contains(addr, ":") {
 		addr += ":" + defaultWebSocketPort(target.Scheme)
@@ -176,6 +192,10 @@ func dialWebSocketConn(ctx context.Context, target *url.URL) (net.Conn, error) {
 	case "https", "wss":
 		rawConn, err := dialer.DialContext(ctx, "tcp", addr)
 		if err != nil {
+			return nil, err
+		}
+		if err := rawConn.SetDeadline(webSocketHandshakeDeadline(ctx)); err != nil {
+			_ = rawConn.Close()
 			return nil, err
 		}
 		tlsConn := tls.Client(rawConn, &tls.Config{ServerName: target.Hostname()})
@@ -189,6 +209,14 @@ func dialWebSocketConn(ctx context.Context, target *url.URL) (net.Conn, error) {
 	default:
 		return nil, fmt.Errorf("unsupported websocket target scheme: %s", target.Scheme)
 	}
+}
+
+func webSocketHandshakeDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(webSocketHandshakeTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		return ctxDeadline
+	}
+	return deadline
 }
 
 func defaultWebSocketPort(scheme string) string {
