@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -89,6 +88,16 @@ var Profiles = map[string]Profile{
 }
 
 var ProfileOrder = []string{DefaultProfile, "hills_android", "hills_windows"}
+
+var (
+	embyAuthorizationRE = regexp.MustCompile(`(?i)^(MediaBrowser|Emby)\b`)
+	mediaBrowserFieldRE = map[string]*regexp.Regexp{
+		"Client":   regexp.MustCompile(`(?i)\bClient\s*=\s*(?:"[^"]*"|[^,\s]+)`),
+		"Device":   regexp.MustCompile(`(?i)\bDevice\s*=\s*(?:"[^"]*"|[^,\s]+)`),
+		"DeviceId": regexp.MustCompile(`(?i)\bDeviceId\s*=\s*(?:"[^"]*"|[^,\s]+)`),
+		"Version":  regexp.MustCompile(`(?i)\bVersion\s*=\s*(?:"[^"]*"|[^,\s]+)`),
+	}
+)
 
 func NewManager(store *storage.Store) *Manager {
 	return &Manager{store: store, profiles: map[string]deviceState{}}
@@ -216,7 +225,7 @@ func RewriteMediaBrowserAuthorization(value string, snap Snapshot) string {
 }
 
 func isEmbyAuthorization(value string) bool {
-	return regexp.MustCompile(`(?i)^(MediaBrowser|Emby)\b`).MatchString(strings.TrimSpace(value))
+	return embyAuthorizationRE.MatchString(strings.TrimSpace(value))
 }
 
 func NormalizeProfile(value string) string {
@@ -334,7 +343,16 @@ func isHexLength(value string, length int) bool {
 	if length <= 0 {
 		length = 32
 	}
-	return regexp.MustCompile(`(?i)^[0-9a-f]{` + strconv.Itoa(length) + `}$`).MatchString(value)
+	if len(value) != length {
+		return false
+	}
+	for _, ch := range value {
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func randomHex(length int) string {
@@ -354,7 +372,10 @@ func createHillsWindowsDeviceName() string {
 
 func setMediaBrowserField(auth, key, value string) string {
 	escaped := strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`)
-	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(key) + `\s*=\s*(?:"[^"]*"|[^,\s]+)`)
+	re := mediaBrowserFieldRE[key]
+	if re == nil {
+		re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(key) + `\s*=\s*(?:"[^"]*"|[^,\s]+)`)
+	}
 	if re.MatchString(auth) {
 		return re.ReplaceAllString(auth, key+`="`+escaped+`"`)
 	}
