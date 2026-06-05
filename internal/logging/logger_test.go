@@ -50,7 +50,7 @@ func TestLoggerEntriesReturnsRedactedConsoleLines(t *testing.T) {
 	if strings.Contains(got.Line, "secret-key") {
 		t.Fatalf("entry line leaked sensitive query value: %q", got.Line)
 	}
-	for _, want := range []string{"INFO", "[proxy]", "status=200", "api_key=<redacted>", "Fields=Name"} {
+	for _, want := range []string{"INFO", "[200]", "[proxy]", "api_key=<redacted>", "Fields=Name"} {
 		if !strings.Contains(got.Line, want) {
 			t.Fatalf("entry line = %q, want to contain %q", got.Line, want)
 		}

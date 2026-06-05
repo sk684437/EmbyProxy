@@ -191,7 +191,12 @@ func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 	if !l.Enabled(level) {
 		return
 	}
-	parts := []string{time.Now().UTC().Format(time.RFC3339), strings.ToUpper(level), "[" + scope + "]"}
+	status := promotedMetaValue(meta, "status")
+	parts := []string{time.Now().UTC().Format(time.RFC3339), "[" + strings.ToUpper(level) + "]"}
+	if status != "" {
+		parts = append(parts, "["+status+"]")
+	}
+	parts = append(parts, "["+scope+"]")
 	if clean := RedactText(msg); clean != "" {
 		parts = append(parts, clean)
 	}
@@ -653,6 +658,9 @@ func formatMeta(meta map[string]any) string {
 	}
 	keys := make([]string, 0, len(meta))
 	for key, value := range meta {
+		if key == "status" {
+			continue
+		}
 		if value != nil && fmt.Sprint(value) != "" {
 			keys = append(keys, key)
 		}
@@ -663,6 +671,17 @@ func formatMeta(meta map[string]any) string {
 		parts = append(parts, key+"="+formatValue(meta[key]))
 	}
 	return strings.Join(parts, " ")
+}
+
+func promotedMetaValue(meta map[string]any, key string) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	value, ok := meta[key]
+	if !ok || value == nil || fmt.Sprint(value) == "" {
+		return ""
+	}
+	return formatValue(value)
 }
 
 func formatValue(value any) string {
