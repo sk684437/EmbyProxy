@@ -112,6 +112,7 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 
 func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, body []byte, env config.ProxyEnv, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI bool, reqOrigin, clientIP string) (*http.Response, error) {
 	isStreamingMedia := isPlaybackAPI || streamingRE.MatchString(finalURL.Path)
+	directExternalPlayback := node.DirectExternal && isPlaybackAPI && !isAdditionalPartsAPI && (r.Method == http.MethodGet || r.Method == http.MethodHead)
 	hClean := buildCleanProxyHeaders(h.ids, r.Header, finalURL, node, env, isStreamingMedia)
 	for _, key := range []string{"X-Emby-Authorization", "X-Emby-Token", "X-MediaBrowser-Token", "Authorization", "Cookie"} {
 		if value := r.Header.Get(key); value != "" {
@@ -182,10 +183,32 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		defer release()
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": finalURL.String(), "outboundHeaders": hClean})
-	res, err := h.fetchTarget(ctx, finalURL, r.Method, hClean, body, true)
+	res, err := h.fetchTarget(ctx, finalURL, r.Method, hClean, body, !directExternalPlayback)
 	if err != nil {
 		finishImageCacheFill()
 		return nil, err
+	}
+	if directExternalPlayback && isRedirectStatus(res.StatusCode) && res.Header.Get("Location") != "" {
+		base := finalURL
+		if parsedBase, err := url.Parse(node.Target); err == nil && parsedBase.Host != "" {
+			base = parsedBase
+		}
+		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "playback-redirect", "targetUrl": finalURL.String(), "outboundHeaders": hClean})
+		out, err := h.finishGeneralResponse(ctx, r, res, node, parsed, finalURL, base, hClean, env, reqOrigin, false, false, isStreamingMedia)
+		if err != nil {
+			finishImageCacheFill()
+			return nil, err
+		}
+		mode := playbackRedirectMode(r, out)
+		stage := "playback-redirect"
+		targetURL := finalURL.String()
+		if mode == "direct" {
+			stage = "playback-direct-302"
+			targetURL = strings.TrimSpace(out.Header.Get("Location"))
+		}
+		capture.SetMeta(r, map[string]any{"mode": mode, "stage": stage, "targetUrl": targetURL})
+		h.logPlayback(storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: out.StatusCode, RespHeader: out.Header, IsPlayback: true, Mode: mode, RequestURL: r.URL.RequestURI(), Method: r.Method})
+		return out, nil
 	}
 	if isImageAPI && res.StatusCode == http.StatusForbidden {
 		_ = res.Body.Close()
@@ -312,11 +335,6 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 		if direct {
 			_ = res.Body.Close()
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": parsed.Name, "secret": node.Secret, "stage": "location-direct", "targetUrl": directURL})
-			if isTrustedSmartSTRMPath(parsed.Path) {
-				trustedEnv := env
-				trustedEnv.ExternalAllowAny = true
-				return h.handleDirect(ctx, r, directURL, trustedEnv, node, nil)
-			}
 			return h.handleDirect(ctx, r, directURL, env, node, nil)
 		}
 		if rewritten != "" {
@@ -400,11 +418,6 @@ func (h *Handler) rewriteLocation(r *http.Request, location string, node storage
 		return "", true, loc.String()
 	}
 	return loc.String(), false, ""
-}
-
-func isTrustedSmartSTRMPath(path string) bool {
-	path = strings.ToLower(strings.TrimRight(strings.TrimSpace(path), "/"))
-	return path == "/smartstrm" || path == "/emby/smartstrm"
 }
 
 func (h *Handler) rewriteBodyLinks(ctx context.Context, text, requestURL string, currentNode storage.Node, currentName, currentKey string) string {
@@ -510,13 +523,35 @@ func setImageCacheControl(headers http.Header, status int, cacheValue string) {
 }
 
 func isAuthSuccess(res *http.Response) bool {
-	if res.StatusCode == http.StatusMovedPermanently || res.StatusCode == http.StatusFound || res.StatusCode == http.StatusSeeOther || res.StatusCode == http.StatusTemporaryRedirect || res.StatusCode == http.StatusPermanentRedirect {
+	if isRedirectStatus(res.StatusCode) {
 		return false
 	}
 	if !strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "application/json") {
 		return false
 	}
 	return res.StatusCode == http.StatusOK || res.StatusCode == http.StatusUnauthorized
+}
+
+func isRedirectStatus(status int) bool {
+	return status == http.StatusMovedPermanently || status == http.StatusFound || status == http.StatusSeeOther || status == http.StatusTemporaryRedirect || status == http.StatusPermanentRedirect
+}
+
+func playbackRedirectMode(r *http.Request, res *http.Response) string {
+	if res == nil || !isRedirectStatus(res.StatusCode) {
+		return "proxy"
+	}
+	location := strings.TrimSpace(res.Header.Get("Location"))
+	if location == "" || (strings.HasPrefix(location, "/") && !strings.HasPrefix(location, "//")) {
+		return "proxy"
+	}
+	u, err := url.Parse(location)
+	if err != nil || u.Host == "" {
+		return "proxy"
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return "proxy"
+	}
+	return "direct"
 }
 
 func cloneURL(u *url.URL) *url.URL {

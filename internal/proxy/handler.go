@@ -510,13 +510,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	}
 	nodeDirect := node.DirectExternal
 	isGetLike := r.Method == http.MethodGet || r.Method == http.MethodHead
-	if nodeDirect && isPlaybackAPI && !isAdditionalPartsAPI && isGetLike {
-		capture.SetMeta(r, map[string]any{"mode": "direct", "node": parsed.Name, "secret": node.Secret, "stage": "playback-direct-302", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-		res := textResponse(http.StatusFound, "", http.Header{"Location": []string{finalURL.String()}, "Cache-Control": []string{"no-store"}, "X-FD-Stage": []string{"playback-direct-302"}})
-		h.logPlayback(storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: res.Header, IsPlayback: true, Mode: "direct", RequestURL: r.URL.RequestURI(), Method: r.Method})
-		return res, nil
-	}
-	shouldProxyMedia := (!nodeDirect && (isPlaybackAPI || isImageAPI || isAdditionalPartsAPI)) || (nodeDirect && (isAdditionalPartsAPI || isImageAPI))
+	shouldProxyMedia := (!nodeDirect && (isPlaybackAPI || isImageAPI || isAdditionalPartsAPI)) || (nodeDirect && (isAdditionalPartsAPI || isImageAPI || (isPlaybackAPI && isGetLike)))
 	if shouldProxyMedia {
 		return h.handleMediaProxy(ctx, r, node, parsed, finalURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
 	}

@@ -560,7 +560,7 @@ tr:last-child td{border-bottom:0}
       <div id="advSection" class="section-grid">
         <div class="inline-check form-full">
           <input type="checkbox" id="f-directExternal"/>
-          <label for="f-directExternal">直连外链（播放时跳转到真实地址）</label>
+          <label for="f-directExternal">直连外链（当播放上游返回 302 时，客户端直连视频流）</label>
         </div>
       </div>
 
@@ -1206,7 +1206,7 @@ function nodeCard(n) {
       ${n.tag?`<span class="node-tag">${esc(n.tag)}</span>`:''}
       <span class="chip blue">${targets.length} 上游</span>
       ${n.secret?'<span class="chip warn">密钥</span>':'<span class="chip">公开</span>'}
-      ${n.directExternal?'<span class="chip blue">直连</span>':''}
+      ${n.directExternal?'<span class="chip blue">302直连</span>':''}
       ${n.renewDays?'<span class="chip ok">保号</span>':''}
       <span class="chip">${n.impersonate === false ? '透传' : '伪装：' + esc(identityLabel)}</span>
     </div>

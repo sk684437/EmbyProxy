@@ -28,6 +28,48 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+func newProxyTestHandler(t *testing.T, node storage.Node) *Handler {
+	t.Helper()
+	if node.Name == "" {
+		node.Name = "node"
+	}
+	if node.Secret == "" {
+		node.Secret = "secret"
+	}
+	if node.Target == "" {
+		node.Target = "https://upstream.example"
+	}
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	return New(config.Config{}, store, nil, logging.New("silent", false))
+}
+
+func noRedirectClient(rt roundTripFunc) *http.Client {
+	return &http.Client{
+		Transport: rt,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func failRoundTripClient(t *testing.T, message string) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Helper()
+		t.Fatalf("%s: %s", message, req.URL.String())
+		return nil, nil
+	})}
+}
+
 type trackedBody struct {
 	reader *strings.Reader
 	closed bool
@@ -638,64 +680,30 @@ func TestFinishGeneralResponseBlocksPrivateCrossHostLocationDirect(t *testing.T)
 	}
 }
 
-func TestFinishGeneralResponseTrustsSmartSTRMPublicLocationDirect(t *testing.T) {
-	tests := []struct {
-		name         string
-		location     string
-		wantStatus   int
-		wantRawCalls int
-	}{
-		{
-			name:         "public target",
-			location:     "http://8.8.8.8/video.mkv?sign=abc",
-			wantStatus:   http.StatusOK,
-			wantRawCalls: 1,
-		},
-		{
-			name:         "private target",
-			location:     "http://127.0.0.1/private",
-			wantStatus:   http.StatusForbidden,
-			wantRawCalls: 0,
-		},
+func TestFinishGeneralResponseBlocksUntrustedCrossHostLocation(t *testing.T) {
+	rawCalls := 0
+	h := New(config.Config{}, nil, nil, logging.New("silent", false))
+	h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rawCalls++
+		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/redirect-public", nil)
+	finalURL, err := url.Parse("https://upstream.example/emby/redirect-public")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				_ = store.Close()
-			})
-			rawCalls := 0
-			h := New(config.Config{}, store, nil, logging.New("silent", false))
-			h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				rawCalls++
-				if req.URL.String() != tt.location {
-					t.Fatalf("raw URL = %q, want %q", req.URL.String(), tt.location)
-				}
-				return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
-			})}
-			req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/smartstrm?item_id=1&media_id=2", nil)
-			finalURL, err := url.Parse("https://upstream.example/emby/smartstrm?item_id=1&media_id=2")
-			if err != nil {
-				t.Fatal(err)
-			}
-			res := textResponse(http.StatusFound, "", http.Header{"Location": []string{tt.location}})
+	res := textResponse(http.StatusFound, "", http.Header{"Location": []string{"http://8.8.8.8/video.mkv?sign=abc"}})
 
-			out, err := h.finishGeneralResponse(ctx, req, res, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/smartstrm"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
-			if err != nil {
-				t.Fatalf("finishGeneralResponse() error = %v", err)
-			}
-			defer out.Body.Close()
-			if out.StatusCode != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", out.StatusCode, tt.wantStatus)
-			}
-			if rawCalls != tt.wantRawCalls {
-				t.Fatalf("raw direct calls = %d, want %d", rawCalls, tt.wantRawCalls)
-			}
-		})
+	out, err := h.finishGeneralResponse(context.Background(), req, res, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/redirect-public"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+	if err != nil {
+		t.Fatalf("finishGeneralResponse() error = %v", err)
+	}
+	defer out.Body.Close()
+	if out.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", out.StatusCode, http.StatusForbidden)
+	}
+	if rawCalls != 0 {
+		t.Fatalf("raw direct calls = %d, want 0", rawCalls)
 	}
 }
 
@@ -746,6 +754,163 @@ func TestServeHTTPRewritesSystemInfoAddressesWithTargetPathPrefix(t *testing.T) 
 	want := "https://proxy.example/node/secret"
 	if payload["WanAddress"] != want || payload["LocalAddress"] != want {
 		t.Fatalf("addresses = WanAddress %q, LocalAddress %q; want %q", payload["WanAddress"], payload["LocalAddress"], want)
+	}
+}
+
+func TestDirectExternalPlaybackUsesObservedUpstreamResponse(t *testing.T) {
+	tests := []struct {
+		name            string
+		requestURI      string
+		wantUpstreamURL string
+		rangeHeader     string
+		upstream        *http.Response
+		wantStatus      int
+		wantLocation    string
+		wantBody        string
+		wantMode        string
+	}{
+		{
+			name:            "video non redirect stays proxied",
+			requestURI:      "https://proxy.example/node/secret/emby/Videos/1/stream.mp4?Static=true",
+			wantUpstreamURL: "https://upstream.example/emby/Videos/1/stream.mp4?Static=true",
+			rangeHeader:     "bytes=0-",
+			upstream: bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
+				"Accept-Ranges":  []string{"bytes"},
+				"Content-Range":  []string{"bytes 0-4/5"},
+				"Content-Type":   []string{"video/mp4"},
+				"Content-Length": []string{"5"},
+			}),
+			wantStatus: http.StatusPartialContent,
+			wantBody:   "video",
+		},
+		{
+			name:            "video external redirect is forwarded",
+			requestURI:      "https://proxy.example/node/secret/emby/Videos/1/stream.mp4?Static=true",
+			wantUpstreamURL: "https://upstream.example/emby/Videos/1/stream.mp4?Static=true",
+			upstream: textResponse(http.StatusFound, "", http.Header{
+				"Location": []string{"http://cdn.example/video.mp4?sign=abc"},
+			}),
+			wantStatus:   http.StatusFound,
+			wantLocation: "http://cdn.example/video.mp4?sign=abc",
+			wantMode:     "direct",
+		},
+		{
+			name:            "video same-host redirect is rewritten",
+			requestURI:      "https://proxy.example/node/secret/emby/Videos/1/stream.mp4?Static=true",
+			wantUpstreamURL: "https://upstream.example/emby/Videos/1/stream.mp4?Static=true",
+			upstream: textResponse(http.StatusFound, "", http.Header{
+				"Location": []string{"https://upstream.example/emby/Videos/2/stream.mp4?Static=true"},
+			}),
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://proxy.example/node/secret/emby/Videos/2/stream.mp4?Static=true",
+			wantMode:     "proxy",
+		},
+		{
+			name:            "smartstrm external redirect is forwarded",
+			requestURI:      "https://proxy.example/node/secret/emby/smartstrm?item_id=1&media_id=2",
+			wantUpstreamURL: "https://upstream.example/emby/smartstrm?item_id=1&media_id=2",
+			upstream: textResponse(http.StatusFound, "", http.Header{
+				"Location": []string{"http://cdn.example/smartstrm.mp4?sign=abc"},
+			}),
+			wantStatus:   http.StatusFound,
+			wantLocation: "http://cdn.example/smartstrm.mp4?sign=abc",
+			wantMode:     "direct",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamCalls := 0
+			h := newProxyTestHandler(t, storage.Node{DirectExternal: true})
+			h.manualClient = noRedirectClient(func(req *http.Request) (*http.Response, error) {
+				upstreamCalls++
+				if req.URL.String() != tt.wantUpstreamURL {
+					t.Fatalf("upstream request URL = %q, want %q", req.URL.String(), tt.wantUpstreamURL)
+				}
+				if tt.rangeHeader != "" && req.Header.Get("Range") != tt.rangeHeader {
+					t.Fatalf("Range = %q, want %q", req.Header.Get("Range"), tt.rangeHeader)
+				}
+				return tt.upstream, nil
+			})
+			h.followClient = failRoundTripClient(t, "follow client should not be used for DirectExternal playback probe")
+			h.rawClient = failRoundTripClient(t, "raw client should not be used for DirectExternal playback response")
+
+			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil)
+			if tt.rangeHeader != "" {
+				req.Header.Set("Range", tt.rangeHeader)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+
+			if rr.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", rr.Code, tt.wantStatus, rr.Body.String())
+			}
+			if got := rr.Header().Get("Location"); got != tt.wantLocation {
+				t.Fatalf("Location = %q, want %q", got, tt.wantLocation)
+			}
+			if tt.wantBody != "" && rr.Body.String() != tt.wantBody {
+				t.Fatalf("body = %q, want %q", rr.Body.String(), tt.wantBody)
+			}
+			if tt.wantMode != "" {
+				result := rr.Result()
+				defer result.Body.Close()
+				if mode := playbackRedirectMode(req, result); mode != tt.wantMode {
+					t.Fatalf("playbackRedirectMode = %q, want %q", mode, tt.wantMode)
+				}
+			}
+			if upstreamCalls != 1 {
+				t.Fatalf("upstream calls = %d, want 1", upstreamCalls)
+			}
+		})
+	}
+}
+
+func TestSmartSTRMUsesPlaybackProxyWithoutWhitelist(t *testing.T) {
+	h := newProxyTestHandler(t, storage.Node{})
+	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://upstream.example/emby/smartstrm?item_id=1&media_id=2" {
+			t.Fatalf("upstream request URL = %q", req.URL.String())
+		}
+		return bytesResponse(http.StatusPartialContent, []byte("smartstrm-video"), http.Header{
+			"Accept-Ranges": []string{"bytes"},
+			"Content-Type":  []string{"video/mp4"},
+		}), nil
+	})}
+	h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("raw client should not be used for /smartstrm playback proxy")
+		return nil, nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/smartstrm?item_id=1&media_id=2", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusPartialContent, rr.Body.String())
+	}
+	if rr.Body.String() != "smartstrm-video" {
+		t.Fatalf("body = %q, want smartstrm-video", rr.Body.String())
+	}
+}
+
+func TestPlaybackRedirectModeClassifiesExternalLocations(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Videos/1/stream.mp4", nil)
+	tests := []struct {
+		name     string
+		location string
+		want     string
+	}{
+		{name: "external absolute", location: "http://cdn.example/video.mp4", want: "direct"},
+		{name: "proxy absolute", location: "https://proxy.example/node/secret/emby/Videos/1/stream.mp4", want: "proxy"},
+		{name: "relative", location: "/node/secret/emby/Videos/1/stream.mp4", want: "proxy"},
+		{name: "empty", location: "", want: "proxy"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := textResponse(http.StatusFound, "", http.Header{"Location": []string{tt.location}})
+			if got := playbackRedirectMode(req, res); got != tt.want {
+				t.Fatalf("playbackRedirectMode() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

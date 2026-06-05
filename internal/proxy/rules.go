@@ -166,7 +166,7 @@ type mapHeader interface {
 
 func isPlaybackPath(path string) bool {
 	p := strings.ToLower(path)
-	return strings.Contains(p, "/emby/") && (strings.Contains(p, "/videos/") || strings.Contains(p, "/playback/") || strings.Contains(p, "/sessions/playing") ||
+	return strings.Contains(p, "/emby/") && (strings.Contains(p, "/smartstrm") || strings.Contains(p, "/videos/") || strings.Contains(p, "/playback/") || strings.Contains(p, "/sessions/playing") ||
 		(strings.Contains(p, "/items/") && (strings.Contains(p, "/download") || strings.Contains(p, "/stream") || strings.Contains(p, "/file"))) ||
 		strings.Contains(p, "/audio/") || strings.Contains(p, "/hls/") || strings.Contains(p, "/dash/") ||
 		playbackMediaExtRE.MatchString(p))
