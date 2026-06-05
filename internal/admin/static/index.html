@@ -139,7 +139,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .proxy-line{display:flex;align-items:center;gap:8px;min-width:0}
 .mono{font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px;color:var(--ink-3);word-break:break-all;background:var(--paper-2);border:1px solid var(--line);border-radius:14px;padding:6px 7px 6px 10px;min-width:0;flex:1;display:flex;align-items:center;gap:8px}
 .proxy-text{min-width:0;flex:1;word-break:break-all}
-.mono.is-hidden .proxy-text{font-family:"HarmonyOS Sans SC","MiSans","PingFang SC","Microsoft YaHei UI",sans-serif;color:var(--ink-3);font-weight:800;letter-spacing:0}
+.mono.is-hidden .proxy-text{height:16px;overflow:hidden;white-space:nowrap;word-break:normal;color:var(--ink-3);font-size:0;line-height:1}
+.mono.is-hidden .proxy-text::before{content:"";display:block;width:100%;height:100%;background:radial-gradient(circle,currentColor 2px,transparent 2.3px) left center/10px 10px repeat-x}
 .reveal-button{width:28px;height:28px;border-radius:10px;border:1px solid var(--line);background:var(--paper);color:var(--ink-3);cursor:pointer;display:grid;place-items:center;flex-shrink:0}
 .reveal-button:hover,.reveal-button.on{border-color:var(--pine);color:var(--pine);background:var(--pine-wash)}
 .reveal-button svg{width:17px;height:17px;display:block;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
