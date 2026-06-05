@@ -969,7 +969,23 @@ func retryableStatusLogFields(res *http.Response, fields map[string]any) map[str
 
 func targetHeadersReceivedLogFields(ctx context.Context, res *http.Response, fields map[string]any) map[string]any {
 	fields = withAccessLogFields(ctx, fields)
+	fields = withRedirectLocationLogField(res, fields)
 	return foldActualTargetLogField(fields, responseLogTarget(res))
+}
+
+func withRedirectLocationLogField(res *http.Response, fields map[string]any) map[string]any {
+	if res == nil || !isRedirectStatus(res.StatusCode) {
+		return fields
+	}
+	location := strings.TrimSpace(res.Header.Get("Location"))
+	if location == "" {
+		return fields
+	}
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	fields["location"] = logging.RedactURL(location)
+	return fields
 }
 
 func responseLogTarget(res *http.Response) string {
@@ -991,6 +1007,9 @@ func foldActualTargetLogField(fields map[string]any, actualTarget string) map[st
 }
 
 func setAccessLogTargetFields(ctx context.Context, fields map[string]any) {
+	if location, ok := fields["location"]; ok {
+		SetAccessLogField(ctx, "location", location)
+	}
 	nodeTarget, ok := fields["nodeTarget"]
 	if !ok {
 		return
