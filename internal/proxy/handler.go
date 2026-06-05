@@ -327,7 +327,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 		res, err := h.handleOneTarget(ctx, r, nodeTry, parsed, body, env)
 		if err != nil {
 			h.lineBan.Set(banKey, 1, time.Minute)
-			h.log.Warn("proxy", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "ms": time.Since(started).Milliseconds(), "error": err.Error()})
+			h.log.Warn("proxy", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()})
 			lastErr = err
 			h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Bad Gateway", nil))
 			continue
@@ -337,15 +337,16 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			h.closeBody(lastRes)
 			lastRes = nil
 			h.markTargetHealthy(nodeKey, targets, target, expectedActive)
-			targetMs := time.Since(started).Milliseconds()
-			logFields := targetHeadersReceivedLogFields(ctx, res, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": targetMs})
-			h.log.Info("proxy", "target headers received", logFields)
-			SetAccessLogField(ctx, "targetMs", targetMs)
+			responseReadyMs := time.Since(started).Milliseconds()
+			SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
+			MarkAccessLogResponseBodyStart(ctx, time.Now())
+			logFields := responseReadyLogFields(ctx, res, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "responseReadyMs": responseReadyMs})
+			h.log.Info("proxy", "response ready", logFields)
 			setAccessLogTargetFields(ctx, logFields)
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)
-		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "ms": time.Since(started).Milliseconds()}))
+		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "targetAttemptMs": time.Since(started).Milliseconds()}))
 		h.setLastResponse(&lastRes, res)
 	}
 	if tried == 0 {
@@ -967,7 +968,7 @@ func retryableStatusLogFields(res *http.Response, fields map[string]any) map[str
 	return fields
 }
 
-func targetHeadersReceivedLogFields(ctx context.Context, res *http.Response, fields map[string]any) map[string]any {
+func responseReadyLogFields(ctx context.Context, res *http.Response, fields map[string]any) map[string]any {
 	fields = withAccessLogFields(ctx, fields)
 	fields = withRedirectLocationLogField(res, fields)
 	return foldActualTargetLogField(fields, responseLogTarget(res))

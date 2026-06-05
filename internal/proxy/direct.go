@@ -106,7 +106,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 				capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-forbidden-redirect", "targetUrl": targetURL})
 				return localForbiddenResponse("direct", targetURL), nil
 			}
-			h.log.Warn("direct", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "ms": time.Since(started).Milliseconds(), "error": err.Error()})
+			h.log.Warn("direct", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()})
 			lastErr = err
 			continue
 		}
@@ -203,10 +203,11 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		}
 		addCORSHeaders(rh, reqOrigin, env)
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-completed", "targetUrl": targetURL, "outboundHeaders": currentHeaders})
-		targetMs := time.Since(started).Milliseconds()
+		responseReadyMs := time.Since(started).Milliseconds()
 		formattedTarget := logging.FormatTarget(targetURL)
-		h.log.Info("direct", "target headers received", map[string]any{"id": requestID, "node": nodeName, "target": formattedTarget, "status": res.StatusCode, "ms": targetMs})
-		SetAccessLogField(ctx, "targetMs", targetMs)
+		h.log.Info("direct", "response ready", map[string]any{"id": requestID, "node": nodeName, "target": formattedTarget, "status": res.StatusCode, "responseReadyMs": responseReadyMs})
+		SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
+		MarkAccessLogResponseBodyStart(ctx, time.Now())
 		res.Header = rh
 		h.closeBody(lastRes)
 		lastRes = nil

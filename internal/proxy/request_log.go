@@ -3,13 +3,16 @@ package proxy
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 type accessLogFieldsKey struct{}
 
 type accessLogFields struct {
-	mu     sync.Mutex
-	values map[string]any
+	mu                   sync.Mutex
+	values               map[string]any
+	responseBodyStart    time.Time
+	hasResponseBodyStart bool
 }
 
 func WithAccessLogFields(ctx context.Context) context.Context {
@@ -38,6 +41,29 @@ func AccessLogFields(ctx context.Context) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+// MarkAccessLogResponseBodyStart records when downstream response delivery begins.
+func MarkAccessLogResponseBodyStart(ctx context.Context, started time.Time) {
+	fields, ok := ctx.Value(accessLogFieldsKey{}).(*accessLogFields)
+	if !ok || started.IsZero() {
+		return
+	}
+	fields.mu.Lock()
+	defer fields.mu.Unlock()
+	fields.responseBodyStart = started
+	fields.hasResponseBodyStart = true
+}
+
+// AccessLogResponseBodyStart returns the recorded downstream response start time.
+func AccessLogResponseBodyStart(ctx context.Context) (time.Time, bool) {
+	fields, ok := ctx.Value(accessLogFieldsKey{}).(*accessLogFields)
+	if !ok {
+		return time.Time{}, false
+	}
+	fields.mu.Lock()
+	defer fields.mu.Unlock()
+	return fields.responseBodyStart, fields.hasResponseBodyStart
 }
 
 func withAccessLogFields(ctx context.Context, meta map[string]any) map[string]any {

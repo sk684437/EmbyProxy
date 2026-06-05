@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"embyproxy/internal/logging"
+	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
 )
 
@@ -48,6 +50,39 @@ func TestRequestMiddlewareWritesAccessLogByDefault(t *testing.T) {
 	}
 	if entries[0].Scope != "access" {
 		t.Fatalf("scope = %q, want access", entries[0].Scope)
+	}
+	if !strings.Contains(entries[0].Line, "totalMs=") {
+		t.Fatalf("access log line = %q, want totalMs field", entries[0].Line)
+	}
+	if strings.Contains(entries[0].Line, " ms=") {
+		t.Fatalf("access log line kept generic ms field: %q", entries[0].Line)
+	}
+}
+
+func TestRequestMiddlewareWritesBodyTimingAccessFields(t *testing.T) {
+	log := logging.New("info", true)
+	handler := requestMiddleware(log, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxy.SetAccessLogField(r.Context(), "responseReadyMs", int64(5))
+		proxy.MarkAccessLogResponseBodyStart(r.Context(), time.Now())
+		time.Sleep(time.Millisecond)
+		_, _ = w.Write([]byte("ok"))
+	}))
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/emby/videos/1/stream.mkv", nil))
+
+	entries := log.Entries(10)
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	for _, want := range []string{"totalMs=", "responseReadyMs=5", "bodyMs="} {
+		if !strings.Contains(entries[0].Line, want) {
+			t.Fatalf("access log line = %q, want %q", entries[0].Line, want)
+		}
+	}
+	for _, old := range []string{" ms=", "targetMs=", "targetHeaderMs="} {
+		if strings.Contains(entries[0].Line, old) {
+			t.Fatalf("access log line kept old timing field %q: %q", old, entries[0].Line)
+		}
 	}
 }
 

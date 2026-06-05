@@ -377,23 +377,23 @@ func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
 	_, _ = io.Copy(io.Discard, res.Body)
 	_ = res.Body.Close()
 
-	if _, ok := AccessLogFields(ctx)["targetMs"].(int64); !ok {
-		t.Fatalf("targetMs access log field = %T, want int64", AccessLogFields(ctx)["targetMs"])
+	if _, ok := AccessLogFields(ctx)["responseReadyMs"].(int64); !ok {
+		t.Fatalf("responseReadyMs access log field = %T, want int64", AccessLogFields(ctx)["responseReadyMs"])
 	}
 }
 
-func TestTargetHeadersReceivedLogFieldsUsesResponseTarget(t *testing.T) {
+func TestResponseReadyLogFieldsUsesResponseTarget(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
-	SetAccessLogField(ctx, "targetMs", int64(68))
+	SetAccessLogField(ctx, "responseReadyMs", int64(68))
 	req := httptest.NewRequest(http.MethodGet, "https://www.google.com/search?q=emby", nil)
 	res := &http.Response{StatusCode: http.StatusOK, Request: req}
 
-	fields := targetHeadersReceivedLogFields(ctx, res, map[string]any{
-		"id":     "req-1",
-		"node":   "node",
-		"target": "https://emby.example",
-		"status": http.StatusOK,
-		"ms":     int64(71),
+	fields := responseReadyLogFields(ctx, res, map[string]any{
+		"id":              "req-1",
+		"node":            "node",
+		"target":          "https://emby.example",
+		"status":          http.StatusOK,
+		"responseReadyMs": int64(71),
 	})
 
 	if fields["target"] != "https://www.google.com" {
@@ -402,8 +402,8 @@ func TestTargetHeadersReceivedLogFieldsUsesResponseTarget(t *testing.T) {
 	if fields["nodeTarget"] != "https://emby.example" {
 		t.Fatalf("nodeTarget = %v, want original node target", fields["nodeTarget"])
 	}
-	if fields["targetMs"] != int64(68) {
-		t.Fatalf("targetMs = %v, want direct target duration", fields["targetMs"])
+	if fields["responseReadyMs"] != int64(68) {
+		t.Fatalf("responseReadyMs = %v, want direct response ready duration", fields["responseReadyMs"])
 	}
 }
 

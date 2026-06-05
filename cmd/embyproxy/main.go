@@ -199,9 +199,20 @@ func requestMiddleware(log *logging.Logger, store *storage.Store, next http.Hand
 		started := time.Now()
 		next.ServeHTTP(sw, r.WithContext(ctx))
 		if log.AccessEnabled() && !requestlog.AccessLogSuppressed(ctx) {
-			meta := map[string]any{"id": id, "status": sw.status, "bytes": sw.bytes, "ms": time.Since(started).Milliseconds(), "ip": auth.ClientIP(r, trustsProxy(ctx, store))}
+			totalMs := time.Since(started).Milliseconds()
+			meta := map[string]any{"id": id, "status": sw.status, "bytes": sw.bytes, "totalMs": totalMs, "ip": auth.ClientIP(r, trustsProxy(ctx, store))}
 			for key, value := range proxy.AccessLogFields(ctx) {
 				meta[key] = value
+			}
+			if bodyStarted, ok := proxy.AccessLogResponseBodyStart(ctx); ok {
+				bodyMs := time.Since(bodyStarted).Milliseconds()
+				if bodyMs < 0 {
+					bodyMs = 0
+				}
+				if bodyMs > totalMs {
+					bodyMs = totalMs
+				}
+				meta["bodyMs"] = bodyMs
 			}
 			requestURI := logging.RedactURL(r.URL.RequestURI())
 			if uri, ok := requestlog.RequestURI(ctx); ok {
