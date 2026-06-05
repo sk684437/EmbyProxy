@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
+	"embyproxy/internal/storage"
 )
 
 func TestShouldPrintVersion(t *testing.T) {
@@ -83,6 +85,45 @@ func TestRequestMiddlewareWritesBodyTimingAccessFields(t *testing.T) {
 		if strings.Contains(entries[0].Line, old) {
 			t.Fatalf("access log line kept old timing field %q: %q", old, entries[0].Line)
 		}
+	}
+}
+
+func TestRequestMiddlewareKeepsClientIPWhenRequestContextIsCanceled(t *testing.T) {
+	log := logging.New("info", true)
+	store, err := storage.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	cfg := storage.DefaultSystemConfig()
+	cfg.TrustProxy = true
+	if err := store.KV().Put(context.Background(), "system:config", cfg); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	handler := requestMiddleware(log, store, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		_, _ = w.Write([]byte("ok"))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/emby/videos/1/original.mkv", nil).WithContext(reqCtx)
+	req.RemoteAddr = "172.19.0.1:54321"
+	req.Header.Set("X-Forwarded-For", "203.0.113.42")
+
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	entries := log.Entries(10)
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	if !strings.Contains(entries[0].Line, "ip=203.0.113.42") {
+		t.Fatalf("access log line = %q, want forwarded client IP", entries[0].Line)
+	}
+	if strings.Contains(entries[0].Line, "ip=172.19.0.1") {
+		t.Fatalf("access log fell back to docker bridge IP: %q", entries[0].Line)
 	}
 }
 
