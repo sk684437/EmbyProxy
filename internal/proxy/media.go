@@ -255,6 +255,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			headers.Set("Content-Type", "application/vnd.apple.mpegurl")
 		}
 	}
+	setStreamingRangeAccessLogFields(ctx, r, finalURL, headers, isStreamingMedia)
 	if isImageAPI {
 		headers.Del("Set-Cookie")
 		headers.Del("Vary")
@@ -269,6 +270,26 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	h.logPlayback(storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: headers, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method})
 	res.Header = headers
 	return res, nil
+}
+
+func setStreamingRangeAccessLogFields(ctx context.Context, r *http.Request, finalURL *url.URL, headers http.Header, isStreamingMedia bool) {
+	if !shouldLogStreamingRangeFields(finalURL, isStreamingMedia) {
+		return
+	}
+	if rg := strings.TrimSpace(r.Header.Get("Range")); rg != "" {
+		SetAccessLogField(ctx, "range", rg)
+	}
+	if cr := strings.TrimSpace(headers.Get("Content-Range")); cr != "" {
+		SetAccessLogField(ctx, "contentRange", cr)
+	}
+}
+
+func shouldLogStreamingRangeFields(finalURL *url.URL, isStreamingMedia bool) bool {
+	if !isStreamingMedia || finalURL == nil {
+		return false
+	}
+	path := strings.ToLower(finalURL.Path)
+	return !strings.Contains(path, "/sessions/playing")
 }
 
 func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, headers http.Header, body []byte, env config.ProxyEnv, ua string, base *url.URL) (*http.Response, http.Header, error) {

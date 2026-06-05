@@ -382,6 +382,110 @@ func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
 	}
 }
 
+func TestHandleMediaProxyStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
+	tests := []struct {
+		name       string
+		requestURI string
+		targetURL  string
+	}{
+		{
+			name:       "video path",
+			requestURI: "https://proxy.example/node/emby/videos/1/original.mp4",
+			targetURL:  "https://upstream.example/emby/videos/1/original.mp4",
+		},
+		{
+			name:       "smartstrm path",
+			requestURI: "https://proxy.example/node/emby/smartstrm?item_id=1&media_id=2",
+			targetURL:  "https://upstream.example/emby/smartstrm?item_id=1&media_id=2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithAccessLogFields(context.Background())
+			store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = store.Close()
+			})
+			h := New(config.Config{}, store, nil, logging.New("silent", false))
+			h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if got := req.Header.Get("Range"); got != "bytes=1024-" {
+					t.Fatalf("Range = %q, want bytes=1024-", got)
+				}
+				if req.URL.String() != tt.targetURL {
+					t.Fatalf("upstream request URL = %q, want %q", req.URL.String(), tt.targetURL)
+				}
+				return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
+					"Accept-Ranges":  []string{"bytes"},
+					"Content-Range":  []string{"bytes 1024-2047/4096"},
+					"Content-Type":   []string{"video/mp4"},
+					"Content-Length": []string{"1024"},
+				}), nil
+			})}
+			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil).WithContext(ctx)
+			req.Header.Set("Range", "bytes=1024-")
+			finalURL, err := url.Parse(tt.targetURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: finalURL.Path}, finalURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
+			if err != nil {
+				t.Fatalf("handleMediaProxy() error = %v", err)
+			}
+			_, _ = io.Copy(io.Discard, res.Body)
+			_ = res.Body.Close()
+
+			fields := AccessLogFields(ctx)
+			if got := fields["range"]; got != "bytes=1024-" {
+				t.Fatalf("range access log field = %v, want bytes=1024-", got)
+			}
+			if got := fields["contentRange"]; got != "bytes 1024-2047/4096" {
+				t.Fatalf("contentRange access log field = %v, want bytes 1024-2047/4096", got)
+			}
+		})
+	}
+}
+
+func TestHandleMediaProxySkipsRangeFieldsForProgressAccessLog(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	h.followClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return textResponse(http.StatusNoContent, "", http.Header{
+			"Content-Range": []string{"bytes 0-0/1"},
+		}), nil
+	})}
+	req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/emby/Sessions/Playing/Progress", nil).WithContext(ctx)
+	req.Header.Set("Range", "bytes=0-")
+	finalURL, err := url.Parse("https://upstream.example/emby/Sessions/Playing/Progress")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Sessions/Playing/Progress"}, finalURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("handleMediaProxy() error = %v", err)
+	}
+	_ = res.Body.Close()
+
+	fields := AccessLogFields(ctx)
+	if _, ok := fields["range"]; ok {
+		t.Fatalf("range access log field should be absent for progress requests: %v", fields["range"])
+	}
+	if _, ok := fields["contentRange"]; ok {
+		t.Fatalf("contentRange access log field should be absent for progress requests: %v", fields["contentRange"])
+	}
+}
+
 func TestResponseReadyLogFieldsUsesResponseTarget(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	SetAccessLogField(ctx, "responseReadyMs", int64(68))
@@ -547,6 +651,42 @@ func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
 	}
 	if rawCalls != 1 {
 		t.Fatalf("raw direct calls = %d, want 1", rawCalls)
+	}
+}
+
+func TestHandleDirectStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	h := &Handler{
+		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
+		log: logging.New("silent", false),
+		rawClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.Header.Get("Range"); got != "bytes=4096-" {
+				t.Fatalf("Range = %q, want bytes=4096-", got)
+			}
+			return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
+				"Accept-Ranges":  []string{"bytes"},
+				"Content-Range":  []string{"bytes 4096-8191/16384"},
+				"Content-Type":   []string{"video/x-matroska"},
+				"Content-Length": []string{"4096"},
+			}), nil
+		})},
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/__raw__/http%3A%2F%2F8.8.8.8%2Fvideo.mkv", nil).WithContext(ctx)
+	req.Header.Set("Range", "bytes=4096-")
+
+	res, err := h.handleDirect(ctx, req, "http://8.8.8.8/video.mkv", config.ProxyEnv{ExternalAllowAny: true}, storage.Node{Name: "node", Target: "https://upstream.example"}, nil)
+	if err != nil {
+		t.Fatalf("handleDirect() error = %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	fields := AccessLogFields(ctx)
+	if got := fields["range"]; got != "bytes=4096-" {
+		t.Fatalf("range access log field = %v, want bytes=4096-", got)
+	}
+	if got := fields["contentRange"]; got != "bytes 4096-8191/16384" {
+		t.Fatalf("contentRange access log field = %v, want bytes 4096-8191/16384", got)
 	}
 }
 

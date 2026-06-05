@@ -202,6 +202,11 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 			}
 		}
 		addCORSHeaders(rh, reqOrigin, env)
+		rangeTarget := u
+		if res.Request != nil && res.Request.URL != nil {
+			rangeTarget = res.Request.URL
+		}
+		setStreamingRangeAccessLogFields(ctx, r, rangeTarget, rh, isDirectStreamingMedia(r, rangeTarget, rh, res.StatusCode))
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-completed", "targetUrl": targetURL, "outboundHeaders": currentHeaders})
 		responseReadyMs := time.Since(started).Milliseconds()
 		formattedTarget := logging.FormatTarget(targetURL)
@@ -236,6 +241,34 @@ func localForbiddenResponse(kind, target string) *http.Response {
 		res.Request = &http.Request{URL: u}
 	}
 	return res
+}
+
+func isDirectStreamingMedia(r *http.Request, targetURL *url.URL, headers http.Header, status int) bool {
+	if r != nil && r.URL != nil {
+		path := strings.ToLower(r.URL.Path)
+		if strings.Contains(path, "/sessions/playing") {
+			return false
+		}
+		if isPlaybackPath(path) {
+			return true
+		}
+	}
+	if targetURL != nil {
+		path := strings.ToLower(targetURL.Path)
+		if strings.Contains(path, "/sessions/playing") {
+			return false
+		}
+		if strings.Contains(path, "/videos/") || strings.Contains(path, "/audio/") || strings.Contains(path, "/hls/") || strings.Contains(path, "/dash/") {
+			return true
+		}
+		if strings.Contains(path, "/items/") && (strings.Contains(path, "/download") || strings.Contains(path, "/stream") || strings.Contains(path, "/file")) {
+			return true
+		}
+		if streamingRE.MatchString(path) || playbackMediaExtRE.MatchString(path) {
+			return true
+		}
+	}
+	return status == http.StatusPartialContent || strings.TrimSpace(headers.Get("Content-Range")) != ""
 }
 
 func rangeStartZero(value string) bool {
