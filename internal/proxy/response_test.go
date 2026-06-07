@@ -135,7 +135,7 @@ func TestSendResponsePreservesContentLengthForPassthrough(t *testing.T) {
 	})
 	rec := httptest.NewRecorder()
 
-	(&Handler{}).sendResponse(rec, res)
+	(&Handler{}).sendResponse(rec, httptest.NewRequest(http.MethodGet, "/video", nil), res)
 
 	if rec.Code != http.StatusPartialContent {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPartialContent)
@@ -160,7 +160,7 @@ func TestSendResponseDropsContentLengthForDecodedBody(t *testing.T) {
 	res.Uncompressed = true
 	rec := httptest.NewRecorder()
 
-	(&Handler{}).sendResponse(rec, res)
+	(&Handler{}).sendResponse(rec, httptest.NewRequest(http.MethodGet, "/text", nil), res)
 
 	if got := rec.Header().Get("Content-Length"); got != "" {
 		t.Fatalf("Content-Length = %q, want empty", got)
@@ -182,6 +182,88 @@ func TestFillContentLengthFromContentRange(t *testing.T) {
 
 	if got := headers.Get("Content-Length"); got != "1024" {
 		t.Fatalf("Content-Length = %q, want 1024", got)
+	}
+}
+
+type failingReadBody struct {
+	err error
+}
+
+func (b failingReadBody) Read([]byte) (int, error) {
+	return 0, b.err
+}
+
+func (b failingReadBody) Close() error {
+	return nil
+}
+
+func TestSendResponseLogsBodyCopyReadError(t *testing.T) {
+	log := logging.New("debug", false)
+	h := &Handler{log: log}
+	wantErr := errors.New("upstream stalled")
+	res := &http.Response{
+		StatusCode: http.StatusPartialContent,
+		Status:     "206 Partial Content",
+		Header: http.Header{
+			"Content-Range": []string{"bytes 1024-2047/4096"},
+		},
+		Body: failingReadBody{err: wantErr},
+	}
+	ctx := context.WithValue(context.Background(), "requestID", "req-copy")
+	ctx = requestlog.WithAccessLogState(ctx)
+	requestlog.SetRequestURI(ctx, "/node/<secret>/emby/videos/1/original.mkv")
+	req := httptest.NewRequest(http.MethodGet, "/node/secret/emby/videos/1/original.mkv", nil).WithContext(ctx)
+	req.Header.Set("Range", "bytes=1024-")
+	rec := httptest.NewRecorder()
+
+	h.sendResponse(rec, req, res)
+
+	entries := log.Entries(10)
+	if len(entries) != 1 {
+		t.Fatalf("log entries = %d, want 1", len(entries))
+	}
+	line := entries[0].Line
+	for _, want := range []string{"response body copy interrupted", "id=req-copy", "side=upstream-read", "range=\"bytes=1024-\"", "error=\"upstream stalled\"", "uri=\"/node/<secret>/emby/videos/1/original.mkv\""} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log line = %q, want %q", line, want)
+		}
+	}
+}
+
+func TestBodyCopyIssueSidePrefersContextCancellation(t *testing.T) {
+	side := bodyCopyIssueSide(
+		context.Canceled,
+		context.Canceled,
+		&bodyCopyReader{lastErr: context.Canceled},
+		&bodyCopyWriter{},
+	)
+
+	if side != "context" {
+		t.Fatalf("side = %q, want context", side)
+	}
+}
+
+func TestSendResponseOmitsUnredactedURIWhenRequestLogURIIsMissing(t *testing.T) {
+	log := logging.New("debug", false)
+	h := &Handler{log: log}
+	res := &http.Response{
+		StatusCode: http.StatusPartialContent,
+		Status:     "206 Partial Content",
+		Header:     http.Header{},
+		Body:       failingReadBody{err: errors.New("upstream stalled")},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/node/raw-secret/emby/videos/1/original.mkv?api_key=secret-token", nil)
+	rec := httptest.NewRecorder()
+
+	h.sendResponse(rec, req, res)
+
+	entries := log.Entries(10)
+	if len(entries) != 1 {
+		t.Fatalf("log entries = %d, want 1", len(entries))
+	}
+	line := entries[0].Line
+	if strings.Contains(line, "raw-secret") || strings.Contains(line, "secret-token") || strings.Contains(line, "uri=") {
+		t.Fatalf("log line leaked or included unredacted uri: %q", line)
 	}
 }
 

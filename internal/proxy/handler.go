@@ -256,7 +256,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
 	}
-	h.sendResponse(w, res)
+	h.sendResponse(w, r, res)
 }
 
 func (h *Handler) CleanupTTLMaps() {
@@ -561,7 +561,7 @@ func (h *Handler) logPlayback(in storage.PlaybackInput) {
 	_ = h.store.LogPlaybackAsync(in)
 }
 
-func (h *Handler) sendResponse(w http.ResponseWriter, res *http.Response) {
+func (h *Handler) sendResponse(w http.ResponseWriter, r *http.Request, res *http.Response) {
 	if res == nil {
 		http.Error(w, "No response", http.StatusBadGateway)
 		return
@@ -570,8 +570,162 @@ func (h *Handler) sendResponse(w http.ResponseWriter, res *http.Response) {
 	copyResponseHeaders(w.Header(), res.Header, res.Uncompressed)
 	w.WriteHeader(res.StatusCode)
 	if res.Body != nil {
-		_, _ = io.Copy(w, res.Body)
+		_, _ = h.copyResponseBody(w, r, res)
 	}
+}
+
+func (h *Handler) copyResponseBody(w http.ResponseWriter, r *http.Request, res *http.Response) (int64, error) {
+	reader := &bodyCopyReader{reader: res.Body}
+	writer := &bodyCopyWriter{writer: w}
+	started := time.Now()
+	copied, err := io.Copy(writer, reader)
+	if ctxErr := requestContextErr(r); err != nil || ctxErr != nil {
+		h.logBodyCopyIssue(r, res, copied, err, ctxErr, time.Since(started), reader, writer)
+	}
+	return copied, err
+}
+
+type bodyCopyReader struct {
+	reader       io.Reader
+	bytes        int64
+	calls        int64
+	lastDuration time.Duration
+	lastErr      error
+	lastAt       time.Time
+}
+
+func (r *bodyCopyReader) Read(p []byte) (int, error) {
+	started := time.Now()
+	n, err := r.reader.Read(p)
+	r.calls++
+	r.lastDuration = time.Since(started)
+	r.lastAt = time.Now()
+	if n > 0 {
+		r.bytes += int64(n)
+	}
+	if err != nil && err != io.EOF {
+		r.lastErr = err
+	}
+	return n, err
+}
+
+type bodyCopyWriter struct {
+	writer       io.Writer
+	bytes        int64
+	calls        int64
+	lastDuration time.Duration
+	lastErr      error
+	lastAt       time.Time
+	shortWrite   bool
+}
+
+func (w *bodyCopyWriter) Write(p []byte) (int, error) {
+	started := time.Now()
+	n, err := w.writer.Write(p)
+	w.calls++
+	w.lastDuration = time.Since(started)
+	w.lastAt = time.Now()
+	if n > 0 {
+		w.bytes += int64(n)
+	}
+	if err != nil {
+		w.lastErr = err
+	}
+	if err == nil && n != len(p) {
+		w.shortWrite = true
+	}
+	return n, err
+}
+
+func requestContextErr(r *http.Request) error {
+	if r == nil {
+		return nil
+	}
+	return r.Context().Err()
+}
+
+func (h *Handler) logBodyCopyIssue(r *http.Request, res *http.Response, copied int64, copyErr, ctxErr error, elapsed time.Duration, reader *bodyCopyReader, writer *bodyCopyWriter) {
+	if h == nil || h.log == nil {
+		return
+	}
+	side := bodyCopyIssueSide(copyErr, ctxErr, reader, writer)
+	reason := side
+	if ctxErr != nil {
+		reason = "client-context-canceled"
+	}
+	meta := map[string]any{
+		"status":       res.StatusCode,
+		"side":         side,
+		"reason":       reason,
+		"copiedBytes":  copied,
+		"readBytes":    reader.bytes,
+		"writeBytes":   writer.bytes,
+		"readCalls":    reader.calls,
+		"writeCalls":   writer.calls,
+		"copyMs":       elapsed.Milliseconds(),
+		"lastReadMs":   reader.lastDuration.Milliseconds(),
+		"lastWriteMs":  writer.lastDuration.Milliseconds(),
+		"target":       responseLogTarget(res),
+		"contentRange": strings.TrimSpace(res.Header.Get("Content-Range")),
+		"contentLen":   strings.TrimSpace(res.Header.Get("Content-Length")),
+	}
+	if r != nil {
+		meta["id"] = requestID(r, h.log)
+		meta["method"] = r.Method
+		if uri := responseCopyRequestURI(r); uri != "" {
+			meta["uri"] = uri
+		}
+		if rg := strings.TrimSpace(r.Header.Get("Range")); rg != "" {
+			meta["range"] = rg
+		}
+	}
+	var reqCtx context.Context
+	if r != nil {
+		reqCtx = r.Context()
+	}
+	if copyErr != nil {
+		meta["error"] = copyErr.Error()
+		setBodyCopyAccessLogField(reqCtx, "bodyCopyError", copyErr.Error())
+	}
+	if ctxErr != nil {
+		meta["contextErr"] = ctxErr.Error()
+		setBodyCopyAccessLogField(reqCtx, "bodyCopyContextErr", ctxErr.Error())
+	}
+	setBodyCopyAccessLogField(reqCtx, "bodyCopySide", side)
+	h.log.Warn("proxy", "response body copy interrupted", meta)
+}
+
+func responseCopyRequestURI(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if uri, ok := requestlog.RequestURI(r.Context()); ok {
+		return uri
+	}
+	return ""
+}
+
+func setBodyCopyAccessLogField(ctx context.Context, key string, value any) {
+	if ctx == nil {
+		return
+	}
+	SetAccessLogField(ctx, key, value)
+}
+
+func bodyCopyIssueSide(copyErr, ctxErr error, reader *bodyCopyReader, writer *bodyCopyWriter) string {
+	if writer.lastErr != nil || writer.shortWrite || errors.Is(copyErr, io.ErrShortWrite) {
+		return "downstream-write"
+	}
+	if ctxErr != nil {
+		return "context"
+	}
+	if reader.lastErr != nil {
+		return "upstream-read"
+	}
+	if copyErr != nil {
+		return "copy"
+	}
+	return "context"
 }
 
 func (h *Handler) fetchTarget(ctx context.Context, target *url.URL, method string, headers http.Header, body []byte, follow bool) (*http.Response, error) {
