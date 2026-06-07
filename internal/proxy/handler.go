@@ -39,6 +39,8 @@ type Handler struct {
 	activeTarget     map[string]string
 	manualClient     *http.Client
 	followClient     *http.Client
+	playbackClient   *http.Client
+	imageClient      *http.Client
 	rawClient        *http.Client
 }
 
@@ -75,6 +77,8 @@ func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *lo
 		activeTarget:     map[string]string{},
 		manualClient:     newProxyHTTPClient(false),
 		followClient:     newProxyHTTPClient(true),
+		playbackClient:   newProxyHTTPClient(true),
+		imageClient:      newProxyHTTPClient(true),
 		rawClient:        newRawHTTPClient(),
 	}
 }
@@ -516,7 +520,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		return h.handleMediaProxy(ctx, r, node, parsed, finalURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-proxy", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	res, err := h.fetchTarget(ctx, finalURL, r.Method, headers, body, false)
+	res, err := h.fetchTarget(ctx, nil, finalURL, r.Method, headers, body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +534,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		h2.Set("Referer", reqBase+"/")
 		currentHeaders = h2
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-retry-compat-origin", "targetUrl": finalURL.String(), "outboundHeaders": h2})
-		res, err = h.fetchTarget(ctx, finalURL, r.Method, h2, body, false)
+		res, err = h.fetchTarget(ctx, nil, finalURL, r.Method, h2, body, false)
 		if err != nil {
 			return nil, err
 		}
@@ -776,15 +780,18 @@ func bodyCopyIssueSide(copyErr, ctxErr error, reader *bodyCopyReader, writer *bo
 	return "context"
 }
 
-func (h *Handler) fetchTarget(ctx context.Context, target *url.URL, method string, headers http.Header, body []byte, follow bool) (*http.Response, error) {
-	client := h.manualClient
+func (h *Handler) fetchTarget(ctx context.Context, client *http.Client, target *url.URL, method string, headers http.Header, body []byte, follow bool) (*http.Response, error) {
+	selectedClient := h.manualClient
 	if follow {
-		client = h.followClient
+		selectedClient = client
+		if selectedClient == nil {
+			selectedClient = h.followClient
+		}
 	}
-	if client == nil {
-		client = newProxyHTTPClient(follow)
+	if selectedClient == nil {
+		selectedClient = newProxyHTTPClient(follow)
 	}
-	return h.doFetch(ctx, client, target, method, headers, body)
+	return h.doFetch(ctx, selectedClient, target, method, headers, body)
 }
 
 func (h *Handler) doFetch(ctx context.Context, client *http.Client, target *url.URL, method string, headers http.Header, body []byte) (*http.Response, error) {
