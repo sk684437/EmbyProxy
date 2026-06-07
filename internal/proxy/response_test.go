@@ -173,6 +173,18 @@ func TestSendResponseDropsContentLengthForDecodedBody(t *testing.T) {
 	}
 }
 
+func TestFillContentLengthFromContentRange(t *testing.T) {
+	headers := http.Header{
+		"Content-Range": []string{"bytes 1024-2047/4096"},
+	}
+
+	fillContentLengthFromContentRange(headers)
+
+	if got := headers.Get("Content-Length"); got != "1024" {
+		t.Fatalf("Content-Length = %q, want 1024", got)
+	}
+}
+
 func TestServeHTTPMarksAccessLogURIWithRedactedSecret(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))

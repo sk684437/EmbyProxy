@@ -245,6 +245,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	addCORSHeaders(headers, reqOrigin, env)
 	headers.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length, Content-Type")
 	if isStreamingMedia {
+		fillContentLengthFromContentRange(headers)
 		if res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Range") != "" || acceptRangesBytesRE.MatchString(res.Header.Get("Accept-Ranges")) {
 			headers.Set("Accept-Ranges", "bytes")
 		} else {
@@ -350,6 +351,7 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 		setImageCacheControl(headers, res.StatusCode, "public, max-age=2592000, s-maxage=2592000, immutable")
 	} else if isStreaming {
 		headers.Set("Cache-Control", "no-store, no-transform")
+		fillContentLengthFromContentRange(headers)
 	}
 	if loc := headers.Get("Location"); loc != "" {
 		rewritten, direct, directURL := h.rewriteLocation(r, loc, node, parsed, base, selfPrefix)

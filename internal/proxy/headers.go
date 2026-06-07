@@ -3,6 +3,7 @@ package proxy
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"embyproxy/internal/config"
@@ -260,6 +261,22 @@ func copyResponseHeaders(dst http.Header, src http.Header, bodyDecoded bool) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func fillContentLengthFromContentRange(headers http.Header) {
+	if headers == nil || strings.TrimSpace(headers.Get("Content-Length")) != "" {
+		return
+	}
+	m := contentRangeBytesRE.FindStringSubmatch(strings.TrimSpace(headers.Get("Content-Range")))
+	if len(m) != 4 {
+		return
+	}
+	start, errStart := strconv.ParseInt(m[1], 10, 64)
+	end, errEnd := strconv.ParseInt(m[2], 10, 64)
+	if errStart != nil || errEnd != nil || start < 0 || end < start {
+		return
+	}
+	headers.Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 }
 
 func isDecodedBodyHeader(name string) bool {

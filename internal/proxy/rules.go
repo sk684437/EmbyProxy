@@ -29,6 +29,7 @@ var (
 	defaultPort443RE       = regexp.MustCompile(`(?i):443$`)
 	acceptRangesBytesRE    = regexp.MustCompile(`(?i)bytes`)
 	rangeStartRE           = regexp.MustCompile(`(?i)^\s*bytes\s*=\s*(\d+)-`)
+	contentRangeBytesRE    = regexp.MustCompile(`(?i)^\s*bytes\s+(\d+)-(\d+)\s*/\s*(\d+|\*)\s*$`)
 	m3u8PathRE             = regexp.MustCompile(`(?i)\.m3u8($|\?)`)
 	lineBreakRE            = regexp.MustCompile(`\r?\n`)
 	bodyURLRE              = regexp.MustCompile(`https?://[^\s"'<>\\]+`)

@@ -178,6 +178,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 			selfPrefixForRaw = reqPath[:rawIdx]
 		}
 		rewriteSetCookieHeaders(rh, selfPrefixForRaw)
+		fillContentLengthFromContentRange(rh)
 		rh.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length, Content-Type")
 		if res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Range") != "" || acceptRangesBytesRE.MatchString(res.Header.Get("Accept-Ranges")) {
 			rh.Set("Accept-Ranges", "bytes")
