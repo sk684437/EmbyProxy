@@ -57,6 +57,62 @@ func TestLoggerEntriesReturnsRedactedConsoleLines(t *testing.T) {
 	}
 }
 
+func TestFormatMetaUsesSemanticFieldOrder(t *testing.T) {
+	got := formatMeta(map[string]any{
+		"bodyCopyError":   "broken pipe",
+		"target":          "https://cdn.example",
+		"event":           "requestFinished",
+		"totalMs":         24,
+		"range":           "bytes=1024-",
+		"nodeTarget":      "https://upstream.example",
+		"uri":             "/node/<secret>/emby/videos/1/original.mkv",
+		"method":          "GET",
+		"id":              "req-1",
+		"ip":              "127.0.0.1",
+		"contentRange":    "bytes 1024-2047/4096",
+		"bytes":           1024,
+		"responseReadyMs": 8,
+		"bodyMs":          16,
+	})
+
+	wantOrder := []string{
+		"event=requestFinished",
+		"id=req-1",
+		"method=GET",
+		"uri=",
+		"ip=127.0.0.1",
+		"nodeTarget=https://upstream.example",
+		"target=https://cdn.example",
+		"range=\"bytes=1024-\"",
+		"contentRange=\"bytes 1024-2047/4096\"",
+		" bytes=1024 ",
+		"responseReadyMs=8",
+		"bodyMs=16",
+		"totalMs=24",
+		"bodyCopyError=\"broken pipe\"",
+	}
+	assertLineOrder(t, got, wantOrder)
+}
+
+func TestLoggerLineSuppressesMessageWhenEventIsPresent(t *testing.T) {
+	log := New("debug", true)
+	log.Info("access", "request finished", map[string]any{"event": "requestFinished", "id": "req-1"})
+
+	entries := log.Entries(10)
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	if strings.Contains(entries[0].Line, "request finished") {
+		t.Fatalf("line kept message despite event field: %q", entries[0].Line)
+	}
+	if !strings.Contains(entries[0].Line, "event=requestFinished id=req-1") {
+		t.Fatalf("line = %q, want event and id fields", entries[0].Line)
+	}
+	if entries[0].Message != "request finished" {
+		t.Fatalf("message = %q, want preserved message", entries[0].Message)
+	}
+}
+
 func TestLoggerEntriesHonorsLimit(t *testing.T) {
 	log := New("debug", true)
 	log.Info("test", "one", nil)
@@ -183,4 +239,19 @@ func messages(entries []LogEntry) string {
 		values = append(values, entry.Message)
 	}
 	return strings.Join(values, ",")
+}
+
+func assertLineOrder(t *testing.T, line string, fragments []string) {
+	t.Helper()
+	last := -1
+	for _, fragment := range fragments {
+		idx := strings.Index(line, fragment)
+		if idx < 0 {
+			t.Fatalf("line = %q, want fragment %q", line, fragment)
+		}
+		if idx <= last {
+			t.Fatalf("line = %q, fragment %q appeared out of order", line, fragment)
+		}
+		last = idx
+	}
 }

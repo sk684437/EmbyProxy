@@ -224,7 +224,7 @@ func TestSendResponseLogsBodyCopyReadError(t *testing.T) {
 		t.Fatalf("log entries = %d, want 1", len(entries))
 	}
 	line := entries[0].Line
-	for _, want := range []string{"response body copy interrupted", "id=req-copy", "side=upstream-read", "firstReadStatus=none", "range=\"bytes=1024-\"", "error=\"upstream stalled\"", "uri=\"/node/<secret>/emby/videos/1/original.mkv\""} {
+	for _, want := range []string{"event=bodyCopyInterrupted", "id=req-copy", "method=GET", "uri=\"/node/<secret>/emby/videos/1/original.mkv\"", "range=\"bytes=1024-\"", "firstReadStatus=none", "side=upstream-read", "error=\"upstream stalled\""} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("log line = %q, want %q", line, want)
 		}

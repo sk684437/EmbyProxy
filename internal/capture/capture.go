@@ -86,7 +86,7 @@ func (r *Recorder) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		captureCfg, err := r.captureConfig(req.Context())
 		if err != nil {
-			r.log.Warn("traffic", "capture config lookup failed", map[string]any{"error": err.Error()})
+			r.log.Warn("traffic", "capture config lookup failed", map[string]any{"event": "captureConfigLookupFailed", "error": err.Error()})
 			next.ServeHTTP(w, req)
 			return
 		}
@@ -253,12 +253,12 @@ func (r *Recorder) appendHTTP(req *http.Request, cw *captureWriter, cfg storage.
 func (r *Recorder) appendRecord(record Record, cfg storage.SystemConfig) {
 	file := r.captureFilePath(cfg)
 	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
-		r.log.Warn("traffic", "capture mkdir failed", map[string]any{"error": err.Error()})
+		r.log.Warn("traffic", "capture mkdir failed", map[string]any{"event": "captureMkdirFailed", "error": err.Error()})
 		return
 	}
 	f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		r.log.Warn("traffic", "capture open failed", map[string]any{"error": err.Error()})
+		r.log.Warn("traffic", "capture open failed", map[string]any{"event": "captureOpenFailed", "error": err.Error()})
 		return
 	}
 	defer f.Close()

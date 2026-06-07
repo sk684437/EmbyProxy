@@ -41,16 +41,16 @@ func main() {
 	log := logging.New(defaultSystemCfg.LogLevel, defaultSystemCfg.LogAccess)
 	defer log.Close()
 	if err := log.EnableHistory(filepath.Join(cfg.CWD, "data", "console-logs.jsonl"), logging.DefaultHistoryEntriesFile, logging.DefaultHistoryRotatedFiles); err != nil {
-		log.Warn("startup", "console log history disabled", map[string]any{"error": err.Error()})
+		log.Warn("startup", "console log history disabled", map[string]any{"event": "consoleLogHistoryDisabled", "error": err.Error()})
 	}
 	logBuildInfo(log)
 	if errText := auth.ValidateAdminToken(cfg.AdminToken); errText != "" {
-		log.Error("startup", "admin token config invalid", map[string]any{"error": errText})
+		log.Error("startup", "admin token config invalid", map[string]any{"event": "adminTokenConfigInvalid", "error": errText})
 		os.Exit(1)
 	}
 	store, err := storage.New(cfg.DBPath)
 	if err != nil {
-		log.Error("startup", "database init failed", map[string]any{"error": err.Error()})
+		log.Error("startup", "database init failed", map[string]any{"event": "databaseInitFailed", "error": err.Error()})
 		os.Exit(1)
 	}
 	defer store.Close()
@@ -61,7 +61,7 @@ func main() {
 
 	ids := identity.NewManager(store)
 	if err := ids.Init(ctx); err != nil {
-		log.Error("startup", "identity init failed", map[string]any{"error": err.Error()})
+		log.Error("startup", "identity init failed", map[string]any{"event": "identityInitFailed", "error": err.Error()})
 		os.Exit(1)
 	}
 
@@ -94,14 +94,14 @@ func main() {
 	go func() {
 		listener, err := net.Listen("tcp", cfg.Addr())
 		if err != nil {
-			log.Error("startup", "server failed", map[string]any{"error": err.Error()})
+			log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
 			stop()
 			return
 		}
-		log.Info("startup", "server listening", map[string]any{"addr": cfg.Addr(), "db": cfg.DBPath})
+		log.Info("startup", "server listening", map[string]any{"event": "serverListening", "addr": cfg.Addr(), "db": cfg.DBPath})
 		logIdentityProfiles(log, ids)
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("startup", "server failed", map[string]any{"error": err.Error()})
+			log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
 			stop()
 		}
 	}()
@@ -110,13 +110,13 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Error("shutdown", "server shutdown failed", map[string]any{"error": err.Error()})
+		log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
 	}
 }
 
 func logBuildInfo(log *logging.Logger) {
 	info := buildinfo.Current()
-	log.Info("startup", "EmbyProxy starting", map[string]any{"version": info.Version, "commit": info.Commit, "builtAt": info.BuiltAt})
+	log.Info("startup", "EmbyProxy starting", map[string]any{"event": "serviceStarting", "version": info.Version, "commit": info.Commit, "builtAt": info.BuiltAt})
 }
 
 func shouldPrintVersion(args []string) bool {
@@ -135,6 +135,7 @@ func logIdentityProfiles(log *logging.Logger, ids *identity.Manager) {
 	for _, profile := range identity.ProfileKeys() {
 		snap := ids.Snapshot(profile)
 		log.Info("startup", "upstream identity profile", map[string]any{
+			"event":     "identityProfileLoaded",
 			"profile":   snap.Profile,
 			"label":     snap.Label,
 			"client":    snap.ClientName,
@@ -149,7 +150,7 @@ func logIdentityProfiles(log *logging.Logger, ids *identity.Manager) {
 func applyRuntimeConfig(ctx context.Context, store *storage.Store, log *logging.Logger) {
 	systemCfg, err := store.GetSystemConfig(ctx, storage.DefaultSystemConfig())
 	if err != nil {
-		log.Warn("startup", "system config lookup failed", map[string]any{"error": err.Error()})
+		log.Warn("startup", "system config lookup failed", map[string]any{"event": "systemConfigLookupFailed", "error": err.Error()})
 		return
 	}
 	log.Configure(systemCfg.LogLevel, systemCfg.LogAccess)
@@ -220,7 +221,10 @@ func requestMiddleware(log *logging.Logger, store *storage.Store, next http.Hand
 			if uri, ok := requestlog.RequestURI(ctx); ok {
 				requestURI = uri
 			}
-			log.Info("access", r.Method+" "+requestURI, meta)
+			meta["event"] = "requestFinished"
+			meta["method"] = r.Method
+			meta["uri"] = requestURI
+			log.Info("access", "request finished", meta)
 		}
 	})
 }

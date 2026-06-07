@@ -141,13 +141,13 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 		return nil
 	}
 	if !s.Send(ctx, cfg.Token, cfg.Chat, text) {
-		s.log.Warn("telegram", "daily report send failed", map[string]any{"day": day})
+		s.log.Warn("telegram", "daily report send failed", map[string]any{"event": "dailyReportSendFailed", "day": day})
 		return nil
 	}
 	_ = kv.Put(ctx, cntKey, strconv.FormatInt(cnt+1, 10))
 	_ = kv.Put(ctx, lastKey, strconv.FormatInt(now, 10))
 	_ = kv.Put(ctx, digestKey, digest)
-	s.log.Info("telegram", "daily report sent", map[string]any{"day": day, "count": cnt + 1})
+	s.log.Info("telegram", "daily report sent", map[string]any{"event": "dailyReportSent", "day": day, "count": cnt + 1})
 	return nil
 }
 
@@ -238,13 +238,13 @@ func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
 			continue
 		}
 		if !s.Send(ctx, cfg.Token, cfg.Chat, strings.Join(lines, "\n")) {
-			s.log.Warn("telegram", "keepalive send failed", map[string]any{"node": node.Name, "day": day})
+			s.log.Warn("telegram", "keepalive send failed", map[string]any{"event": "keepaliveSendFailed", "node": node.Name, "day": day})
 			continue
 		}
 		_ = kv.Put(ctx, lastNotifyKey, strconv.FormatInt(now, 10))
 		_ = kv.Put(ctx, digestKey, digest)
 		_ = s.store.UpdateKeepaliveNotify(ctx, "admin", node.Name, day, notifyCount+1, day)
-		s.log.Info("telegram", "keepalive sent", map[string]any{"node": node.Name, "day": day, "count": notifyCount + 1})
+		s.log.Info("telegram", "keepalive sent", map[string]any{"event": "keepaliveSent", "node": node.Name, "day": day, "count": notifyCount + 1})
 	}
 	return nil
 }

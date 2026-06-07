@@ -33,7 +33,7 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request, node s
 	targets := storage.SplitTargets(node.Target)
 	if len(targets) == 0 {
 		capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "no-targets"})
-		h.log.Warn("ws", "node has no targets", map[string]any{"id": requestID, "node": parsed.Name, "ip": clientIP})
+		h.log.Warn("ws", "node has no targets", map[string]any{"event": "nodeHasNoTargets", "id": requestID, "node": parsed.Name, "ip": clientIP})
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
 	}
@@ -69,14 +69,14 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request, node s
 		lastErr = errWebSocketUpgradeFailed
 	}
 	capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "upgrade-failed", "targetUrl": lastTarget, "meta": map[string]any{"error": lastErr.Error()}})
-	h.log.Warn("ws", "upgrade failed", map[string]any{"id": requestID, "node": parsed.Name, "target": logging.FormatTarget(lastTarget), "error": lastErr.Error()})
+	h.log.Warn("ws", "upgrade failed", map[string]any{"event": "upgradeFailed", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(lastTarget), "error": lastErr.Error()})
 	http.Error(w, "Bad Gateway", http.StatusBadGateway)
 }
 
 func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter, r *http.Request, node storage.Node, parsed parsedRoute, target string, targets []string, expectedActive, requestID string, started time.Time) bool {
 	base, err := url.Parse(target)
 	if err != nil {
-		h.log.Warn("ws", "target parse failed", map[string]any{"id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "error": err.Error()})
+		h.log.Warn("ws", "target parse failed", map[string]any{"event": "targetParseFailed", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "error": err.Error()})
 		return false
 	}
 	forwardPath := websocketForwardPath(parsed.Path, base.Path)
@@ -90,12 +90,12 @@ func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter,
 	capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "upgrade-target", "targetUrl": finalURL.String(), "outboundHeaders": headers})
 	res, upstreamConn, upstreamReader, err := h.dialWebSocket(ctx, finalURL, headers)
 	if err != nil {
-		h.log.Warn("ws", "upstream dial failed", map[string]any{"id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "error": err.Error()})
+		h.log.Warn("ws", "upstream dial failed", map[string]any{"event": "upstreamDialFailed", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "error": err.Error()})
 		return false
 	}
 	if res.StatusCode != http.StatusSwitchingProtocols {
 		_ = upstreamConn.Close()
-		h.log.Warn("ws", "upstream rejected upgrade", map[string]any{"id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": res.StatusCode})
+		h.log.Warn("ws", "upstream rejected upgrade", map[string]any{"event": "upstreamRejectedUpgrade", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": res.StatusCode})
 		return false
 	}
 	hijacker, ok := w.(http.Hijacker)
@@ -107,18 +107,18 @@ func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter,
 	clientConn, clientRW, err := hijacker.Hijack()
 	if err != nil {
 		_ = upstreamConn.Close()
-		h.log.Warn("ws", "client hijack failed", map[string]any{"id": requestID, "node": parsed.Name, "error": err.Error()})
+		h.log.Warn("ws", "client hijack failed", map[string]any{"event": "clientHijackFailed", "id": requestID, "node": parsed.Name, "error": err.Error()})
 		return true
 	}
 	if err := writeWebSocketResponse(clientConn, res); err != nil {
 		_ = clientConn.Close()
 		_ = upstreamConn.Close()
-		h.log.Warn("ws", "write upgrade response failed", map[string]any{"id": requestID, "node": parsed.Name, "error": err.Error()})
+		h.log.Warn("ws", "write upgrade response failed", map[string]any{"event": "writeUpgradeResponseFailed", "id": requestID, "node": parsed.Name, "error": err.Error()})
 		return true
 	}
 	h.markTargetHealthy("admin:"+parsed.Name, targets, target, expectedActive)
 	capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "upgraded", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	h.log.Info("ws", "upgrade completed", map[string]any{"id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": 101, "upgradeMs": time.Since(started).Milliseconds()})
+	h.log.Info("ws", "upgrade completed", map[string]any{"event": "upgradeCompleted", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": 101, "upgradeMs": time.Since(started).Milliseconds()})
 	flushBuffered(upstreamConn, clientRW.Reader)
 	flushBuffered(clientConn, upstreamReader)
 	go copyAndClose(upstreamConn, clientConn)

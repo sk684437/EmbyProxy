@@ -40,6 +40,58 @@ var (
 	safeLogValueRE    = regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`)
 )
 
+var metaFieldOrder = map[string]int{
+	"event":              10,
+	"id":                 20,
+	"method":             30,
+	"uri":                40,
+	"ip":                 50,
+	"node":               60,
+	"nodeTarget":         70,
+	"target":             80,
+	"location":           90,
+	"range":              100,
+	"contentRange":       110,
+	"imageCache":         120,
+	"bytes":              130,
+	"contentLen":         140,
+	"copiedBytes":        150,
+	"readBytes":          160,
+	"writeBytes":         170,
+	"readCalls":          180,
+	"writeCalls":         190,
+	"responseReadyMs":    200,
+	"targetAttemptMs":    210,
+	"bodyMs":             220,
+	"copyMs":             230,
+	"totalMs":            240,
+	"firstReadMs":        250,
+	"firstReadStatus":    260,
+	"lastReadMs":         270,
+	"lastWriteMs":        280,
+	"upgradeMs":          290,
+	"addr":               300,
+	"db":                 310,
+	"profile":            320,
+	"label":              330,
+	"client":             340,
+	"version":            350,
+	"commit":             360,
+	"builtAt":            370,
+	"device":             380,
+	"deviceId":           390,
+	"userAgent":          400,
+	"day":                410,
+	"count":              420,
+	"reason":             900,
+	"side":               910,
+	"contextErr":         920,
+	"bodyCopySide":       930,
+	"bodyCopyContextErr": 940,
+	"bodyCopyError":      950,
+	"error":              960,
+}
+
 type Logger struct {
 	level     atomic.Int64
 	accessLog atomic.Bool
@@ -224,7 +276,7 @@ func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 		parts = append(parts, "["+status+"]")
 	}
 	parts = append(parts, "["+scope+"]")
-	if clean := RedactText(msg); clean != "" {
+	if clean := RedactText(msg); clean != "" && promotedMetaValue(meta, "event") == "" {
 		parts = append(parts, clean)
 	}
 	if formatted := formatMeta(meta); formatted != "" {
@@ -702,12 +754,31 @@ func formatMeta(meta map[string]any) string {
 			keys = append(keys, key)
 		}
 	}
-	sort.Strings(keys)
+	sortMetaKeys(keys)
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		parts = append(parts, key+"="+formatValue(meta[key]))
 	}
 	return strings.Join(parts, " ")
+}
+
+func sortMetaKeys(keys []string) {
+	sort.Slice(keys, func(i, j int) bool {
+		left, leftOK := metaFieldOrder[keys[i]]
+		right, rightOK := metaFieldOrder[keys[j]]
+		if leftOK || rightOK {
+			if !leftOK {
+				return false
+			}
+			if !rightOK {
+				return true
+			}
+			if left != right {
+				return left < right
+			}
+		}
+		return keys[i] < keys[j]
+	})
 }
 
 func promotedMetaValue(meta map[string]any, key string) string {

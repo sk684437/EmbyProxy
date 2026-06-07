@@ -204,7 +204,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	capture.SetMeta(r, map[string]any{"node": parsed.Name, "stage": "node-lookup"})
 	node, err := h.store.GetNode(ctx, "admin", parsed.Name)
 	if err != nil {
-		h.log.Error("proxy", "node lookup failed", map[string]any{"node": parsed.Name, "error": err.Error()})
+		h.log.Error("proxy", "node lookup failed", map[string]any{"event": "nodeLookupFailed", "node": parsed.Name, "error": err.Error()})
 		http.Error(w, "Node lookup failed", http.StatusInternalServerError)
 		return
 	}
@@ -219,7 +219,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if node.Secret != "" {
 		if len(parsed.Segments) < 2 || parsed.Segments[1] != node.Secret {
 			capture.SetMeta(r, map[string]any{"node": parsed.Name, "secret": node.Secret, "stage": "invalid-secret"})
-			h.log.Warn("proxy", "invalid node secret", map[string]any{"node": parsed.Name, "ip": auth.ClientIP(r, h.trustsProxy(ctx))})
+			h.log.Warn("proxy", "invalid node secret", map[string]any{"event": "invalidNodeSecret", "node": parsed.Name, "ip": auth.ClientIP(r, h.trustsProxy(ctx))})
 			http.Error(w, "Node not found", http.StatusNotFound)
 			return
 		}
@@ -252,7 +252,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.handleNode(ctx, r, *node, parsed, body, env)
 	if err != nil {
-		h.log.Error("proxy", "request failed", map[string]any{"node": parsed.Name, "error": err.Error()})
+		h.log.Error("proxy", "request failed", map[string]any{"event": "requestFailed", "node": parsed.Name, "error": err.Error()})
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
 	}
@@ -327,7 +327,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 		res, err := h.handleOneTarget(ctx, r, nodeTry, parsed, body, env)
 		if err != nil {
 			h.lineBan.Set(banKey, 1, time.Minute)
-			h.log.Warn("proxy", "target failed", map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()})
+			h.log.Warn("proxy", "target failed", map[string]any{"event": "targetFailed", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()})
 			lastErr = err
 			h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Bad Gateway", nil))
 			continue
@@ -340,13 +340,13 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			responseReadyMs := time.Since(started).Milliseconds()
 			SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
 			MarkAccessLogResponseBodyStart(ctx, time.Now())
-			logFields := responseReadyLogFields(ctx, res, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "responseReadyMs": responseReadyMs})
+			logFields := responseReadyLogFields(ctx, res, map[string]any{"event": "upstreamReady", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "responseReadyMs": responseReadyMs})
 			h.log.Info("proxy", "response ready", logFields)
 			setAccessLogTargetFields(ctx, logFields)
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)
-		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, map[string]any{"id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "targetAttemptMs": time.Since(started).Milliseconds()}))
+		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, map[string]any{"event": "upstreamRetryableStatus", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "targetAttemptMs": time.Since(started).Milliseconds()}))
 		h.setLastResponse(&lastRes, res)
 	}
 	if tried == 0 {
@@ -675,6 +675,7 @@ func (h *Handler) logBodyCopyIssue(r *http.Request, res *http.Response, copied i
 		reason = "client-context-canceled"
 	}
 	meta := map[string]any{
+		"event":        "bodyCopyInterrupted",
 		"status":       res.StatusCode,
 		"side":         side,
 		"reason":       reason,
@@ -899,7 +900,7 @@ func (h *Handler) proxyEnv(ctx context.Context) config.ProxyEnv {
 	env := h.cfg.ProxyEnv()
 	cfg, err := h.store.GetSystemConfig(ctx, h.defaultSystemConfig())
 	if err != nil {
-		h.log.Warn("proxy", "system config lookup failed", map[string]any{"error": err.Error()})
+		h.log.Warn("proxy", "system config lookup failed", map[string]any{"event": "systemConfigLookupFailed", "error": err.Error()})
 		return env
 	}
 	env.CapyStripEmby = cfg.CapyStripEmby
@@ -917,7 +918,7 @@ func (h *Handler) trustsProxy(ctx context.Context) bool {
 	defaults := h.defaultSystemConfig()
 	cfg, err := h.store.GetSystemConfig(ctx, defaults)
 	if err != nil {
-		h.log.Warn("proxy", "system config lookup failed", map[string]any{"error": err.Error()})
+		h.log.Warn("proxy", "system config lookup failed", map[string]any{"event": "systemConfigLookupFailed", "error": err.Error()})
 		return defaults.TrustProxy
 	}
 	return cfg.TrustProxy
@@ -931,7 +932,7 @@ func (h *Handler) systemConfig(ctx context.Context) storage.SystemConfig {
 	cfg, err := h.store.GetSystemConfig(ctx, defaults)
 	if err != nil {
 		if h.log != nil {
-			h.log.Warn("proxy", "system config lookup failed", map[string]any{"error": err.Error()})
+			h.log.Warn("proxy", "system config lookup failed", map[string]any{"event": "systemConfigLookupFailed", "error": err.Error()})
 		}
 		return defaults
 	}

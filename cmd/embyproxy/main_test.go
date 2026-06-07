@@ -53,6 +53,11 @@ func TestRequestMiddlewareWritesAccessLogByDefault(t *testing.T) {
 	if entries[0].Scope != "access" {
 		t.Fatalf("scope = %q, want access", entries[0].Scope)
 	}
+	for _, want := range []string{"event=requestFinished", "method=GET", "uri=/admin"} {
+		if !strings.Contains(entries[0].Line, want) {
+			t.Fatalf("access log line = %q, want %q", entries[0].Line, want)
+		}
+	}
 	if !strings.Contains(entries[0].Line, "totalMs=") {
 		t.Fatalf("access log line = %q, want totalMs field", entries[0].Line)
 	}
