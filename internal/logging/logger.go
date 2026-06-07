@@ -44,8 +44,10 @@ type Logger struct {
 	level     atomic.Int64
 	accessLog atomic.Bool
 	seq       atomic.Uint64
-	buffer    *logBuffer
-	history   *logHistory
+	// mu keeps buffer and history on the same side of a clear boundary.
+	mu      sync.Mutex
+	buffer  *logBuffer
+	history *logHistory
 }
 
 type LogEntry struct {
@@ -120,6 +122,24 @@ func (l *Logger) Entries(limit int) []LogEntry {
 	return l.buffer.Entries(limit)
 }
 
+// Clear removes buffered and persisted console log entries.
+func (l *Logger) Clear() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.history != nil {
+		if err := l.history.reset(); err != nil {
+			return err
+		}
+	}
+	if l.buffer != nil {
+		l.buffer.Clear()
+	}
+	return nil
+}
+
 func (l *Logger) BufferCapacity() int {
 	if l == nil || l.buffer == nil {
 		return 0
@@ -131,6 +151,8 @@ func (l *Logger) EnableHistory(path string, entriesPerFile, maxFiles int) error 
 	if l == nil {
 		return nil
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.history != nil {
 		if err := l.history.Close(); err != nil {
 			return err
@@ -146,7 +168,12 @@ func (l *Logger) EnableHistory(path string, entriesPerFile, maxFiles int) error 
 }
 
 func (l *Logger) Close() error {
-	if l == nil || l.history == nil {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.history == nil {
 		return nil
 	}
 	return l.history.Close()
@@ -205,12 +232,14 @@ func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 	}
 	line := strings.Join(parts, " ")
 	entry := LogEntry{Time: parts[0], Level: level, Scope: scope, Message: RedactText(msg), Line: line}
+	l.mu.Lock()
 	if l.buffer != nil {
 		entry = l.buffer.Append(entry)
 	}
 	if l.history != nil {
 		_ = l.history.Append(entry)
 	}
+	l.mu.Unlock()
 	if level == "error" || level == "warn" {
 		fmt.Fprintln(os.Stderr, line)
 		return
@@ -242,6 +271,14 @@ func (b *logBuffer) Append(entry LogEntry) LogEntry {
 func (b *logBuffer) Entries(limit int) []LogEntry {
 	entries, _ := b.EntriesBefore(limit, 0)
 	return entries
+}
+
+func (b *logBuffer) Clear() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.next = 0
+	b.start = 0
+	b.entries = b.entries[:0]
 }
 
 func (b *logBuffer) EntriesBefore(limit int, before uint64) ([]LogEntry, bool) {

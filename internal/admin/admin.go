@@ -115,7 +115,7 @@ func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) 
 	}
 	capture.RememberParsedBody(r, body)
 	action := strings.TrimSpace(asString(body["action"]))
-	if action == "logs.list" {
+	if action == "logs.list" || action == "logs.clear" {
 		capture.Suppress(r)
 		requestlog.SuppressAccessLog(ctx)
 	}
@@ -247,9 +247,21 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return map[string]any{"ok": true, "stats": stats}, http.StatusOK
 	case "logs.list":
 		return h.listLogs(body), http.StatusOK
+	case "logs.clear":
+		return h.clearLogs(), http.StatusOK
 	default:
 		return fail("未知 action: " + action), http.StatusOK
 	}
+}
+
+func (h *Handler) clearLogs() map[string]any {
+	if h.log == nil {
+		return h.listLogs(nil)
+	}
+	if err := h.log.Clear(); err != nil {
+		return fail(err.Error())
+	}
+	return h.listLogs(map[string]any{"limit": h.log.BufferCapacity()})
 }
 
 func (h *Handler) listLogs(body map[string]any) map[string]any {

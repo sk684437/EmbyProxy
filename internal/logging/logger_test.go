@@ -146,6 +146,37 @@ func TestLoggerEnableHistoryClosesPreviousHistory(t *testing.T) {
 	log.Info("test", "after", nil)
 }
 
+func TestLoggerClearRemovesBufferedAndHistoryEntries(t *testing.T) {
+	log := New("debug", true)
+	if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 3); err != nil {
+		t.Fatalf("EnableHistory() error = %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	for i := 1; i <= 3; i++ {
+		log.Info("test", fmt.Sprintf("before-%d", i), nil)
+	}
+	if page := log.Page(10, 0); messages(page.Entries) != "before-1,before-2,before-3" {
+		t.Fatalf("entries before clear = %q", messages(page.Entries))
+	}
+
+	if err := log.Clear(); err != nil {
+		t.Fatalf("Clear() error = %v", err)
+	}
+
+	cleared := log.Page(10, 0)
+	if len(cleared.Entries) != 0 || cleared.HasOlder != false || !cleared.History {
+		t.Fatalf("page after clear = %+v", cleared)
+	}
+	log.Info("test", "after", nil)
+	latest := log.Page(10, 0)
+	if messages(latest.Entries) != "after" {
+		t.Fatalf("entries after clear = %q", messages(latest.Entries))
+	}
+	if latest.Entries[0].ID != 1 {
+		t.Fatalf("first entry ID after clear = %d, want 1", latest.Entries[0].ID)
+	}
+}
+
 func messages(entries []LogEntry) string {
 	values := make([]string, 0, len(entries))
 	for _, entry := range entries {

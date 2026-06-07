@@ -487,9 +487,10 @@ tr:last-child td{border-bottom:0}
             <div class="action-pack">
               <button class="primary-action" onclick="loadLogs(true)">刷新</button>
               <button class="btn" id="logLatestBtn" onclick="loadLatestLogs(true)">最新</button>
-              <button class="btn" id="logNewerBtn" onclick="loadNewerLogs()">下一页</button>
-              <button class="btn" id="logOlderBtn" onclick="loadOlderLogs()">更早</button>
+              <button class="btn" id="logNewerBtn" onclick="loadNewerLogs()">上一页</button>
+              <button class="btn" id="logOlderBtn" onclick="loadOlderLogs()">下一页</button>
               <button class="btn" onclick="copyLogs()">复制</button>
+              <button class="btn btn-danger" onclick="clearLogs()">清空</button>
             </div>
           </div>
           <div class="log-console" id="logConsole">
@@ -1692,6 +1693,24 @@ async function loadLogs(showToast = false, before = currentLogBefore) {
   renderLogs(logs, r);
   renderLogHeadStatus(logs);
   if (showToast) toast('日志已刷新', 'ok');
+}
+
+async function clearLogs() {
+  if (!confirm('确定清空控制台日志？')) return;
+  const r = await api('logs.clear');
+  if (!r.ok) {
+    toast('清理日志失败: ' + (r.error || ''), 'err');
+    return;
+  }
+  const logs = Array.isArray(r.logs) ? r.logs : [];
+  lastLogLines = logs.map(x => x.line || '');
+  currentLogBefore = 0;
+  currentLogOldestId = Number(r.oldestId || 0);
+  currentLogHasOlder = !!r.hasOlder;
+  logPageStack = [];
+  renderLogs(logs, r);
+  renderLogHeadStatus(logs);
+  toast('日志已清理', 'ok');
 }
 
 function renderLogs(logs, meta = {}) {

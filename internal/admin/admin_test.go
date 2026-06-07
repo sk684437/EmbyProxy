@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,39 +115,74 @@ func TestDispatchLogsListReturnsBufferedLogs(t *testing.T) {
 	}
 }
 
-func TestHandleAPISuppressesLogsListAccessLogAndTrafficCapture(t *testing.T) {
-	cwd := t.TempDir()
-	store, err := storage.New(filepath.Join(cwd, "proxy.db"))
-	if err != nil {
-		t.Fatalf("storage.New() error = %v", err)
-	}
-	defer store.Close()
-	sys := storage.DefaultSystemConfig()
-	sys.TrafficCaptureEnabled = true
-	sys.TrafficCaptureFile = "data/traffic-captures.jsonl"
-	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
-		t.Fatalf("SaveSystemConfig() error = %v", err)
-	}
-	handler := New(config.Config{}, nil, nil, nil, logging.New("info", false), nil)
-	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
-	ctx := requestlog.WithAccessLogState(context.Background())
-	req := httptest.NewRequest(http.MethodPost, "/admin/api", strings.NewReader(`{"action":"logs.list"}`)).WithContext(ctx)
-	rec := httptest.NewRecorder()
-	captureSuppressed := false
+func TestDispatchLogsClearRemovesBufferedLogs(t *testing.T) {
+	ctx := context.Background()
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
 
-	recorder.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler.handleAPI(w, r, "admin")
-		captureSuppressed = capture.Suppressed(r)
-	})).ServeHTTP(rec, req)
+	handler.log.Configure("info", false)
+	handler.log.Info("admin", "before clear", nil)
+	res, status := handler.dispatch(ctx, "admin", "logs.clear", map[string]any{})
 
-	if !requestlog.AccessLogSuppressed(ctx) {
-		t.Fatal("logs.list should suppress its access log entry")
+	if status != http.StatusOK || res["ok"] != true {
+		t.Fatalf("dispatch logs.clear status=%d res=%+v", status, res)
 	}
-	if !captureSuppressed {
-		t.Fatal("logs.list should suppress its traffic capture record")
+	logs, ok := res["logs"].([]logging.LogEntry)
+	if !ok {
+		t.Fatalf("logs type = %T, want []logging.LogEntry", res["logs"])
 	}
-	if _, err := os.Stat(filepath.Join(cwd, "data", "traffic-captures.jsonl")); !os.IsNotExist(err) {
-		t.Fatalf("traffic capture file should not be written, stat err = %v", err)
+	if len(logs) != 0 {
+		t.Fatalf("logs len after clear = %d, want 0", len(logs))
+	}
+
+	handler.log.Info("admin", "after clear", nil)
+	res, status = handler.dispatch(ctx, "admin", "logs.list", map[string]any{"limit": 10})
+	if status != http.StatusOK || res["ok"] != true {
+		t.Fatalf("dispatch logs.list status=%d res=%+v", status, res)
+	}
+	logs = res["logs"].([]logging.LogEntry)
+	if len(logs) != 1 || !strings.Contains(logs[0].Line, "after clear") {
+		t.Fatalf("logs after new write = %+v", logs)
+	}
+}
+
+func TestHandleAPISuppressesLogReadActionsAccessLogAndTrafficCapture(t *testing.T) {
+	for _, action := range []string{"logs.list", "logs.clear"} {
+		t.Run(action, func(t *testing.T) {
+			cwd := t.TempDir()
+			store, err := storage.New(filepath.Join(cwd, "proxy.db"))
+			if err != nil {
+				t.Fatalf("storage.New() error = %v", err)
+			}
+			defer store.Close()
+			sys := storage.DefaultSystemConfig()
+			sys.TrafficCaptureEnabled = true
+			sys.TrafficCaptureFile = "data/traffic-captures.jsonl"
+			if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+				t.Fatalf("SaveSystemConfig() error = %v", err)
+			}
+			handler := New(config.Config{}, nil, nil, nil, logging.New("info", false), nil)
+			recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+			ctx := requestlog.WithAccessLogState(context.Background())
+			req := httptest.NewRequest(http.MethodPost, "/admin/api", strings.NewReader(fmt.Sprintf(`{"action":"%s"}`, action))).WithContext(ctx)
+			rec := httptest.NewRecorder()
+			captureSuppressed := false
+
+			recorder.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handler.handleAPI(w, r, "admin")
+				captureSuppressed = capture.Suppressed(r)
+			})).ServeHTTP(rec, req)
+
+			if !requestlog.AccessLogSuppressed(ctx) {
+				t.Fatalf("%s should suppress its access log entry", action)
+			}
+			if !captureSuppressed {
+				t.Fatalf("%s should suppress its traffic capture record", action)
+			}
+			if _, err := os.Stat(filepath.Join(cwd, "data", "traffic-captures.jsonl")); !os.IsNotExist(err) {
+				t.Fatalf("traffic capture file should not be written, stat err = %v", err)
+			}
+		})
 	}
 }
 
