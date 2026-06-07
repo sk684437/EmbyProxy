@@ -72,18 +72,18 @@ var Profiles = map[string]Profile{
 		Key:            "hills_android",
 		Label:          "Hills Android",
 		ClientName:     "Hills",
-		ClientVersion:  "1.7.0",
+		ClientVersion:  "1.7.1",
 		DeviceName:     "diting",
 		DeviceIDLength: 16,
-		UserAgent:      "Hills/1.7.0 (android; 15)",
+		UserAgent:      "Hills/1.7.1 (android; 15)",
 	},
 	"hills_windows": {
 		Key:            "hills_windows",
 		Label:          "Hills Windows",
 		ClientName:     "Hills Windows",
-		ClientVersion:  "1.2.0",
+		ClientVersion:  "1.2.1",
 		DeviceIDLength: 32,
-		UserAgent:      "Hills Windows/1.2.0 (windows; 19041.vb_release.191206-1406)",
+		UserAgent:      "Hills Windows/1.2.1 (windows; 19041.vb_release.191206-1406)",
 	},
 }
 
