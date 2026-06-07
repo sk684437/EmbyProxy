@@ -209,7 +209,8 @@ func TestSendResponseLogsBodyCopyReadError(t *testing.T) {
 		},
 		Body: failingReadBody{err: wantErr},
 	}
-	ctx := context.WithValue(context.Background(), "requestID", "req-copy")
+	ctx := WithAccessLogFields(context.Background())
+	ctx = context.WithValue(ctx, "requestID", "req-copy")
 	ctx = requestlog.WithAccessLogState(ctx)
 	requestlog.SetRequestURI(ctx, "/node/<secret>/emby/videos/1/original.mkv")
 	req := httptest.NewRequest(http.MethodGet, "/node/secret/emby/videos/1/original.mkv", nil).WithContext(ctx)
@@ -223,10 +224,36 @@ func TestSendResponseLogsBodyCopyReadError(t *testing.T) {
 		t.Fatalf("log entries = %d, want 1", len(entries))
 	}
 	line := entries[0].Line
-	for _, want := range []string{"response body copy interrupted", "id=req-copy", "side=upstream-read", "range=\"bytes=1024-\"", "error=\"upstream stalled\"", "uri=\"/node/<secret>/emby/videos/1/original.mkv\""} {
+	for _, want := range []string{"response body copy interrupted", "id=req-copy", "side=upstream-read", "firstReadStatus=none", "range=\"bytes=1024-\"", "error=\"upstream stalled\"", "uri=\"/node/<secret>/emby/videos/1/original.mkv\""} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("log line = %q, want %q", line, want)
 		}
+	}
+	if got := AccessLogFields(ctx)["firstReadStatus"]; got != "none" {
+		t.Fatalf("firstReadStatus access log field = %v, want none", got)
+	}
+}
+
+func TestSendResponseStoresFirstReadDurationForAccessLog(t *testing.T) {
+	h := &Handler{log: logging.New("silent", false)}
+	ctx := WithAccessLogFields(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/node/secret/emby/videos/1/original.mkv", nil).WithContext(ctx)
+	res := &http.Response{
+		StatusCode: http.StatusPartialContent,
+		Status:     "206 Partial Content",
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader("hello")),
+	}
+	rec := httptest.NewRecorder()
+
+	h.sendResponse(rec, req, res)
+
+	firstReadMs, ok := AccessLogFields(ctx)["firstReadMs"].(int64)
+	if !ok {
+		t.Fatalf("firstReadMs access log field = %T, want int64", AccessLogFields(ctx)["firstReadMs"])
+	}
+	if firstReadMs < 0 {
+		t.Fatalf("firstReadMs = %d, want non-negative", firstReadMs)
 	}
 }
 

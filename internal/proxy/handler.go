@@ -575,10 +575,11 @@ func (h *Handler) sendResponse(w http.ResponseWriter, r *http.Request, res *http
 }
 
 func (h *Handler) copyResponseBody(w http.ResponseWriter, r *http.Request, res *http.Response) (int64, error) {
-	reader := &bodyCopyReader{reader: res.Body}
-	writer := &bodyCopyWriter{writer: w}
 	started := time.Now()
+	reader := &bodyCopyReader{reader: res.Body, started: started}
+	writer := &bodyCopyWriter{writer: w}
 	copied, err := io.Copy(writer, reader)
+	setBodyCopyFirstReadAccessLogFields(requestContext(r), reader, false)
 	if ctxErr := requestContextErr(r); err != nil || ctxErr != nil {
 		h.logBodyCopyIssue(r, res, copied, err, ctxErr, time.Since(started), reader, writer)
 	}
@@ -587,20 +588,33 @@ func (h *Handler) copyResponseBody(w http.ResponseWriter, r *http.Request, res *
 
 type bodyCopyReader struct {
 	reader       io.Reader
+	started      time.Time
 	bytes        int64
 	calls        int64
 	lastDuration time.Duration
 	lastErr      error
 	lastAt       time.Time
+	firstReadAt  time.Time
+	firstReadMs  int64
 }
 
 func (r *bodyCopyReader) Read(p []byte) (int, error) {
 	started := time.Now()
 	n, err := r.reader.Read(p)
+	finished := time.Now()
 	r.calls++
-	r.lastDuration = time.Since(started)
-	r.lastAt = time.Now()
+	r.lastDuration = finished.Sub(started)
+	r.lastAt = finished
 	if n > 0 {
+		if r.bytes == 0 {
+			r.firstReadAt = finished
+			if !r.started.IsZero() {
+				r.firstReadMs = finished.Sub(r.started).Milliseconds()
+				if r.firstReadMs < 0 {
+					r.firstReadMs = 0
+				}
+			}
+		}
 		r.bytes += int64(n)
 	}
 	if err != nil && err != io.EOF {
@@ -644,6 +658,13 @@ func requestContextErr(r *http.Request) error {
 	return r.Context().Err()
 }
 
+func requestContext(r *http.Request) context.Context {
+	if r == nil {
+		return nil
+	}
+	return r.Context()
+}
+
 func (h *Handler) logBodyCopyIssue(r *http.Request, res *http.Response, copied int64, copyErr, ctxErr error, elapsed time.Duration, reader *bodyCopyReader, writer *bodyCopyWriter) {
 	if h == nil || h.log == nil {
 		return
@@ -669,6 +690,7 @@ func (h *Handler) logBodyCopyIssue(r *http.Request, res *http.Response, copied i
 		"contentRange": strings.TrimSpace(res.Header.Get("Content-Range")),
 		"contentLen":   strings.TrimSpace(res.Header.Get("Content-Length")),
 	}
+	setBodyCopyFirstReadLogFields(meta, reader)
 	if r != nil {
 		meta["id"] = requestID(r, h.log)
 		meta["method"] = r.Method
@@ -691,6 +713,7 @@ func (h *Handler) logBodyCopyIssue(r *http.Request, res *http.Response, copied i
 		meta["contextErr"] = ctxErr.Error()
 		setBodyCopyAccessLogField(reqCtx, "bodyCopyContextErr", ctxErr.Error())
 	}
+	setBodyCopyFirstReadAccessLogFields(reqCtx, reader, true)
 	setBodyCopyAccessLogField(reqCtx, "bodyCopySide", side)
 	h.log.Warn("proxy", "response body copy interrupted", meta)
 }
@@ -710,6 +733,30 @@ func setBodyCopyAccessLogField(ctx context.Context, key string, value any) {
 		return
 	}
 	SetAccessLogField(ctx, key, value)
+}
+
+func setBodyCopyFirstReadLogFields(meta map[string]any, reader *bodyCopyReader) {
+	if meta == nil || reader == nil {
+		return
+	}
+	if !reader.firstReadAt.IsZero() {
+		meta["firstReadMs"] = reader.firstReadMs
+		return
+	}
+	meta["firstReadStatus"] = "none"
+}
+
+func setBodyCopyFirstReadAccessLogFields(ctx context.Context, reader *bodyCopyReader, includeMissing bool) {
+	if ctx == nil || reader == nil {
+		return
+	}
+	if !reader.firstReadAt.IsZero() {
+		SetAccessLogField(ctx, "firstReadMs", reader.firstReadMs)
+		return
+	}
+	if includeMissing {
+		SetAccessLogField(ctx, "firstReadStatus", "none")
+	}
 }
 
 func bodyCopyIssueSide(copyErr, ctxErr error, reader *bodyCopyReader, writer *bodyCopyWriter) string {
