@@ -19,7 +19,6 @@ var (
 	sessionStoppedRE  = regexp.MustCompile(`/sessions/playing/stopped/?$`)
 	sessionPlayingRE  = regexp.MustCompile(`/sessions/playing/?$`)
 	playbackMediaRE   = regexp.MustCompile(`(?i)/(videos|audio|items)/([^/?#]+)(?:/|$)`)
-	contentRangeRE    = regexp.MustCompile(`(?i)bytes\s+(\d+)-(\d+)`)
 )
 
 type PlaybackInput struct {
@@ -33,6 +32,10 @@ type PlaybackInput struct {
 	RequestURL string
 	Method     string
 	OccurredAt int64
+
+	TrafficOnly   bool
+	InboundBytes  int64
+	OutboundBytes int64
 }
 
 const (
@@ -68,13 +71,17 @@ func (s *Store) runPlaybackAsyncLogger() {
 	defer s.playbackWG.Done()
 	for in := range s.playbackQueue {
 		ctx, cancel := context.WithTimeout(context.Background(), playbackAsyncWriteTimeout)
-		_ = s.LogPlayback(ctx, in)
+		if in.TrafficOnly {
+			_ = s.LogPlaybackTraffic(ctx, in)
+		} else {
+			_ = s.LogPlayback(ctx, in)
+		}
 		cancel()
 	}
 }
 
 func (s *Store) LogPlaybackAsync(in PlaybackInput) bool {
-	if s == nil || !in.IsPlayback {
+	if s == nil || (!in.IsPlayback && !in.TrafficOnly) {
 		return true
 	}
 	in = clonePlaybackInput(in)
@@ -140,10 +147,6 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	deviceID := cutString(headerOrQuery(in.Headers, reqURL, "X-Emby-Device-Id", "X-MediaBrowser-Device-Id", "DeviceId", "deviceId"), 64)
 	sessionID := cutString(headerOrQuery(in.Headers, reqURL, "X-Emby-Session-Id", "SessionId", "PlaySessionId", "playSessionId"), 64)
 
-	bytes := responseBytes(in.Status, in.RespHeader)
-	if in.Mode != "proxy" || !countable || bytes < 0 {
-		bytes = 0
-	}
 	sessInc := int64(0)
 	if countable {
 		sessInc = 1
@@ -206,15 +209,14 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	}
 	if countable {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO play_stats (day, node, client, plays, bytes, sessions, errors, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO play_stats (day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at)
+			VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?)
 			ON CONFLICT(day, node, client) DO UPDATE SET
 				plays = plays + excluded.plays,
-				bytes = bytes + excluded.bytes,
 				sessions = sessions + excluded.sessions,
 				errors = errors + excluded.errors,
 				updated_at = MAX(play_stats.updated_at, excluded.updated_at)
-		`, day, nodeName, client, playInc, bytes, sessInc, errInc, now); err != nil {
+		`, day, nodeName, client, playInc, sessInc, errInc, now); err != nil {
 			return err
 		}
 	}
@@ -235,6 +237,54 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	return tx.Commit()
 }
 
+func (s *Store) LogPlaybackTraffic(ctx context.Context, in PlaybackInput) error {
+	if !in.IsPlayback {
+		return nil
+	}
+	now := playbackOccurredAt(in)
+	day := BeijingDate(now)
+	nodeName := strings.ToLower(strings.TrimSpace(in.Node.Name))
+	if nodeName == "" {
+		nodeName = "unknown"
+	}
+	method := strings.ToUpper(strings.TrimSpace(in.Method))
+	if method == "" {
+		method = strings.ToUpper(strings.TrimSpace(in.Headers.Get("method")))
+	}
+	if method == "" {
+		method = "GET"
+	}
+	countable := method == http.MethodGet && sessionPlayingEvent(in.RequestURL) == ""
+	if in.Mode != "proxy" || !countable {
+		return nil
+	}
+	inboundBytes := in.InboundBytes
+	if inboundBytes < 0 {
+		inboundBytes = 0
+	}
+	outboundBytes := in.OutboundBytes
+	if outboundBytes < 0 {
+		outboundBytes = 0
+	}
+	if inboundBytes == 0 && outboundBytes == 0 {
+		return nil
+	}
+	client := cutString(in.Headers.Get("User-Agent"), 128)
+	if client == "" {
+		client = "Unknown"
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO play_stats (day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at)
+		VALUES (?, ?, ?, 0, ?, ?, ?, 0, 0, ?)
+		ON CONFLICT(day, node, client) DO UPDATE SET
+			bytes = bytes + excluded.bytes,
+			inbound_bytes = inbound_bytes + excluded.inbound_bytes,
+			outbound_bytes = outbound_bytes + excluded.outbound_bytes,
+			updated_at = MAX(play_stats.updated_at, excluded.updated_at)
+	`, day, nodeName, client, outboundBytes, inboundBytes, outboundBytes, now)
+	return err
+}
+
 func playbackOccurredAt(in PlaybackInput) int64 {
 	if in.OccurredAt > 0 {
 		return in.OccurredAt
@@ -248,7 +298,7 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 	}
 	cutoff := localtime.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT day, node, client, plays, bytes, sessions, errors
+		SELECT day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors
 		FROM play_stats WHERE day >= ? ORDER BY day DESC, plays DESC
 	`, cutoff)
 	if err != nil {
@@ -258,7 +308,7 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 	out := []PlayStat{}
 	for rows.Next() {
 		var stat PlayStat
-		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.Sessions, &stat.Errors); err != nil {
+		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
 			return nil, err
 		}
 		out = append(out, stat)
@@ -282,7 +332,7 @@ func (s *Store) GetTodayStats(ctx context.Context) (TodayStats, error) {
 }
 
 func (s *Store) getStatsForDay(ctx context.Context, day string) ([]PlayStat, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT day, node, client, plays, bytes, sessions, errors FROM play_stats WHERE day = ?`, day)
+	rows, err := s.db.QueryContext(ctx, `SELECT day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors FROM play_stats WHERE day = ?`, day)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +340,7 @@ func (s *Store) getStatsForDay(ctx context.Context, day string) ([]PlayStat, err
 	out := []PlayStat{}
 	for rows.Next() {
 		var stat PlayStat
-		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.Sessions, &stat.Errors); err != nil {
+		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
 			return nil, err
 		}
 		out = append(out, stat)
@@ -423,25 +473,6 @@ func headerOrQuery(headers http.Header, u *url.URL, names ...string) string {
 		}
 	}
 	return QueryValue(u, names...)
-}
-
-func responseBytes(status int, headers http.Header) int64 {
-	if cr := headers.Get("Content-Range"); cr != "" {
-		m := contentRangeRE.FindStringSubmatch(cr)
-		if len(m) == 3 {
-			start, _ := strconv.ParseInt(m[1], 10, 64)
-			end, _ := strconv.ParseInt(m[2], 10, 64)
-			if end >= start {
-				return end - start + 1
-			}
-		}
-	}
-	if cl := headers.Get("Content-Length"); cl != "" {
-		n, _ := strconv.ParseInt(strings.TrimSpace(cl), 10, 64)
-		return n
-	}
-	_ = status
-	return 0
 }
 
 func cutString(value string, max int) string {

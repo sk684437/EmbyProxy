@@ -1247,6 +1247,83 @@ func TestSmartSTRMUsesPlaybackProxyWithoutWhitelist(t *testing.T) {
 	}
 }
 
+func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
+	h := newProxyTestHandler(t, storage.Node{})
+	h.playbackClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
+			"Accept-Ranges":  []string{"bytes"},
+			"Content-Length": []string{"4096"},
+			"Content-Range":  []string{"bytes 0-4095/8192"},
+			"Content-Type":   []string{"video/mp4"},
+		}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Videos/1/stream.mp4?Static=true", nil)
+	req.Header.Set("User-Agent", "actual-client")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusPartialContent, rr.Body.String())
+	}
+	if rr.Body.String() != "video" {
+		t.Fatalf("body = %q, want video", rr.Body.String())
+	}
+
+	ctx := context.Background()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stats, err := h.store.GetTodayStats(ctx)
+		if err != nil {
+			t.Fatalf("GetTodayStats() error = %v", err)
+		}
+		for _, row := range stats.Today {
+			if row.Node == "node" && row.Client == "actual-client" {
+				if row.Bytes != 5 || row.InboundBytes != 5 || row.OutboundBytes != 5 {
+					t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 5, 5, 5", row.Bytes, row.InboundBytes, row.OutboundBytes)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("playback stat was not written")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestServeHTTPDoesNotLogImageTrafficAsPlayback(t *testing.T) {
+	h := newProxyTestHandler(t, storage.Node{})
+	h.imageClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return bytesResponse(http.StatusOK, []byte("image"), http.Header{"Content-Type": []string{"image/jpeg"}}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Items/1/Images/Primary", nil)
+	req.Header.Set("User-Agent", "image-client")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for {
+		stats, err := h.store.GetTodayStats(context.Background())
+		if err != nil {
+			t.Fatalf("GetTodayStats() error = %v", err)
+		}
+		for _, row := range stats.Today {
+			if row.Client == "image-client" {
+				t.Fatalf("image request created playback stat: %+v", row)
+			}
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestPlaybackRedirectModeClassifiesExternalLocations(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Videos/1/stream.mp4", nil)
 	tests := []struct {

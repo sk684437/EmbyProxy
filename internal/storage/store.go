@@ -129,13 +129,59 @@ func (s *Store) InitSchema(ctx context.Context) error {
 			client TEXT NOT NULL,
 			plays INTEGER DEFAULT 0,
 			bytes INTEGER DEFAULT 0,
+			inbound_bytes INTEGER DEFAULT 0,
+			outbound_bytes INTEGER DEFAULT 0,
 			sessions INTEGER DEFAULT 0,
 			errors INTEGER DEFAULT 0,
 			updated_at INTEGER NOT NULL,
 			PRIMARY KEY(day, node, client)
 		);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.ensurePlayStatsTrafficColumns(ctx)
+}
+
+func (s *Store) ensurePlayStatsTrafficColumns(ctx context.Context) error {
+	cols, err := s.tableColumns(ctx, "play_stats")
+	if err != nil {
+		return err
+	}
+	if !cols["inbound_bytes"] {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE play_stats ADD COLUMN inbound_bytes INTEGER DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !cols["outbound_bytes"] {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE play_stats ADD COLUMN outbound_bytes INTEGER DEFAULT 0`); err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE play_stats SET outbound_bytes = COALESCE(bytes, 0) WHERE outbound_bytes = 0`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
 }
 
 func (kv *KV) Get(ctx context.Context, key string) (string, bool, error) {

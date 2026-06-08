@@ -89,13 +89,15 @@ func DefaultSystemConfig() SystemConfig {
 }
 
 type PlayStat struct {
-	Day      string `json:"day"`
-	Node     string `json:"node"`
-	Client   string `json:"client"`
-	Plays    int64  `json:"plays"`
-	Bytes    int64  `json:"bytes"`
-	Sessions int64  `json:"sessions"`
-	Errors   int64  `json:"errors"`
+	Day           string `json:"day"`
+	Node          string `json:"node"`
+	Client        string `json:"client"`
+	Plays         int64  `json:"plays"`
+	Bytes         int64  `json:"bytes"`
+	InboundBytes  int64  `json:"inboundBytes"`
+	OutboundBytes int64  `json:"outboundBytes"`
+	Sessions      int64  `json:"sessions"`
+	Errors        int64  `json:"errors"`
 }
 
 type TodayStats struct {

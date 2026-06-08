@@ -197,7 +197,8 @@ func resolvePublicDialIPs(ctx context.Context, host string) ([]net.IP, error) {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx := withPlaybackLogState(r.Context())
+	r = r.WithContext(ctx)
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "stage": "route-parse"})
 	parsed, status, message := h.parseRequest(r)
 	if status != 0 {
@@ -556,6 +557,31 @@ func (h *Handler) requestBodyForReplay(w http.ResponseWriter, r *http.Request) (
 	return capture.DrainAndRemember(r, h.cfg.Defaults.MaxRetryBodyBytes)
 }
 
+func (h *Handler) registerPlayback(r *http.Request, in storage.PlaybackInput) {
+	if h == nil || h.store == nil {
+		return
+	}
+	if !in.IsPlayback {
+		return
+	}
+	if in.OccurredAt <= 0 {
+		in.OccurredAt = time.Now().UnixMilli()
+	}
+	if r != nil {
+		_ = registerPlaybackLog(r.Context(), in)
+	}
+	h.logPlayback(in)
+}
+
+func (h *Handler) finishPlaybackLog(r *http.Request, inboundBytes, outboundBytes int64) {
+	if h == nil || h.store == nil || r == nil {
+		return
+	}
+	if in, ok := takePlaybackTrafficLog(r.Context(), inboundBytes, outboundBytes); ok {
+		h.logPlayback(in)
+	}
+}
+
 func (h *Handler) logPlayback(in storage.PlaybackInput) {
 	if h == nil || h.store == nil {
 		return
@@ -574,21 +600,29 @@ func (h *Handler) sendResponse(w http.ResponseWriter, r *http.Request, res *http
 	defer res.Body.Close()
 	copyResponseHeaders(w.Header(), res.Header, res.Uncompressed)
 	w.WriteHeader(res.StatusCode)
-	if res.Body != nil {
-		_, _ = h.copyResponseBody(w, r, res)
+	stats := bodyCopyStats{}
+	if res.Body != nil && r.Method != http.MethodHead {
+		stats, _ = h.copyResponseBody(w, r, res)
 	}
+	h.finishPlaybackLog(r, stats.readBytes, stats.writeBytes)
 }
 
-func (h *Handler) copyResponseBody(w http.ResponseWriter, r *http.Request, res *http.Response) (int64, error) {
+type bodyCopyStats struct {
+	readBytes  int64
+	writeBytes int64
+}
+
+func (h *Handler) copyResponseBody(w http.ResponseWriter, r *http.Request, res *http.Response) (bodyCopyStats, error) {
 	started := time.Now()
 	reader := &bodyCopyReader{reader: res.Body, started: started}
 	writer := &bodyCopyWriter{writer: w}
 	copied, err := io.Copy(writer, reader)
+	stats := bodyCopyStats{readBytes: reader.bytes, writeBytes: writer.bytes}
 	setBodyCopyFirstReadAccessLogFields(requestContext(r), reader, false)
 	if ctxErr := requestContextErr(r); err != nil || ctxErr != nil {
 		h.logBodyCopyIssue(r, res, copied, err, ctxErr, time.Since(started), reader, writer)
 	}
-	return copied, err
+	return stats, err
 }
 
 type bodyCopyReader struct {

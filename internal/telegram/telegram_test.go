@@ -7,10 +7,12 @@ import (
 
 func TestBuildReportTextIncludesExpandedDailyStats(t *testing.T) {
 	today := summary{
-		Plays:    12,
-		Bytes:    9_000_000_000,
-		Sessions: 8,
-		Errors:   1,
+		Plays:         12,
+		Bytes:         9_000_000_000,
+		InboundBytes:  10_000_000_000,
+		OutboundBytes: 9_000_000_000,
+		Sessions:      8,
+		Errors:        1,
 		NodeMap: map[string]int64{
 			"alpha": 8,
 			"beta":  4,
@@ -22,10 +24,12 @@ func TestBuildReportTextIncludesExpandedDailyStats(t *testing.T) {
 		},
 	}
 	yesterday := summary{
-		Plays:    7,
-		Bytes:    4_000_000_000,
-		Sessions: 5,
-		Errors:   0,
+		Plays:         7,
+		Bytes:         4_000_000_000,
+		InboundBytes:  5_000_000_000,
+		OutboundBytes: 4_000_000_000,
+		Sessions:      5,
+		Errors:        0,
 		NodeMap: map[string]int64{
 			"alpha": 7,
 		},
@@ -41,10 +45,10 @@ func TestBuildReportTextIncludesExpandedDailyStats(t *testing.T) {
 	for _, want := range []string{
 		"今日: 12 次播放 | 8 会话 | 2 节点活跃",
 		"  代理: 9 | 直连: 3 | 直连占比: 25.0%",
-		"  代理流量: 9.00 GB | 单次均值: 1.00 GB",
+		"  代理流量: 入站 10.00 GB | 出站 9.00 GB | 单次出站: 1.00 GB",
 		"  5xx: 1 次",
 		"较昨日:",
-		"  播放: +5 | 会话: +3 | 流量: +5.00 GB",
+		"  播放: +5 | 会话: +3 | 流量: 入站 +5.00 GB | 出站 +5.00 GB",
 		"  活跃节点: +1 | 5xx: +1",
 		"昨日: 7 次播放 | 5 会话 | 1 节点活跃",
 		"  代理: 6 | 直连: 1 | 直连占比: 14.3%",
@@ -64,7 +68,7 @@ func TestReportFormatHelpersHandleEmptyValues(t *testing.T) {
 	if got := modeSummaryLine(0, 0); got != "  代理: 0 | 直连: 0 | 直连占比: 0.0%" {
 		t.Fatalf("modeSummaryLine() = %q", got)
 	}
-	if got := trafficSummaryLine(0, 0); got != "  代理流量: 0B | 单次均值: 0B" {
+	if got := trafficSummaryLine(0, 0, 0); got != "  代理流量: 入站 0B | 出站 0B | 单次出站: 0B" {
 		t.Fatalf("trafficSummaryLine() = %q", got)
 	}
 	if got := formatSignedBytes(-1_500_000_000); got != "-1.50 GB" {

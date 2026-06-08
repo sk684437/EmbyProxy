@@ -132,16 +132,16 @@ func buildReportText(day string, today, yesterday summary, proxyPlaysToday, dire
 		"",
 		daySummaryLine("今日", today),
 		modeSummaryLine(proxyPlaysToday, directPlaysToday),
-		trafficSummaryLine(today.Bytes, proxyPlaysToday),
+		trafficSummaryLine(today.InboundBytes, today.OutboundBytes, proxyPlaysToday),
 		errorSummaryLine(today),
 		"",
 		"较昨日:",
-		fmt.Sprintf("  播放: %s | 会话: %s | 流量: %s", formatSignedInt(today.Plays-yesterday.Plays), formatSignedInt(today.Sessions-yesterday.Sessions), formatSignedBytes(today.Bytes-yesterday.Bytes)),
+		fmt.Sprintf("  播放: %s | 会话: %s | 流量: 入站 %s | 出站 %s", formatSignedInt(today.Plays-yesterday.Plays), formatSignedInt(today.Sessions-yesterday.Sessions), formatSignedBytes(today.InboundBytes-yesterday.InboundBytes), formatSignedBytes(today.OutboundBytes-yesterday.OutboundBytes)),
 		fmt.Sprintf("  活跃节点: %s | 5xx: %s", formatSignedInt(int64(len(today.NodeMap)-len(yesterday.NodeMap))), formatSignedInt(today.Errors-yesterday.Errors)),
 		"",
 		daySummaryLine("昨日", yesterday),
 		modeSummaryLine(proxyPlaysYest, directPlaysYest),
-		trafficSummaryLine(yesterday.Bytes, proxyPlaysYest),
+		trafficSummaryLine(yesterday.InboundBytes, yesterday.OutboundBytes, proxyPlaysYest),
 		errorSummaryLine(yesterday),
 	}
 	for _, line := range rankLines("今日节点排行", today.NodeMap, today.Plays, nodeDisplay) {
@@ -252,19 +252,27 @@ func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
 }
 
 type summary struct {
-	Plays     int64
-	Bytes     int64
-	Sessions  int64
-	Errors    int64
-	NodeMap   map[string]int64
-	ClientMap map[string]int64
+	Plays         int64
+	Bytes         int64
+	InboundBytes  int64
+	OutboundBytes int64
+	Sessions      int64
+	Errors        int64
+	NodeMap       map[string]int64
+	ClientMap     map[string]int64
 }
 
 func summarize(rows []storage.PlayStat) summary {
 	out := summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}}
 	for _, row := range rows {
+		outboundBytes := row.OutboundBytes
+		if outboundBytes == 0 {
+			outboundBytes = row.Bytes
+		}
 		out.Plays += row.Plays
-		out.Bytes += row.Bytes
+		out.Bytes += outboundBytes
+		out.InboundBytes += row.InboundBytes
+		out.OutboundBytes += outboundBytes
 		out.Sessions += row.Sessions
 		out.Errors += row.Errors
 		out.NodeMap[row.Node] += row.Plays
@@ -282,8 +290,8 @@ func modeSummaryLine(proxyPlays, directPlays int64) string {
 	return fmt.Sprintf("  代理: %d | 直连: %d | 直连占比: %s", proxyPlays, directPlays, formatPercent(directPlays, total))
 }
 
-func trafficSummaryLine(bytes, proxyPlays int64) string {
-	return fmt.Sprintf("  代理流量: %s | 单次均值: %s", formatBytes(bytes), formatAverageBytes(bytes, proxyPlays))
+func trafficSummaryLine(inboundBytes, outboundBytes, proxyPlays int64) string {
+	return fmt.Sprintf("  代理流量: 入站 %s | 出站 %s | 单次出站: %s", formatBytes(inboundBytes), formatBytes(outboundBytes), formatAverageBytes(outboundBytes, proxyPlays))
 }
 
 func errorSummaryLine(data summary) string {
