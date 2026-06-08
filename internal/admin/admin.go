@@ -491,10 +491,6 @@ func (h *Handler) tgSet(ctx context.Context, body map[string]any) map[string]any
 		ReportEveryMin:   clamp(intValue(cfgMap["reportEveryMin"], 1440), 60, 1440),
 		ReportMaxPerDay:  clamp(intValue(cfgMap["reportMaxPerDay"], 1), 1, 24),
 		ReportChangeOnly: cfgMap["reportChangeOnly"] != false,
-		DirectEstGB:      floatValue(cfgMap["directEstGB"], 1.2),
-	}
-	if cfg.DirectEstGB < 0 {
-		cfg.DirectEstGB = 0
 	}
 	if err := h.store.SaveTGConfig(ctx, cfg); err != nil {
 		return fail(err.Error())
@@ -971,24 +967,6 @@ func boolValue(values map[string]any, key string, fallback bool) bool {
 		return fallback
 	}
 	return validators.ToBool(values[key])
-}
-
-func floatValue(value any, fallback float64) float64 {
-	if value == nil || strings.TrimSpace(asString(value)) == "" {
-		return fallback
-	}
-	switch v := value.(type) {
-	case float64:
-		return v
-	case int:
-		return float64(v)
-	case string:
-		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		if err == nil {
-			return n
-		}
-	}
-	return fallback
 }
 
 func intString(value string) int {

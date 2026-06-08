@@ -207,12 +207,12 @@ tr:last-child td{border-bottom:0}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .form-full{grid-column:1/-1}
 .form-group{display:flex;flex-direction:column;gap:7px;min-width:0}
-.form-group label,.tg-form label{font-size:12px;font-weight:950;color:var(--ink-3);letter-spacing:.04em}
-.form-group input,.form-group select,.form-group textarea,.tg-form input,.tg-form select{width:100%;min-height:48px;border:1px solid var(--line);background:var(--canvas-2);border-radius:16px;padding:10px 13px;color:var(--ink);transition:.16s;resize:vertical}
+.form-group label{font-size:12px;font-weight:950;color:var(--ink-3);letter-spacing:.04em}
+.form-group input,.form-group select,.form-group textarea{width:100%;min-height:48px;border:1px solid var(--line);background:var(--canvas-2);border-radius:16px;padding:10px 13px;color:var(--ink);transition:.16s;resize:vertical}
 .form-group textarea{min-height:112px}
 .form-spaced{margin-bottom:16px}
 .code-textarea{min-height:280px;font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px}
-.form-group input:focus,.form-group select:focus,.form-group textarea:focus,.tg-form input:focus,.tg-form select:focus{border-color:var(--pine);background:#fff}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--pine);background:#fff}
 .form-hint{font-size:11px;color:var(--ink-3);font-weight:700}
 .form-section{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:18px 0 4px;margin-top:2px;color:var(--pine);font-size:12px;text-transform:uppercase;letter-spacing:.16em;font-weight:950;border-top:1px solid var(--line)}
 .form-section:first-child{border-top:0;padding-top:0}
@@ -221,6 +221,7 @@ tr:last-child td{border-bottom:0}
 .collapse-section.collapsed::after{transform:rotate(-45deg)}
 .section-grid{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .inline-check,.toggle-row{min-height:48px;display:flex;align-items:center;gap:10px}
+.toggle-row[hidden]{display:none}
 .inline-check input,.toggle-row input{width:19px;height:19px;accent-color:var(--pine);cursor:pointer;flex-shrink:0}
 .inline-check label,.toggle-row label{font-size:13px;color:var(--ink-2);font-weight:900;cursor:pointer}
 .identity-policy{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px;align-items:center;border:1px solid var(--line);background:linear-gradient(135deg,var(--pine-wash),var(--paper));border-radius:24px;padding:16px}
@@ -240,8 +241,6 @@ tr:last-child td{border-bottom:0}
 .policy-select select:focus{border-color:var(--pine);background:#fff}
 .form-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
 .config-sheet .form-actions{margin-top:0;padding:18px 28px 24px;background:linear-gradient(180deg,rgba(255,253,248,.22),rgba(255,253,248,.92));backdrop-filter:blur(10px)}
-.tg-form{display:grid;gap:16px}
-.tg-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .config-shell{min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr);gap:18px;padding:0 28px}
 .config-map{position:sticky;top:0;align-self:start;border:1px solid var(--line);border-radius:28px;background:linear-gradient(180deg,var(--paper-2),rgba(255,253,248,.68));padding:14px;box-shadow:0 16px 42px rgba(58,48,32,.06)}
 .config-map-head{padding:6px 6px 12px;margin-bottom:10px;border-bottom:1px solid var(--line)}
@@ -259,7 +258,7 @@ tr:last-child td{border-bottom:0}
 .config-index{grid-area:index;justify-self:end;min-width:34px;height:24px;border-radius:999px;background:var(--pine-wash);border:1px solid rgba(36,89,77,.16);color:var(--pine);display:grid;place-items:center;padding:0 9px;font-size:11px;font-weight:950;letter-spacing:.02em}
 .config-group-head > div{grid-area:title;min-width:0}
 .config-group h3{font-size:20px;line-height:1;color:var(--ink);letter-spacing:-.055em}
-.config-group > .tg-row{grid-template-columns:minmax(210px,.72fr) minmax(280px,1fr);gap:12px;align-items:end}
+.config-group > .tg-row{display:grid;grid-template-columns:minmax(210px,.72fr) minmax(280px,1fr);gap:12px;align-items:end}
 .config-group > .tg-row .form-group{gap:6px}
 .config-fields{display:grid;gap:12px}
 .config-field-card{border:1px solid var(--line);border-radius:20px;background:rgba(247,243,234,.72);padding:14px;display:grid;gap:12px}
@@ -866,40 +865,42 @@ tr:last-child td{border-bottom:0}
       </div>
       <button class="sheet-close" onclick="closeTgModal()">×</button>
     </div>
-    <div class="tg-form" id="tgForm">
-      <div class="toggle-row">
+    <div class="form-grid" id="tgForm">
+      <div class="form-section">通道设置</div>
+
+      <div class="toggle-row form-full">
         <input type="checkbox" id="tg-enabled"/>
         <label for="tg-enabled">启用推送</label>
       </div>
-      <div>
-        <label for="tg-token">Bot Token</label>
+
+      <div class="form-group form-full">
+        <label for="tg-token">Bot Token <span class="form-hint">在 Telegram 中通过 @BotFather 获取</span></label>
         <input type="text" id="tg-token" placeholder="1234567890:ABCdef..."/>
       </div>
-      <div>
-        <label for="tg-chat">Chat ID</label>
+
+      <div class="form-group form-full">
+        <label for="tg-chat">Chat ID <span class="form-hint">群组/频道可用 ID 或 @用户名；个人用户可用 @userinfobot 查询</span></label>
         <input type="text" id="tg-chat" placeholder="-1001234567890 或 @频道"/>
       </div>
-      <div class="tg-row">
-        <div>
-          <label for="tg-reportTime">日报推送时间（北京时间）</label>
-          <input type="time" id="tg-reportTime" value="08:00"/>
-        </div>
-        <div>
-          <label for="tg-reportEveryMin">推送间隔（分钟，最小 60）</label>
-          <input type="number" id="tg-reportEveryMin" value="1440" min="60" max="1440"/>
-        </div>
+
+      <div class="form-section">推送策略</div>
+
+      <div class="form-group">
+        <label for="tg-reportTime">日报推送时间 <span class="form-hint">北京时间</span></label>
+        <input type="time" id="tg-reportTime" value="08:00"/>
       </div>
-      <div class="tg-row">
-        <div>
-          <label for="tg-reportMaxPerDay">每日最多推送次数</label>
-          <input type="number" id="tg-reportMaxPerDay" value="1" min="1" max="24"/>
-        </div>
-        <div>
-          <label for="tg-directEstGB">直连流量估算（GB/次）</label>
-          <input type="number" id="tg-directEstGB" value="1.2" step="0.1" min="0"/>
-        </div>
+
+      <div class="form-group">
+        <label for="tg-reportEveryMin">推送间隔 <span class="form-hint">单位：分钟，最小 60</span></label>
+        <input type="number" id="tg-reportEveryMin" value="1440" min="60" max="1440"/>
       </div>
-      <div class="toggle-row">
+
+      <div class="form-group">
+        <label for="tg-reportMaxPerDay">每日最多推送次数</label>
+        <input type="number" id="tg-reportMaxPerDay" value="1" min="1" max="24" oninput="syncTgChangeOnlyVisibility()"/>
+      </div>
+
+      <div class="toggle-row" id="tg-changeOnlyRow" style="align-self: end;" hidden>
         <input type="checkbox" id="tg-changeOnly" checked/>
         <label for="tg-changeOnly">仅内容变化时推送</label>
       </div>
@@ -1621,24 +1622,29 @@ async function openTgModal() {
     document.getElementById('tg-reportTime').value = c.reportTime || '08:00';
     document.getElementById('tg-reportEveryMin').value = c.reportEveryMin || 1440;
     document.getElementById('tg-reportMaxPerDay').value = c.reportMaxPerDay || 1;
-    document.getElementById('tg-directEstGB').value = c.directEstGB || 1.2;
     document.getElementById('tg-changeOnly').checked = c.reportChangeOnly !== false;
   }
+  syncTgChangeOnlyVisibility();
   showModal('tgModal');
 }
 
 function closeTgModal() { hideModal('tgModal'); }
 
+function syncTgChangeOnlyVisibility() {
+  const maxPerDay = parseInt(document.getElementById('tg-reportMaxPerDay').value, 10);
+  document.getElementById('tg-changeOnlyRow').hidden = !Number.isFinite(maxPerDay) || maxPerDay <= 1;
+}
+
 async function saveTg() {
+  const reportMaxPerDay = parseInt(document.getElementById('tg-reportMaxPerDay').value, 10);
   const config = {
     enabled: document.getElementById('tg-enabled').checked,
     token: document.getElementById('tg-token').value.trim(),
     chat: document.getElementById('tg-chat').value.trim(),
     reportTime: document.getElementById('tg-reportTime').value,
-    reportEveryMin: parseInt(document.getElementById('tg-reportEveryMin').value),
-    reportMaxPerDay: parseInt(document.getElementById('tg-reportMaxPerDay').value),
-    directEstGB: parseFloat(document.getElementById('tg-directEstGB').value),
-    reportChangeOnly: document.getElementById('tg-changeOnly').checked,
+    reportEveryMin: parseInt(document.getElementById('tg-reportEveryMin').value, 10),
+    reportMaxPerDay,
+    reportChangeOnly: reportMaxPerDay > 1 ? document.getElementById('tg-changeOnly').checked : true,
   };
   const r = await api('tg.set', { config });
   if (r.ok) { closeTgModal(); toast('TG 配置已保存', 'ok'); }

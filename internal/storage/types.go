@@ -32,14 +32,13 @@ type Node struct {
 }
 
 type TGConfig struct {
-	Enabled          bool    `json:"enabled"`
-	Token            string  `json:"token"`
-	Chat             string  `json:"chat"`
-	ReportTime       string  `json:"reportTime"`
-	ReportEveryMin   int     `json:"reportEveryMin"`
-	ReportMaxPerDay  int     `json:"reportMaxPerDay"`
-	ReportChangeOnly bool    `json:"reportChangeOnly"`
-	DirectEstGB      float64 `json:"directEstGB"`
+	Enabled          bool   `json:"enabled"`
+	Token            string `json:"token"`
+	Chat             string `json:"chat"`
+	ReportTime       string `json:"reportTime"`
+	ReportEveryMin   int    `json:"reportEveryMin"`
+	ReportMaxPerDay  int    `json:"reportMaxPerDay"`
+	ReportChangeOnly bool   `json:"reportChangeOnly"`
 }
 
 type SystemConfig struct {

@@ -73,10 +73,6 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 		reportEveryMin = 1440
 	}
 	reportChangeOnly := cfg.ReportChangeOnly
-	directEstGB := cfg.DirectEstGB
-	if directEstGB <= 0 {
-		directEstGB = 1.2
-	}
 	kv := s.store.KV()
 	cntKey := "report:cnt:" + day
 	lastKey := "report:last:" + day
@@ -110,29 +106,7 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 			nodeDisplay[strings.ToLower(node.Name)] = display
 		}
 	}
-	lines := []string{
-		"Emby 播放日报 · " + day,
-		"",
-		fmt.Sprintf("今日: %d 次播放 | %d 节点活跃", today.Plays, len(today.NodeMap)),
-		fmt.Sprintf("  代理: %d | 直连: %d", proxyPlaysToday, directPlaysToday),
-		fmt.Sprintf("  流量: %s%s", formatBytes(today.Bytes), directEstimate(directPlaysToday, directEstGB)),
-	}
-	if today.Errors > 0 {
-		lines = append(lines, fmt.Sprintf("  %d 次 5xx 错误", today.Errors))
-	}
-	lines = append(lines,
-		"",
-		fmt.Sprintf("昨日: %d 次播放 | %d 节点活跃", yesterday.Plays, len(yesterday.NodeMap)),
-		fmt.Sprintf("  代理: %d | 直连: %d", proxyPlaysYest, directPlaysYest),
-		fmt.Sprintf("  流量: %s%s", formatBytes(yesterday.Bytes), directEstimate(directPlaysYest, directEstGB)),
-	)
-	for _, line := range rankLines("今日节点排行", today.NodeMap, nodeDisplay) {
-		lines = append(lines, line)
-	}
-	for _, line := range rankLines("今日客户端排行", today.ClientMap, nil) {
-		lines = append(lines, line)
-	}
-	text := strings.Join(lines, "\n")
+	text := buildReportText(day, today, yesterday, proxyPlaysToday, directPlaysToday, proxyPlaysYest, directPlaysYest, nodeDisplay)
 	digestText := regexp.MustCompile(`\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?`).ReplaceAllString(text, "")
 	digestText = regexp.MustCompile(`· \d{4}-\d{2}-\d{2}`).ReplaceAllString(digestText, "")
 	digest := storage.FNV1a(digestText)
@@ -149,6 +123,33 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 	_ = kv.Put(ctx, digestKey, digest)
 	s.log.Info("telegram", "daily report sent", map[string]any{"event": "dailyReportSent", "day": day, "count": cnt + 1})
 	return nil
+}
+
+func buildReportText(day string, today, yesterday summary, proxyPlaysToday, directPlaysToday, proxyPlaysYest, directPlaysYest int64, nodeDisplay map[string]string) string {
+	lines := []string{
+		"Emby 播放日报 · " + day,
+		"",
+		daySummaryLine("今日", today),
+		modeSummaryLine(proxyPlaysToday, directPlaysToday),
+		trafficSummaryLine(today.Bytes, proxyPlaysToday),
+		errorSummaryLine(today),
+		"",
+		"较昨日:",
+		fmt.Sprintf("  播放: %s | 会话: %s | 流量: %s", formatSignedInt(today.Plays-yesterday.Plays), formatSignedInt(today.Sessions-yesterday.Sessions), formatSignedBytes(today.Bytes-yesterday.Bytes)),
+		fmt.Sprintf("  活跃节点: %s | 5xx: %s", formatSignedInt(int64(len(today.NodeMap)-len(yesterday.NodeMap))), formatSignedInt(today.Errors-yesterday.Errors)),
+		"",
+		daySummaryLine("昨日", yesterday),
+		modeSummaryLine(proxyPlaysYest, directPlaysYest),
+		trafficSummaryLine(yesterday.Bytes, proxyPlaysYest),
+		errorSummaryLine(yesterday),
+	}
+	for _, line := range rankLines("今日节点排行", today.NodeMap, today.Plays, nodeDisplay) {
+		lines = append(lines, line)
+	}
+	for _, line := range rankLines("今日客户端排行", today.ClientMap, today.Plays, nil) {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
@@ -271,7 +272,24 @@ func summarize(rows []storage.PlayStat) summary {
 	return out
 }
 
-func rankLines(title string, values map[string]int64, display map[string]string) []string {
+func daySummaryLine(label string, data summary) string {
+	return fmt.Sprintf("%s: %d 次播放 | %d 会话 | %d 节点活跃", label, data.Plays, data.Sessions, len(data.NodeMap))
+}
+
+func modeSummaryLine(proxyPlays, directPlays int64) string {
+	total := proxyPlays + directPlays
+	return fmt.Sprintf("  代理: %d | 直连: %d | 直连占比: %s", proxyPlays, directPlays, formatPercent(directPlays, total))
+}
+
+func trafficSummaryLine(bytes, proxyPlays int64) string {
+	return fmt.Sprintf("  代理流量: %s | 单次均值: %s", formatBytes(bytes), formatAverageBytes(bytes, proxyPlays))
+}
+
+func errorSummaryLine(data summary) string {
+	return fmt.Sprintf("  5xx: %d 次", data.Errors)
+}
+
+func rankLines(title string, values map[string]int64, total int64, display map[string]string) []string {
 	if len(values) == 0 {
 		return nil
 	}
@@ -293,7 +311,7 @@ func rankLines(title string, values map[string]int64, display map[string]string)
 		if display != nil && display[strings.ToLower(p.Key)] != "" {
 			name = display[strings.ToLower(p.Key)]
 		}
-		lines = append(lines, fmt.Sprintf("  %s: %d 次", name, p.Value))
+		lines = append(lines, fmt.Sprintf("  %s: %d 次，占 %s", name, p.Value, formatPercent(p.Value, total)))
 	}
 	return lines
 }
@@ -309,11 +327,40 @@ func formatBytes(value int64) string {
 	return fmt.Sprintf("%.1f MB", float64(value)/1e6)
 }
 
-func directEstimate(plays int64, gb float64) string {
-	if plays <= 0 {
-		return ""
+func formatAverageBytes(bytes, count int64) string {
+	if bytes <= 0 || count <= 0 {
+		return "0B"
 	}
-	return fmt.Sprintf(" + 直连估算 %.1f GB", float64(plays)*gb)
+	return formatBytes(bytes / count)
+}
+
+func formatSignedBytes(value int64) string {
+	if value == 0 {
+		return "0B"
+	}
+	prefix := "+"
+	if value < 0 {
+		prefix = "-"
+		value = -value
+	}
+	return prefix + formatBytes(value)
+}
+
+func formatSignedInt(value int64) string {
+	if value > 0 {
+		return "+" + strconv.FormatInt(value, 10)
+	}
+	return strconv.FormatInt(value, 10)
+}
+
+func formatPercent(part, total int64) string {
+	if total <= 0 {
+		if part > 0 {
+			return "100.0%"
+		}
+		return "0.0%"
+	}
+	return fmt.Sprintf("%.1f%%", float64(part)*100/float64(total))
 }
 
 func mustKVGet(ctx context.Context, kv *storage.KV, key string) string {
