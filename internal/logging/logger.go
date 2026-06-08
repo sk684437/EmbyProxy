@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"embyproxy/internal/localtime"
 )
 
 const (
@@ -271,7 +273,7 @@ func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 		return
 	}
 	status := promotedMetaValue(meta, "status")
-	parts := []string{time.Now().UTC().Format(time.RFC3339), "[" + strings.ToUpper(level) + "]"}
+	parts := []string{localtime.RFC3339(time.Now()), "[" + strings.ToUpper(level) + "]"}
 	if status != "" {
 		parts = append(parts, "["+status+"]")
 	}

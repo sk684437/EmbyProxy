@@ -17,6 +17,7 @@ import (
 	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
+	"embyproxy/internal/localtime"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
@@ -409,7 +410,7 @@ func (h *Handler) exportNodes(ctx context.Context, uid string, body map[string]a
 		}
 		exported = append(exported, exportNode(node))
 	}
-	return map[string]any{"ok": true, "nodes": exported, "count": len(exported), "uid": uid, "exportedAt": time.Now().UTC().Format(time.RFC3339)}
+	return map[string]any{"ok": true, "nodes": exported, "count": len(exported), "uid": uid, "exportedAt": localtime.RFC3339(time.Now())}
 }
 
 func (h *Handler) checkStatus(ctx context.Context, uid string, body map[string]any) map[string]any {

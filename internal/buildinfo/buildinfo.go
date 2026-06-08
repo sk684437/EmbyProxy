@@ -8,7 +8,7 @@ var Version = "dev"
 // Commit is the short Git commit injected at build time.
 var Commit = "unknown"
 
-// BuiltAt is the UTC build timestamp injected at build time.
+// BuiltAt is the build timestamp injected at build time.
 var BuiltAt = "unknown"
 
 // Info describes the application build metadata.

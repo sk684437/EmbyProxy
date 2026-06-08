@@ -1863,7 +1863,8 @@ function downloadJson(filename, data) {
 
 function formatStamp(d) {
   const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  return `${utc8.getUTCFullYear()}${p(utc8.getUTCMonth() + 1)}${p(utc8.getUTCDate())}-${p(utc8.getUTCHours())}${p(utc8.getUTCMinutes())}${p(utc8.getUTCSeconds())}`;
 }
 
 function toast(msg, type = 'info') {

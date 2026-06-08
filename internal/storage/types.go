@@ -7,7 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
+
+	"embyproxy/internal/localtime"
 )
 
 type Node struct {
@@ -241,11 +242,11 @@ func FNV1a(value string) string {
 }
 
 func BeijingDate(ts int64) string {
-	return time.UnixMilli(ts).UTC().Add(8 * time.Hour).Format("2006-01-02")
+	return localtime.Date(ts)
 }
 
 func BeijingHHMM(ts int64) string {
-	return time.UnixMilli(ts).UTC().Add(8 * time.Hour).Format("15:04")
+	return localtime.HHMM(ts)
 }
 
 func QueryValue(u *url.URL, names ...string) string {

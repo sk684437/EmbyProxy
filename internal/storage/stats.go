@@ -10,12 +10,15 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"embyproxy/internal/localtime"
 )
 
 var (
 	sessionProgressRE = regexp.MustCompile(`/sessions/playing/progress/?$`)
 	sessionStoppedRE  = regexp.MustCompile(`/sessions/playing/stopped/?$`)
 	sessionPlayingRE  = regexp.MustCompile(`/sessions/playing/?$`)
+	playbackMediaRE   = regexp.MustCompile(`(?i)/(videos|audio|items)/([^/?#]+)(?:/|$)`)
 	contentRangeRE    = regexp.MustCompile(`(?i)bytes\s+(\d+)-(\d+)`)
 )
 
@@ -177,6 +180,26 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		}
 	}
 	playInc := sessInc
+	if countable {
+		if mediaKey := playbackMediaKey(reqURL); mediaKey != "" {
+			playInc = 1
+			playKey := strings.Join([]string{day, nodeName, client, ip, deviceID, sessionID, mediaKey}, "|")
+			var lastTS int64
+			err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_events WHERE k = ?`, playKey).Scan(&lastTS)
+			if err == nil && now-lastTS < 15*60*1000 {
+				playInc = 0
+			} else if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO play_events (k, day, last_ts) VALUES (?, ?, ?)
+				ON CONFLICT(k) DO UPDATE SET last_ts = MAX(play_events.last_ts, excluded.last_ts)
+			`, playKey, day, now)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	errInc := int64(0)
 	if in.Status >= 500 {
 		errInc = 1
@@ -223,7 +246,7 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 	if days <= 0 {
 		days = 7
 	}
-	cutoff := BeijingDate(time.Now().AddDate(0, 0, -days).UnixMilli())
+	cutoff := localtime.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT day, node, client, plays, bytes, sessions, errors
 		FROM play_stats WHERE day >= ? ORDER BY day DESC, plays DESC
@@ -244,8 +267,9 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 }
 
 func (s *Store) GetTodayStats(ctx context.Context) (TodayStats, error) {
-	today := BeijingDate(time.Now().UnixMilli())
-	yesterday := BeijingDate(time.Now().AddDate(0, 0, -1).UnixMilli())
+	now := localtime.Now()
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
 	todayRows, err := s.getStatsForDay(ctx, today)
 	if err != nil {
 		return TodayStats{}, err
@@ -341,6 +365,25 @@ func sessionPlayingEvent(raw string) string {
 	default:
 		return ""
 	}
+}
+
+func playbackMediaKey(reqURL *url.URL) string {
+	if reqURL == nil {
+		return ""
+	}
+	if id := QueryValue(reqURL, "ItemId", "itemId", "item_id"); id != "" {
+		return "item:" + cutString(id, 128)
+	}
+	if id := QueryValue(reqURL, "MediaId", "mediaId", "media_id"); id != "" {
+		return "media:" + cutString(id, 128)
+	}
+	if m := playbackMediaRE.FindStringSubmatch(reqURL.Path); len(m) == 3 {
+		return strings.ToLower(m[1]) + ":" + cutString(m[2], 128)
+	}
+	if id := QueryValue(reqURL, "MediaSourceId", "mediaSourceId", "media_source_id"); id != "" {
+		return "source:" + cutString(id, 128)
+	}
+	return ""
 }
 
 func parseRequestPath(raw string) string {

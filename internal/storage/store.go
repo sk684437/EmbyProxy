@@ -118,6 +118,11 @@ func (s *Store) InitSchema(ctx context.Context) error {
 			day TEXT NOT NULL,
 			last_ts INTEGER NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS play_events (
+			k TEXT PRIMARY KEY,
+			day TEXT NOT NULL,
+			last_ts INTEGER NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS play_stats (
 			day TEXT NOT NULL,
 			node TEXT NOT NULL,

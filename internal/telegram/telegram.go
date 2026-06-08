@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"embyproxy/internal/localtime"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/storage"
 )
@@ -93,7 +94,7 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 	yesterday := summarize(stats.Yesterday)
 	proxyPlaysToday := int64Value(mustKVGet(ctx, kv, "stats:proxyPlays:"+day))
 	directPlaysToday := int64Value(mustKVGet(ctx, kv, "stats:directPlays:"+day))
-	yDay := storage.BeijingDate(time.Now().AddDate(0, 0, -1).UnixMilli())
+	yDay := localtime.FromUnixMilli(now).AddDate(0, 0, -1).Format("2006-01-02")
 	proxyPlaysYest := int64Value(mustKVGet(ctx, kv, "stats:proxyPlays:"+yDay))
 	directPlaysYest := int64Value(mustKVGet(ctx, kv, "stats:directPlays:"+yDay))
 	nodeDisplay := map[string]string{}
@@ -216,7 +217,7 @@ func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
 		}
 		lastPlay := "从未"
 		if lastPlayTS > 0 {
-			lastPlay = time.UnixMilli(lastPlayTS).UTC().Format("2006-01-02 15:04")
+			lastPlay = localtime.FormatUnixMilli(lastPlayTS, "2006-01-02 15:04")
 		}
 		display := node.DisplayName
 		if display == "" {

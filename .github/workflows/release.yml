@@ -62,7 +62,7 @@ jobs:
           binary="${APP_NAME}-${{ matrix.name }}${{ matrix.extension }}"
           version="${GITHUB_REF_NAME:-dev}"
           commit="${GITHUB_SHA::7}"
-          built_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          built_at="$(TZ=Asia/Shanghai date +'%Y-%m-%dT%H:%M:%S%:z')"
           ldflags="-s -w"
           ldflags="${ldflags} -X embyproxy/internal/buildinfo.Version=${version}"
           ldflags="${ldflags} -X embyproxy/internal/buildinfo.Commit=${commit}"
@@ -155,7 +155,7 @@ jobs:
         run: |
           echo "version=${GITHUB_REF_NAME:-dev}" >> "$GITHUB_OUTPUT"
           echo "commit=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          echo "built_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "built_at=$(TZ=Asia/Shanghai date +'%Y-%m-%dT%H:%M:%S%:z')" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7

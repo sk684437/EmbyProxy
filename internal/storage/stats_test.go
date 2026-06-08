@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"embyproxy/internal/localtime"
 )
 
 func TestLogPlaybackConcurrentSessionDedup(t *testing.T) {
@@ -77,6 +79,61 @@ func TestLogPlaybackConcurrentSessionDedup(t *testing.T) {
 	}
 }
 
+func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	headers := http.Header{
+		"User-Agent":        {"session-client"},
+		"X-Emby-Device-Id":  {"device-1"},
+		"X-Emby-Session-Id": {"session-1"},
+	}
+	base := time.Date(2026, 6, 8, 9, 0, 0, 0, localtime.Location).UnixMilli()
+	input := PlaybackInput{
+		Node:       Node{Name: "alpha"},
+		RequestIP:  "127.0.0.1",
+		Headers:    headers,
+		Status:     http.StatusOK,
+		RespHeader: http.Header{"Content-Length": {"1024"}},
+		IsPlayback: true,
+		Mode:       "proxy",
+		RequestURL: "/emby/videos/1/stream",
+		Method:     http.MethodGet,
+		OccurredAt: base,
+	}
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(first) error = %v", err)
+	}
+	input.RequestURL = "/emby/videos/1/stream.m3u8"
+	input.OccurredAt = base + int64(time.Minute/time.Millisecond)
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(repeat) error = %v", err)
+	}
+	input.RequestURL = "/emby/videos/2/stream"
+	input.OccurredAt = base + int64(2*time.Minute/time.Millisecond)
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(second media) error = %v", err)
+	}
+
+	var plays, sessions, bytes int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0), COALESCE(SUM(sessions), 0), COALESCE(SUM(bytes), 0)
+		FROM play_stats
+		WHERE node = ? AND client = ?
+	`, "alpha", "session-client").Scan(&plays, &sessions, &bytes); err != nil {
+		t.Fatalf("query play_stats error = %v", err)
+	}
+	if plays != 2 || sessions != 1 || bytes != 3072 {
+		t.Fatalf("play_stats = plays %d sessions %d bytes %d; want 2, 1, 3072", plays, sessions, bytes)
+	}
+}
+
 func TestLogPlaybackAsyncDoesNotWaitForDatabase(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "test.db"))
@@ -143,7 +200,7 @@ func TestLogPlaybackAsyncUsesOccurredAtForStatsTime(t *testing.T) {
 		_ = store.Close()
 	})
 
-	occurredAt := time.Date(2000, 1, 2, 15, 59, 59, 0, time.UTC).UnixMilli()
+	occurredAt := time.Date(2000, 1, 2, 16, 0, 1, 0, time.UTC).UnixMilli()
 	input := PlaybackInput{
 		Node:       Node{Name: "occurred"},
 		RequestIP:  "127.0.0.1",
@@ -169,7 +226,7 @@ func TestLogPlaybackAsyncUsesOccurredAtForStatsTime(t *testing.T) {
 			FROM play_stats
 			WHERE node = ? AND client = ?
 		`, "occurred", "time-client").Scan(&day, &updatedAt)
-		if err == nil && day == "2000-01-02" && updatedAt == occurredAt {
+		if err == nil && day == "2000-01-03" && updatedAt == occurredAt {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -192,10 +249,56 @@ func TestLogPlaybackAsyncUsesOccurredAtForStatsTime(t *testing.T) {
 	var counterUpdatedAt int64
 	if err := store.db.QueryRowContext(ctx, `
 		SELECT v, updated_at FROM proxy_kv WHERE k = ?
-	`, "stats:proxyPlays:2000-01-02").Scan(&counter, &counterUpdatedAt); err != nil {
+	`, "stats:proxyPlays:2000-01-03").Scan(&counter, &counterUpdatedAt); err != nil {
 		t.Fatalf("query proxy play counter error = %v", err)
 	}
 	if counter != "1" || counterUpdatedAt != occurredAt {
 		t.Fatalf("proxy play counter = %q updatedAt=%d; want 1 updatedAt=%d", counter, counterUpdatedAt, occurredAt)
+	}
+}
+
+func TestGetPlayStatsUsesUTC8CalendarWindow(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	now := localtime.Now()
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	for _, row := range []struct {
+		day   string
+		node  string
+		plays int64
+	}{
+		{day: today, node: "today", plays: 2},
+		{day: yesterday, node: "yesterday", plays: 1},
+	} {
+		if _, err := store.db.ExecContext(ctx, `
+			INSERT INTO play_stats (day, node, client, plays, bytes, sessions, errors, updated_at)
+			VALUES (?, ?, ?, ?, 0, ?, 0, ?)
+		`, row.day, row.node, "client", row.plays, row.plays, now.UnixMilli()); err != nil {
+			t.Fatalf("insert %s stat error = %v", row.node, err)
+		}
+	}
+
+	stats, err := store.GetPlayStats(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetPlayStats(1) error = %v", err)
+	}
+	if len(stats) != 1 || stats[0].Day != today || stats[0].Node != "today" {
+		t.Fatalf("GetPlayStats(1) = %+v; want only today's row", stats)
+	}
+
+	stats, err = store.GetPlayStats(ctx, 7)
+	if err != nil {
+		t.Fatalf("GetPlayStats(7) error = %v", err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("GetPlayStats(7) len = %d; want 2 rows: %+v", len(stats), stats)
 	}
 }
