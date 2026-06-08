@@ -269,6 +269,7 @@ func (s *Store) LogPlaybackTraffic(ctx context.Context, in PlaybackInput) error 
 	if inboundBytes == 0 && outboundBytes == 0 {
 		return nil
 	}
+	totalBytes := inboundBytes + outboundBytes
 	client := cutString(in.Headers.Get("User-Agent"), 128)
 	if client == "" {
 		client = "Unknown"
@@ -281,7 +282,7 @@ func (s *Store) LogPlaybackTraffic(ctx context.Context, in PlaybackInput) error 
 			inbound_bytes = inbound_bytes + excluded.inbound_bytes,
 			outbound_bytes = outbound_bytes + excluded.outbound_bytes,
 			updated_at = MAX(play_stats.updated_at, excluded.updated_at)
-	`, day, nodeName, client, outboundBytes, inboundBytes, outboundBytes, now)
+	`, day, nodeName, client, totalBytes, inboundBytes, outboundBytes, now)
 	return err
 }
 
@@ -311,6 +312,7 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
 			return nil, err
 		}
+		stat.Bytes = stat.InboundBytes + stat.OutboundBytes
 		out = append(out, stat)
 	}
 	return out, rows.Err()
@@ -343,6 +345,7 @@ func (s *Store) getStatsForDay(ctx context.Context, day string) ([]PlayStat, err
 		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
 			return nil, err
 		}
+		stat.Bytes = stat.InboundBytes + stat.OutboundBytes
 		out = append(out, stat)
 	}
 	return out, rows.Err()

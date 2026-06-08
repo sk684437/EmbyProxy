@@ -1279,8 +1279,8 @@ func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
 		}
 		for _, row := range stats.Today {
 			if row.Node == "node" && row.Client == "actual-client" {
-				if row.Bytes != 5 || row.InboundBytes != 5 || row.OutboundBytes != 5 {
-					t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 5, 5, 5", row.Bytes, row.InboundBytes, row.OutboundBytes)
+				if row.Bytes != 10 || row.InboundBytes != 5 || row.OutboundBytes != 5 {
+					t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 10, 5, 5", row.Bytes, row.InboundBytes, row.OutboundBytes)
 				}
 				return
 			}

@@ -151,8 +151,8 @@ func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
 	`, "alpha", "session-client").Scan(&plays, &sessions, &bytes); err != nil {
 		t.Fatalf("query play_stats error = %v", err)
 	}
-	if plays != 2 || sessions != 1 || bytes != 3072 {
-		t.Fatalf("play_stats = plays %d sessions %d bytes %d; want 2, 1, 3072", plays, sessions, bytes)
+	if plays != 2 || sessions != 1 || bytes != 6144 {
+		t.Fatalf("play_stats = plays %d sessions %d bytes %d; want 2, 1, 6144", plays, sessions, bytes)
 	}
 }
 
@@ -237,8 +237,8 @@ func TestLogPlaybackTrafficCountsReadAndWriteBytes(t *testing.T) {
 	`, "alpha", "range-client").Scan(&bytes, &inboundBytes, &outboundBytes); err != nil {
 		t.Fatalf("query play_stats error = %v", err)
 	}
-	if bytes != 512 || inboundBytes != 768 || outboundBytes != 512 {
-		t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 512, 768, 512", bytes, inboundBytes, outboundBytes)
+	if bytes != 1280 || inboundBytes != 768 || outboundBytes != 512 {
+		t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 1280, 768, 512", bytes, inboundBytes, outboundBytes)
 	}
 }
 
@@ -454,7 +454,7 @@ func TestInitSchemaDoesNotPromoteLegacyPlayStatsBytes(t *testing.T) {
 	if len(stats) != 1 {
 		t.Fatalf("stats len = %d; want 1: %+v", len(stats), stats)
 	}
-	if stats[0].Bytes != 1234 || stats[0].OutboundBytes != 0 || stats[0].InboundBytes != 0 {
-		t.Fatalf("migrated traffic = bytes %d inbound %d outbound %d; want 1234, 0, 0", stats[0].Bytes, stats[0].InboundBytes, stats[0].OutboundBytes)
+	if stats[0].Bytes != 0 || stats[0].OutboundBytes != 0 || stats[0].InboundBytes != 0 {
+		t.Fatalf("migrated traffic = bytes %d inbound %d outbound %d; want 0, 0, 0", stats[0].Bytes, stats[0].InboundBytes, stats[0].OutboundBytes)
 	}
 }
