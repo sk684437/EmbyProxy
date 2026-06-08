@@ -94,7 +94,7 @@ func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
 		"X-Emby-Device-Id":  {"device-1"},
 		"X-Emby-Session-Id": {"session-1"},
 	}
-	base := time.Date(2026, 6, 8, 9, 0, 0, 0, localtime.Location).UnixMilli()
+	base := time.Date(2026, 6, 8, 9, 0, 0, 0, localtime.Location()).UnixMilli()
 	input := PlaybackInput{
 		Node:       Node{Name: "alpha"},
 		RequestIP:  "127.0.0.1",
