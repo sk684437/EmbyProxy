@@ -411,7 +411,7 @@ func TestGetPlayStatsUsesUTC8CalendarWindow(t *testing.T) {
 	}
 }
 
-func TestInitSchemaMigratesPlayStatsTrafficColumns(t *testing.T) {
+func TestInitSchemaDoesNotPromoteLegacyPlayStatsBytes(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -454,7 +454,7 @@ func TestInitSchemaMigratesPlayStatsTrafficColumns(t *testing.T) {
 	if len(stats) != 1 {
 		t.Fatalf("stats len = %d; want 1: %+v", len(stats), stats)
 	}
-	if stats[0].Bytes != 1234 || stats[0].OutboundBytes != 1234 || stats[0].InboundBytes != 0 {
-		t.Fatalf("migrated traffic = bytes %d inbound %d outbound %d; want 1234, 0, 1234", stats[0].Bytes, stats[0].InboundBytes, stats[0].OutboundBytes)
+	if stats[0].Bytes != 1234 || stats[0].OutboundBytes != 0 || stats[0].InboundBytes != 0 {
+		t.Fatalf("migrated traffic = bytes %d inbound %d outbound %d; want 1234, 0, 0", stats[0].Bytes, stats[0].InboundBytes, stats[0].OutboundBytes)
 	}
 }

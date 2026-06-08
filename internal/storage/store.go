@@ -157,9 +157,6 @@ func (s *Store) ensurePlayStatsTrafficColumns(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE play_stats ADD COLUMN outbound_bytes INTEGER DEFAULT 0`); err != nil {
 			return err
 		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE play_stats SET outbound_bytes = COALESCE(bytes, 0) WHERE outbound_bytes = 0`); err != nil {
-			return err
-		}
 	}
 	return nil
 }

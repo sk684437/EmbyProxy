@@ -8,7 +8,6 @@ import (
 func TestBuildReportTextIncludesExpandedDailyStats(t *testing.T) {
 	today := summary{
 		Plays:         12,
-		Bytes:         9_000_000_000,
 		InboundBytes:  10_000_000_000,
 		OutboundBytes: 9_000_000_000,
 		Sessions:      8,
@@ -25,7 +24,6 @@ func TestBuildReportTextIncludesExpandedDailyStats(t *testing.T) {
 	}
 	yesterday := summary{
 		Plays:         7,
-		Bytes:         4_000_000_000,
 		InboundBytes:  5_000_000_000,
 		OutboundBytes: 4_000_000_000,
 		Sessions:      5,

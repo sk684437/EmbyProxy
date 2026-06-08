@@ -253,7 +253,6 @@ func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
 
 type summary struct {
 	Plays         int64
-	Bytes         int64
 	InboundBytes  int64
 	OutboundBytes int64
 	Sessions      int64
@@ -265,14 +264,9 @@ type summary struct {
 func summarize(rows []storage.PlayStat) summary {
 	out := summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}}
 	for _, row := range rows {
-		outboundBytes := row.OutboundBytes
-		if outboundBytes == 0 {
-			outboundBytes = row.Bytes
-		}
 		out.Plays += row.Plays
-		out.Bytes += outboundBytes
 		out.InboundBytes += row.InboundBytes
-		out.OutboundBytes += outboundBytes
+		out.OutboundBytes += row.OutboundBytes
 		out.Sessions += row.Sessions
 		out.Errors += row.Errors
 		out.NodeMap[row.Node] += row.Plays

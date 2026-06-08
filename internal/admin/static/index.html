@@ -169,13 +169,13 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .empty-state b{display:block;color:var(--ink);font-size:22px;letter-spacing:-.05em;margin-bottom:6px}
 .stats-deck{display:grid;gap:16px}
 .stats-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:rgba(255,253,248,.72);border:1px solid rgba(255,253,248,.88);border-radius:30px;padding:12px;box-shadow:0 16px 50px rgba(58,48,32,.07)}
-.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
 .stat-block{min-height:132px;border-radius:30px;background:var(--paper);border:1px solid rgba(255,253,248,.88);padding:20px;box-shadow:0 16px 48px rgba(58,48,32,.08);display:flex;flex-direction:column;justify-content:space-between}
-.stat-block .val{font-size:42px;line-height:1;letter-spacing:-.08em;color:var(--ink);font-weight:950}
+.stat-block .val{font-size:36px;line-height:1.05;letter-spacing:0;color:var(--ink);font-weight:950;overflow-wrap:anywhere}
 .stat-block .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950;color:var(--ink-3)}
 .data-table{background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:30px;overflow:auto;box-shadow:0 18px 56px rgba(58,48,32,.08)}
 table{width:100%;border-collapse:collapse}
-#statsTable{min-width:720px}
+#statsTable{min-width:980px}
 th,td{padding:15px 18px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
 th{background:var(--paper-2);color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950}
 td{color:var(--ink-2)}
@@ -467,7 +467,7 @@ tr:last-child td{border-bottom:0}
           <div class="stats-grid" id="statsCards"></div>
           <div class="data-table">
             <table id="statsTable">
-              <thead><tr><th>日期</th><th>Emby 节点</th><th>客户端</th><th>播放次数</th><th>会话数</th></tr></thead>
+              <thead><tr><th>日期</th><th>Emby 节点</th><th>客户端</th><th>播放次数</th><th>会话数</th><th>入站流量</th><th>出站流量</th></tr></thead>
               <tbody id="statsBody"></tbody>
             </table>
           </div>
@@ -1663,9 +1663,16 @@ async function loadStats() {
   if (!r.ok) { toast('加载统计失败', 'err'); return; }
   const stats = r.stats || [];
 
-  let totalPlays = 0, totalSessions = 0;
+  let totalPlays = 0, totalSessions = 0, totalInboundBytes = 0, totalOutboundBytes = 0;
   const nodeSet = new Set(), clientSet = new Set();
-  for (const s of stats) { totalPlays += s.plays; totalSessions += s.sessions; nodeSet.add(s.node); clientSet.add(s.client); }
+  for (const s of stats) {
+    totalPlays += Number(s.plays || 0);
+    totalSessions += Number(s.sessions || 0);
+    totalInboundBytes += trafficInboundBytes(s);
+    totalOutboundBytes += trafficOutboundBytes(s);
+    nodeSet.add(s.node);
+    clientSet.add(s.client);
+  }
 
   document.getElementById('headStatus').innerHTML = statusCells([
     [totalPlays, '播放'],
@@ -1674,13 +1681,32 @@ async function loadStats() {
   document.getElementById('statsCards').innerHTML = `
     <div class="stat-block"><div class="val">${totalPlays}</div><div class="lbl">总播放次数</div></div>
     <div class="stat-block"><div class="val">${totalSessions}</div><div class="lbl">总会话数</div></div>
+    <div class="stat-block"><div class="val">${formatBytes(totalInboundBytes)}</div><div class="lbl">入站流量</div></div>
+    <div class="stat-block"><div class="val">${formatBytes(totalOutboundBytes)}</div><div class="lbl">出站流量</div></div>
     <div class="stat-block"><div class="val">${nodeSet.size}</div><div class="lbl">活跃节点</div></div>
     <div class="stat-block"><div class="val">${clientSet.size}</div><div class="lbl">客户端种类</div></div>
   `;
   const tbody = document.getElementById('statsBody');
   tbody.innerHTML = stats.length ? stats.map(s => `
-    <tr><td>${s.day}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td></tr>
-  `).join('') : '<tr><td class="table-empty" colspan="5">暂无数据</td></tr>';
+    <tr><td>${s.day}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
+  `).join('') : '<tr><td class="table-empty" colspan="7">暂无数据</td></tr>';
+}
+
+function trafficInboundBytes(stat) {
+  return Number(stat?.inboundBytes || 0);
+}
+
+function trafficOutboundBytes(stat) {
+  return Number(stat?.outboundBytes || 0);
+}
+
+function formatBytes(bytes) {
+  const n = Math.max(0, Number(bytes || 0));
+  if (n <= 0) return '0B';
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)} KB`;
+  return `${Math.round(n)}B`;
 }
 
 async function loadLogs(showToast = false, before = currentLogBefore) {
