@@ -9,9 +9,10 @@ import (
 type accessLogStateKey struct{}
 
 type accessLogState struct {
-	suppressed atomic.Bool
-	mu         sync.Mutex
-	requestURI string
+	suppressed     atomic.Bool
+	requestStarted atomic.Bool
+	mu             sync.Mutex
+	requestURI     string
 }
 
 func WithAccessLogState(ctx context.Context) context.Context {
@@ -32,6 +33,15 @@ func SuppressAccessLog(ctx context.Context) {
 func AccessLogSuppressed(ctx context.Context) bool {
 	st := state(ctx)
 	return st != nil && st.suppressed.Load()
+}
+
+// MarkRequestStarted records that the request start access log has been emitted.
+func MarkRequestStarted(ctx context.Context) bool {
+	st := state(ctx)
+	if st == nil {
+		return false
+	}
+	return st.requestStarted.CompareAndSwap(false, true)
 }
 
 func SetRequestURI(ctx context.Context, uri string) {

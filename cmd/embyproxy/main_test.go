@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
@@ -47,23 +48,45 @@ func TestRequestMiddlewareWritesAccessLogByDefault(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/admin", nil))
 
 	entries := log.Entries(10)
-	if len(entries) != 1 {
-		t.Fatalf("entries len = %d, want 1", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want 2", len(entries))
 	}
-	if entries[0].Scope != "access" {
-		t.Fatalf("scope = %q, want access", entries[0].Scope)
-	}
-	for _, want := range []string{"event=requestFinished", "method=GET", "uri=/admin"} {
-		if !strings.Contains(entries[0].Line, want) {
-			t.Fatalf("access log line = %q, want %q", entries[0].Line, want)
+	for _, entry := range entries {
+		if entry.Scope != "access" {
+			t.Fatalf("scope = %q, want access", entry.Scope)
 		}
 	}
-	if !strings.Contains(entries[0].Line, "totalMs=") {
-		t.Fatalf("access log line = %q, want totalMs field", entries[0].Line)
+	for _, want := range []string{"event=requestStarted", "method=GET", "uri=/admin"} {
+		if !strings.Contains(entries[0].Line, want) {
+			t.Fatalf("request started log line = %q, want %q", entries[0].Line, want)
+		}
 	}
-	if strings.Contains(entries[0].Line, " ms=") {
-		t.Fatalf("access log line kept generic ms field: %q", entries[0].Line)
+	for _, want := range []string{"event=requestFinished", "method=GET", "uri=/admin"} {
+		if !strings.Contains(entries[1].Line, want) {
+			t.Fatalf("request finished log line = %q, want %q", entries[1].Line, want)
+		}
 	}
+	if startedID, finishedID := logField(t, entries[0].Line, "id"), logField(t, entries[1].Line, "id"); startedID != finishedID {
+		t.Fatalf("request id mismatch: started=%q finished=%q", startedID, finishedID)
+	}
+	if !strings.Contains(entries[1].Line, "totalMs=") {
+		t.Fatalf("access log line = %q, want totalMs field", entries[1].Line)
+	}
+	if strings.Contains(entries[1].Line, " ms=") {
+		t.Fatalf("access log line kept generic ms field: %q", entries[1].Line)
+	}
+}
+
+func logField(t *testing.T, line, key string) string {
+	t.Helper()
+	prefix := key + "="
+	for _, part := range strings.Fields(line) {
+		if strings.HasPrefix(part, prefix) {
+			return strings.TrimPrefix(part, prefix)
+		}
+	}
+	t.Fatalf("log line = %q, want field %q", line, key)
+	return ""
 }
 
 func TestRequestMiddlewareWritesBodyTimingAccessFields(t *testing.T) {
@@ -78,17 +101,20 @@ func TestRequestMiddlewareWritesBodyTimingAccessFields(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/emby/videos/1/stream.mkv", nil))
 
 	entries := log.Entries(10)
-	if len(entries) != 1 {
-		t.Fatalf("entries len = %d, want 1", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want 2", len(entries))
+	}
+	if !strings.Contains(entries[0].Line, "event=requestStarted") {
+		t.Fatalf("first access log line = %q, want requestStarted", entries[0].Line)
 	}
 	for _, want := range []string{"totalMs=", "responseReadyMs=5", "bodyMs="} {
-		if !strings.Contains(entries[0].Line, want) {
-			t.Fatalf("access log line = %q, want %q", entries[0].Line, want)
+		if !strings.Contains(entries[1].Line, want) {
+			t.Fatalf("access log line = %q, want %q", entries[1].Line, want)
 		}
 	}
 	for _, old := range []string{" ms=", "targetMs=", "targetHeaderMs="} {
-		if strings.Contains(entries[0].Line, old) {
-			t.Fatalf("access log line kept old timing field %q: %q", old, entries[0].Line)
+		if strings.Contains(entries[1].Line, old) {
+			t.Fatalf("access log line kept old timing field %q: %q", old, entries[1].Line)
 		}
 	}
 }
@@ -121,14 +147,16 @@ func TestRequestMiddlewareKeepsClientIPWhenRequestContextIsCanceled(t *testing.T
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 
 	entries := log.Entries(10)
-	if len(entries) != 1 {
-		t.Fatalf("entries len = %d, want 1", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want 2", len(entries))
 	}
-	if !strings.Contains(entries[0].Line, "ip=203.0.113.42") {
-		t.Fatalf("access log line = %q, want forwarded client IP", entries[0].Line)
-	}
-	if strings.Contains(entries[0].Line, "ip=172.19.0.1") {
-		t.Fatalf("access log fell back to docker bridge IP: %q", entries[0].Line)
+	for _, entry := range entries {
+		if !strings.Contains(entry.Line, "ip=203.0.113.42") {
+			t.Fatalf("access log line = %q, want forwarded client IP", entry.Line)
+		}
+		if strings.Contains(entry.Line, "ip=172.19.0.1") {
+			t.Fatalf("access log fell back to docker bridge IP: %q", entry.Line)
+		}
 	}
 }
 
@@ -160,14 +188,16 @@ func TestRequestMiddlewareUsesRedactedRequestURI(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/node/raw-secret/emby/Items?X-Emby-Token=token", nil))
 
 	entries := log.Entries(10)
-	if len(entries) != 1 {
-		t.Fatalf("entries len = %d, want 1", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want 2", len(entries))
 	}
-	if strings.Contains(entries[0].Line, "raw-secret") || strings.Contains(entries[0].Line, "token") {
-		t.Fatalf("access log leaked sensitive data: %q", entries[0].Line)
-	}
-	if !strings.Contains(entries[0].Line, "/node/<secret>/emby/Items?X-Emby-Token=<redacted>") {
-		t.Fatalf("access log line = %q, want redacted URI", entries[0].Line)
+	for _, entry := range entries {
+		if strings.Contains(entry.Line, "raw-secret") || strings.Contains(entry.Line, "token") {
+			t.Fatalf("access log leaked sensitive data: %q", entry.Line)
+		}
+		if !strings.Contains(entry.Line, "/node/<secret>/emby/Items?X-Emby-Token=<redacted>") {
+			t.Fatalf("access log line = %q, want redacted URI", entry.Line)
+		}
 	}
 	if err := log.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -178,5 +208,57 @@ func TestRequestMiddlewareUsesRedactedRequestURI(t *testing.T) {
 	}
 	if strings.Contains(string(history), "raw-secret") || strings.Contains(string(history), "token") {
 		t.Fatalf("history log leaked sensitive data: %q", string(history))
+	}
+}
+
+func TestProxyRequestLogsClientUpstreamAndFinishLifecycle(t *testing.T) {
+	log := logging.New("info", true)
+	ctx := context.Background()
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatalf("storage.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Range", "bytes 0-4/5")
+		w.Header().Set("Content-Length", "5")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("hello"))
+	}))
+	t.Cleanup(upstream.Close)
+	if err := store.SaveNode(ctx, "admin", storage.Node{Name: "node", Secret: "raw-secret", Target: upstream.URL}); err != nil {
+		t.Fatalf("SaveNode() error = %v", err)
+	}
+	proxyHandler := proxy.New(config.Config{CWD: t.TempDir()}, store, nil, log)
+	handler := requestMiddleware(log, store, proxyHandler)
+	req := httptest.NewRequest(http.MethodGet, "/node/raw-secret/emby/videos/1/original.mkv?api_key=token", nil)
+	req.Header.Set("Range", "bytes=0-")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPartialContent)
+	}
+	entries := log.Entries(10)
+	if len(entries) != 3 {
+		t.Fatalf("entries len = %d, want 3: %+v", len(entries), entries)
+	}
+	wants := [][]string{
+		{"event=requestStarted", "[access]", "node=node", "range=\"bytes=0-\""},
+		{"event=upstreamReady", "[proxy]", "node=node", "range=\"bytes=0-\"", "contentRange=\"bytes 0-4/5\""},
+		{"event=requestFinished", "[access]", "range=\"bytes=0-\"", "contentRange=\"bytes 0-4/5\""},
+	}
+	for i, wantParts := range wants {
+		for _, want := range wantParts {
+			if !strings.Contains(entries[i].Line, want) {
+				t.Fatalf("entry %d line = %q, want %q", i, entries[i].Line, want)
+			}
+		}
+		if strings.Contains(entries[i].Line, "raw-secret") || strings.Contains(entries[i].Line, "token") {
+			t.Fatalf("entry %d leaked sensitive data: %q", i, entries[i].Line)
+		}
 	}
 }

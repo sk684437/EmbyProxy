@@ -2,8 +2,14 @@ package proxy
 
 import (
 	"context"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"embyproxy/internal/auth"
+	"embyproxy/internal/logging"
+	"embyproxy/internal/requestlog"
 )
 
 type accessLogFieldsKey struct{}
@@ -64,6 +70,37 @@ func AccessLogResponseBodyStart(ctx context.Context) (time.Time, bool) {
 	fields.mu.Lock()
 	defer fields.mu.Unlock()
 	return fields.responseBodyStart, fields.hasResponseBodyStart
+}
+
+// LogRequestStarted emits the client-side request start access log once per request.
+func LogRequestStarted(ctx context.Context, log *logging.Logger, r *http.Request, ip, node string) {
+	if log == nil || r == nil || !log.AccessEnabled() || requestlog.AccessLogSuppressed(ctx) {
+		return
+	}
+	if !requestlog.MarkRequestStarted(ctx) {
+		return
+	}
+	requestURI := logging.RedactURL(r.URL.RequestURI())
+	if uri, ok := requestlog.RequestURI(ctx); ok {
+		requestURI = uri
+	}
+	if ip == "" {
+		ip = auth.ClientIP(r, false)
+	}
+	meta := map[string]any{
+		"event":  "requestStarted",
+		"id":     requestID(r, log),
+		"method": r.Method,
+		"uri":    requestURI,
+		"ip":     ip,
+	}
+	if node != "" {
+		meta["node"] = node
+	}
+	if rg := strings.TrimSpace(r.Header.Get("Range")); rg != "" {
+		meta["range"] = rg
+	}
+	log.Info("access", "request started", meta)
 }
 
 func withAccessLogFields(ctx context.Context, meta map[string]any) map[string]any {

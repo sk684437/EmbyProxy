@@ -218,6 +218,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestlog.SetRequestURI(ctx, logging.RedactProxyURL(r.URL.RequestURI(), parsed.Name, node.Secret))
+	LogRequestStarted(ctx, h.log, r, auth.ClientIP(r, h.trustsProxy(ctx)), parsed.Name)
 	parsed.Secret = node.Secret
 	strip := 1
 	if node.Secret != "" {

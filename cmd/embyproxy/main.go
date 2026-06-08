@@ -200,8 +200,10 @@ func requestMiddleware(log *logging.Logger, store *storage.Store, next http.Hand
 		clientIP := auth.ClientIP(r, trustProxy)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		started := time.Now()
-		next.ServeHTTP(sw, r.WithContext(ctx))
+		req := r.WithContext(ctx)
+		next.ServeHTTP(sw, req)
 		if log.AccessEnabled() && !requestlog.AccessLogSuppressed(ctx) {
+			proxy.LogRequestStarted(ctx, log, req, clientIP, "")
 			totalMs := time.Since(started).Milliseconds()
 			meta := map[string]any{"id": id, "status": sw.status, "bytes": sw.bytes, "totalMs": totalMs, "ip": clientIP}
 			for key, value := range proxy.AccessLogFields(ctx) {
