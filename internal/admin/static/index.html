@@ -82,6 +82,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .status-cell{border-radius:22px;background:var(--paper-2);padding:14px}
 .status-cell b{display:block;color:var(--ink);font-size:24px;line-height:1;letter-spacing:-.05em}
 .status-cell span{display:block;margin-top:7px;color:var(--ink-3);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.12em}
+main{min-width:0;min-height:0}
 .deck{min-width:0;display:grid;gap:18px}
 .nodes-deck{grid-template-columns:minmax(0,1fr) 330px;align-items:start}
 .command-bar{display:grid;grid-template-columns:minmax(260px,1fr) auto;gap:12px;background:rgba(255,253,248,.72);border:1px solid rgba(255,253,248,.88);border-radius:30px;padding:12px;backdrop-filter:blur(18px);box-shadow:0 16px 50px rgba(58,48,32,.07)}
@@ -181,13 +182,13 @@ th{background:var(--paper-2);color:var(--ink-3);font-size:11px;text-transform:up
 td{color:var(--ink-2)}
 .table-empty{text-align:center;color:var(--ink-3)}
 tr:last-child td{border-bottom:0}
-.logs-deck{display:grid;gap:16px;min-width:0}
+.logs-deck{height:100%;min-height:0;display:grid;grid-template-rows:auto minmax(360px,1fr);gap:16px;min-width:0}
 .logs-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;background:rgba(255,253,248,.72);border:1px solid rgba(255,253,248,.88);border-radius:30px;padding:12px;box-shadow:0 16px 50px rgba(58,48,32,.07)}
 .logs-meter{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
 .log-pill{min-height:42px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 14px;display:inline-flex;align-items:center;color:var(--ink-3);font-size:12px;font-weight:900;white-space:nowrap}
 .log-switch{min-height:42px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 14px;display:inline-flex;align-items:center;gap:9px;color:var(--ink-2);font-size:13px;font-weight:900;cursor:pointer;white-space:nowrap}
 .log-switch input{width:18px;height:18px;accent-color:var(--pine);cursor:pointer}
-.log-console{height:calc(100vh - 250px);min-height:420px;border-radius:30px;border:1px solid rgba(30,33,29,.84);background:#151713;color:#dde8d9;padding:14px;overflow:auto;box-shadow:0 22px 64px rgba(30,33,29,.22);font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px;line-height:1.55}
+.log-console{height:auto;min-height:0;border-radius:30px;border:1px solid rgba(30,33,29,.84);background:#151713;color:#dde8d9;padding:14px;overflow:auto;box-shadow:0 22px 64px rgba(30,33,29,.22);font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px;line-height:1.55}
 .log-line{display:block;min-height:25px;border-left:4px solid transparent;border-radius:10px;padding:4px 9px;white-space:pre-wrap;word-break:break-word;color:#dfe7db}
 .log-line + .log-line{margin-top:3px}
 .log-line.log-debug{color:#aab8a5}
@@ -273,6 +274,11 @@ tr:last-child td{border-bottom:0}
 .toast.err{border-left-color:var(--red)}
 .toast.info{border-left-color:var(--blue)}
 @keyframes toastIn{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
+#app.logs-active .shell{height:100vh;min-height:0}
+#app.logs-active main{height:100%;min-height:0}
+@media (min-width:921px){
+  #app.logs-active .ops-surface{height:100vh;min-height:0}
+}
 @media (max-width:1700px){
   .nodes-deck{grid-template-columns:1fr}
   .context-panel{position:static;grid-template-columns:1fr 1fr}
@@ -299,9 +305,11 @@ tr:last-child td{border-bottom:0}
   .auth-manifest{min-height:360px;padding:36px}
   .auth-manifest h1{font-size:46px}
   .login-box{padding:36px}
+  #app.logs-active .shell{grid-template-rows:auto minmax(0,1fr)}
+  #app.logs-active .ops-surface{height:100%;min-height:0}
   .logs-top{grid-template-columns:1fr}
   .logs-top .action-pack{justify-content:flex-start}
-  .log-console{height:60vh;min-height:360px}
+  .logs-deck{grid-template-rows:auto minmax(320px,1fr)}
 }
 @media (max-width:680px){
   #loginWrap{padding:14px}
@@ -990,6 +998,7 @@ async function api(action, data = {}, tok = TOKEN) {
 
 function switchTab(name, btn) {
   currentTab = name;
+  document.getElementById('app')?.classList.toggle('logs-active', name === 'logs');
   document.querySelectorAll('.rail-button').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   const tabs = { nodes: 'tabNodes', stats: 'tabStats', logs: 'tabLogs' };
