@@ -5,30 +5,26 @@ import (
 	"time"
 )
 
-func TestFormatDefaultsToUTC8WhenTZIsEmpty(t *testing.T) {
-	t.Setenv(EnvName, "")
-
-	got := RFC3339(time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
-	if got != "2000-01-02T08:00:00+08:00" {
-		t.Fatalf("RFC3339() = %q, want UTC+8 default", got)
+func TestFormatUsesConfiguredTZWithUTC8Fallback(t *testing.T) {
+	tests := []struct {
+		name string
+		tz   string
+		want string
+	}{
+		{name: "empty defaults to UTC+8", tz: "", want: "2000-01-02T08:00:00+08:00"},
+		{name: "named timezone", tz: "UTC", want: "2000-01-02T00:00:00Z"},
+		{name: "invalid timezone falls back to UTC+8", tz: "not-a-time-zone", want: "2000-01-02T08:00:00+08:00"},
 	}
-}
 
-func TestFormatUsesNamedTZ(t *testing.T) {
-	t.Setenv(EnvName, "UTC")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(EnvName, tt.tz)
 
-	got := RFC3339(time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
-	if got != "2000-01-02T00:00:00Z" {
-		t.Fatalf("RFC3339() = %q, want UTC", got)
-	}
-}
-
-func TestFormatFallsBackToUTC8ForInvalidTZ(t *testing.T) {
-	t.Setenv(EnvName, "not-a-time-zone")
-
-	got := RFC3339(time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
-	if got != "2000-01-02T08:00:00+08:00" {
-		t.Fatalf("RFC3339() = %q, want UTC+8 fallback", got)
+			got := RFC3339(time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC))
+			if got != tt.want {
+				t.Fatalf("RFC3339() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

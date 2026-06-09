@@ -125,96 +125,77 @@ func TestResolveTargetURLMergesBaseQueryAndKeepsRepeatedRequestValues(t *testing
 	}
 }
 
-func TestRawHostAllowedBlocksPrivateDestinations(t *testing.T) {
+func TestRawHostAllowedClassifiesDestinations(t *testing.T) {
 	h := &Handler{}
 	node := storage.Node{Target: "https://example.test"}
 	env := config.ProxyEnv{ExternalAllowAny: true}
-
-	tests := []string{
-		"http://127.0.0.1/latest/meta-data/",
-		"http://169.254.169.254/latest/meta-data/",
-		"http://100.64.0.1/private",
-		"http://[::1]/private",
+	tests := []struct {
+		raw  string
+		want bool
+	}{
+		{raw: "http://127.0.0.1/latest/meta-data/"},
+		{raw: "http://169.254.169.254/latest/meta-data/"},
+		{raw: "http://100.64.0.1/private"},
+		{raw: "http://[::1]/private"},
+		{raw: "http://8.8.8.8/dns-query", want: true},
 	}
-	for _, raw := range tests {
-		t.Run(raw, func(t *testing.T) {
-			u, err := url.Parse(raw)
+
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			u, err := url.Parse(tt.raw)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if h.rawHostAllowed(context.Background(), node, u, env) {
-				t.Fatalf("rawHostAllowed(%q) = true, want false", raw)
+			if got := h.rawHostAllowed(context.Background(), node, u, env); got != tt.want {
+				t.Fatalf("rawHostAllowed(%q) = %v, want %v", tt.raw, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestRawHostAllowedPermitsPublicLiteralWhenAllowAny(t *testing.T) {
-	h := &Handler{}
-	node := storage.Node{Target: "https://example.test"}
-	u, err := url.Parse("http://8.8.8.8/dns-query")
-	if err != nil {
-		t.Fatal(err)
+func TestRawIPBlockedClassifiesDestinations(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{value: "0.0.0.1", want: true},
+		{value: "100.64.0.1", want: true},
+		{value: "198.18.0.1", want: true},
+		{value: "192.0.2.1", want: true},
+		{value: "192.31.196.1", want: true},
+		{value: "192.52.193.1", want: true},
+		{value: "192.175.48.1", want: true},
+		{value: "198.51.100.1", want: true},
+		{value: "203.0.113.1", want: true},
+		{value: "240.0.0.1", want: true},
+		{value: "255.255.255.255", want: true},
+		{value: "64:ff9b::a00:1", want: true},
+		{value: "64:ff9b:1::a00:1", want: true},
+		{value: "100::1", want: true},
+		{value: "2001::1", want: true},
+		{value: "2001:db8::1", want: true},
+		{value: "2002:a00:1::1", want: true},
+		{value: "2620:4f:8000::1", want: true},
+		{value: "3fff::1", want: true},
+		{value: "5f00::1", want: true},
+		{value: "fc00::1", want: true},
+		{value: "fe80::1", want: true},
+		{value: "fec0::1", want: true},
+		{value: "1.1.1.1"},
+		{value: "8.8.8.8"},
+		{value: "2001:4860:4860::8888"},
+		{value: "2606:4700:4700::1111"},
 	}
-	if !h.rawHostAllowed(context.Background(), node, u, config.ProxyEnv{ExternalAllowAny: true}) {
-		t.Fatal("rawHostAllowed() rejected public literal IP with ExternalAllowAny")
-	}
-}
 
-func TestRawIPBlockedRejectsSpecialUseDestinations(t *testing.T) {
-	blocked := []string{
-		"0.0.0.1",
-		"100.64.0.1",
-		"198.18.0.1",
-		"192.0.2.1",
-		"192.31.196.1",
-		"192.52.193.1",
-		"192.175.48.1",
-		"198.51.100.1",
-		"203.0.113.1",
-		"240.0.0.1",
-		"255.255.255.255",
-		"64:ff9b::a00:1",
-		"64:ff9b:1::a00:1",
-		"100::1",
-		"2001::1",
-		"2001:db8::1",
-		"2002:a00:1::1",
-		"2620:4f:8000::1",
-		"3fff::1",
-		"5f00::1",
-		"fc00::1",
-		"fe80::1",
-		"fec0::1",
-	}
-	for _, value := range blocked {
+	for _, tt := range tests {
+		value := tt.value
 		t.Run(value, func(t *testing.T) {
 			ip := net.ParseIP(value)
 			if ip == nil {
 				t.Fatalf("net.ParseIP(%q) returned nil", value)
 			}
-			if !rawIPBlocked(ip) {
-				t.Fatalf("rawIPBlocked(%q) = false, want true", value)
-			}
-		})
-	}
-}
-
-func TestRawIPBlockedAllowsPublicDestinations(t *testing.T) {
-	allowed := []string{
-		"1.1.1.1",
-		"8.8.8.8",
-		"2001:4860:4860::8888",
-		"2606:4700:4700::1111",
-	}
-	for _, value := range allowed {
-		t.Run(value, func(t *testing.T) {
-			ip := net.ParseIP(value)
-			if ip == nil {
-				t.Fatalf("net.ParseIP(%q) returned nil", value)
-			}
-			if rawIPBlocked(ip) {
-				t.Fatalf("rawIPBlocked(%q) = true, want false", value)
+			if got := rawIPBlocked(ip); got != tt.want {
+				t.Fatalf("rawIPBlocked(%q) = %v, want %v", value, got, tt.want)
 			}
 		})
 	}

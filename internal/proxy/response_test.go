@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -45,13 +44,7 @@ func newProxyTestHandler(t *testing.T, node storage.Node) *Handler {
 	if node.Target == "" {
 		node.Target = "https://upstream.example"
 	}
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
 		t.Fatal(err)
 	}
@@ -568,11 +561,7 @@ func TestSendResponseOmitsUnredactedURIWhenRequestLogURIIsMissing(t *testing.T) 
 
 func TestServeHTTPMarksAccessLogURIWithRedactedSecret(t *testing.T) {
 	ctx := context.Background()
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatalf("storage.New() error = %v", err)
-	}
-	defer store.Close()
+	store := newProxyTestStore(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -720,66 +709,130 @@ func TestDoFetchStoresUpstreamPoolAccessLogField(t *testing.T) {
 	}
 }
 
-func TestHandleMediaProxyUsesPlaybackClientForStreaming(t *testing.T) {
-	ctx := WithAccessLogFields(context.Background())
-	playbackCalls := 0
-	h := &Handler{
-		defaultFollowClient:  failRoundTripClient(t, "default follow client should not handle playback media"),
-		playbackActionClient: failRoundTripClient(t, "playback action client should not handle playback stream"),
-		imageFollowClient:    failRoundTripClient(t, "image follow client should not handle playback media"),
-		playbackStreamClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			playbackCalls++
-			return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
-				"Accept-Ranges": []string{"bytes"},
-				"Content-Range": []string{"bytes 0-4/5"},
-				"Content-Type":  []string{"video/mp4"},
-			}), nil
-		})},
-	}
-	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Videos/1/stream.mp4", nil).WithContext(ctx)
-	finalURL, err := url.Parse("https://upstream.example/emby/Videos/1/stream.mp4")
-	if err != nil {
-		t.Fatal(err)
+func TestHandleMediaProxyChoosesUpstreamClient(t *testing.T) {
+	tests := []struct {
+		name        string
+		requestURI  string
+		finalURL    string
+		routePath   string
+		node        storage.Node
+		isPlayback  bool
+		isImage     bool
+		wantClient  string
+		wantStatus  int
+		newResponse func() *http.Response
+	}{
+		{
+			name:       "stream playback",
+			requestURI: "https://proxy.example/node/emby/Videos/1/stream.mp4",
+			finalURL:   "https://upstream.example/emby/Videos/1/stream.mp4",
+			routePath:  "/emby/Videos/1/stream.mp4",
+			node:       storage.Node{Name: "node", Target: "https://upstream.example"},
+			isPlayback: true,
+			wantClient: upstreamPoolPlaybackStream,
+			wantStatus: http.StatusPartialContent,
+			newResponse: func() *http.Response {
+				return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
+					"Accept-Ranges": []string{"bytes"},
+					"Content-Range": []string{"bytes 0-4/5"},
+					"Content-Type":  []string{"video/mp4"},
+				})
+			},
+		},
+		{
+			name:       "direct external non-stream playback action",
+			requestURI: "https://proxy.example/node/emby/Sessions/Playing",
+			finalURL:   "https://upstream.example/emby/Sessions/Playing",
+			routePath:  "/emby/Sessions/Playing",
+			node:       storage.Node{Name: "node", Target: "https://upstream.example", DirectExternal: true},
+			isPlayback: true,
+			wantClient: upstreamPoolPlaybackAction,
+			wantStatus: http.StatusOK,
+			newResponse: func() *http.Response {
+				return textResponse(http.StatusOK, "{}", http.Header{
+					"Content-Type": []string{"application/json"},
+				})
+			},
+		},
+		{
+			name:       "image",
+			requestURI: "https://proxy.example/node/emby/Items/1/Images/Primary",
+			finalURL:   "https://upstream.example/emby/Items/1/Images/Primary",
+			routePath:  "/emby/Items/1/Images/Primary",
+			node:       storage.Node{Name: "node", Target: "https://upstream.example"},
+			isImage:    true,
+			wantClient: upstreamPoolImageFollow,
+			wantStatus: http.StatusOK,
+			newResponse: func() *http.Response {
+				return bytesResponse(http.StatusOK, []byte("image"), http.Header{
+					"Content-Type": []string{"image/jpeg"},
+				})
+			},
+		},
+		{
+			name:       "direct external image path that looks streaming",
+			requestURI: "https://proxy.example/node/emby/Items/1/Images/Primary.mp4",
+			finalURL:   "https://upstream.example/emby/Items/1/Images/Primary.mp4",
+			routePath:  "/emby/Items/1/Images/Primary.mp4",
+			node:       storage.Node{Name: "node", Target: "https://upstream.example", DirectExternal: true},
+			isPlayback: true,
+			isImage:    true,
+			wantClient: upstreamPoolImageFollow,
+			wantStatus: http.StatusOK,
+			newResponse: func() *http.Response {
+				return bytesResponse(http.StatusOK, []byte("image"), http.Header{
+					"Content-Type": []string{"image/jpeg"},
+				})
+			},
+		},
 	}
 
-	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Videos/1/stream.mp4"}, finalURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
-	if err != nil {
-		t.Fatalf("handleMediaProxy() error = %v", err)
-	}
-	_ = res.Body.Close()
-	if playbackCalls != 1 {
-		t.Fatalf("playback upstream calls = %d, want 1", playbackCalls)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithAccessLogFields(context.Background())
+			calls := map[string]int{}
+			successClient := func(name string) *http.Client {
+				return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					calls[name]++
+					return tt.newResponse(), nil
+				})}
+			}
+			h := &Handler{
+				noRedirectClient:          failRoundTripClient(t, "no-redirect client should not handle "+tt.name),
+				defaultFollowClient:       failRoundTripClient(t, "default follow client should not handle "+tt.name),
+				playbackActionClient:      failRoundTripClient(t, "playback action client should not handle "+tt.name),
+				playbackStreamClient:      failRoundTripClient(t, "playback stream client should not handle "+tt.name),
+				playbackStreamProbeClient: failRoundTripClient(t, "playback stream probe client should not handle "+tt.name),
+				imageFollowClient:         failRoundTripClient(t, "image follow client should not handle "+tt.name),
+			}
+			switch tt.wantClient {
+			case upstreamPoolPlaybackAction:
+				h.playbackActionClient = successClient(tt.wantClient)
+			case upstreamPoolPlaybackStream:
+				h.playbackStreamClient = successClient(tt.wantClient)
+			case upstreamPoolImageFollow:
+				h.imageFollowClient = successClient(tt.wantClient)
+			default:
+				t.Fatalf("unsupported expected client %q", tt.wantClient)
+			}
+			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil).WithContext(ctx)
+			finalURL, err := url.Parse(tt.finalURL)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-func TestHandleMediaProxyUsesPlaybackActionClientForDirectExternalNonStreamPlayback(t *testing.T) {
-	ctx := WithAccessLogFields(context.Background())
-	actionCalls := 0
-	h := &Handler{
-		defaultFollowClient:       failRoundTripClient(t, "default follow client should not handle playback action"),
-		playbackStreamProbeClient: failRoundTripClient(t, "playback stream probe client should not handle playback action"),
-		playbackStreamClient:      failRoundTripClient(t, "playback stream client should not handle playback action"),
-		imageFollowClient:         failRoundTripClient(t, "image follow client should not handle playback action"),
-		playbackActionClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			actionCalls++
-			return textResponse(http.StatusOK, "{}", http.Header{
-				"Content-Type": []string{"application/json"},
-			}), nil
-		})},
-	}
-	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Sessions/Playing", nil).WithContext(ctx)
-	finalURL, err := url.Parse("https://upstream.example/emby/Sessions/Playing")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example", DirectExternal: true}, parsedRoute{Name: "node", Path: "/emby/Sessions/Playing"}, finalURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
-	if err != nil {
-		t.Fatalf("handleMediaProxy() error = %v", err)
-	}
-	_ = res.Body.Close()
-	if actionCalls != 1 {
-		t.Fatalf("playback action upstream calls = %d, want 1", actionCalls)
+			res, err := h.handleMediaProxy(ctx, req, tt.node, parsedRoute{Name: tt.node.Name, Path: tt.routePath}, finalURL, nil, config.ProxyEnv{}, tt.isPlayback, tt.isImage, false, "", "127.0.0.1")
+			if err != nil {
+				t.Fatalf("handleMediaProxy() error = %v", err)
+			}
+			_ = res.Body.Close()
+			if res.StatusCode != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", res.StatusCode, tt.wantStatus)
+			}
+			if calls[tt.wantClient] != 1 {
+				t.Fatalf("%s calls = %d, want 1", tt.wantClient, calls[tt.wantClient])
+			}
+		})
 	}
 }
 
@@ -854,66 +907,6 @@ func TestIsPlaybackStreamRequestClassifiesPlaybackTraffic(t *testing.T) {
 				t.Fatalf("isPlaybackStreamRequest() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestHandleMediaProxyUsesImageClientForImages(t *testing.T) {
-	ctx := WithAccessLogFields(context.Background())
-	imageCalls := 0
-	h := &Handler{
-		defaultFollowClient:  failRoundTripClient(t, "default follow client should not handle image media"),
-		playbackStreamClient: failRoundTripClient(t, "playback stream client should not handle image media"),
-		imageFollowClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			imageCalls++
-			return bytesResponse(http.StatusOK, []byte("image"), http.Header{
-				"Content-Type": []string{"image/jpeg"},
-			}), nil
-		})},
-	}
-	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary", nil).WithContext(ctx)
-	finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
-	if err != nil {
-		t.Fatalf("handleMediaProxy() error = %v", err)
-	}
-	_ = res.Body.Close()
-	if imageCalls != 1 {
-		t.Fatalf("image upstream calls = %d, want 1", imageCalls)
-	}
-}
-
-func TestHandleMediaProxyKeepsDirectExternalImageOnImageClientWhenPathLooksStreaming(t *testing.T) {
-	ctx := WithAccessLogFields(context.Background())
-	imageCalls := 0
-	h := &Handler{
-		defaultFollowClient:       failRoundTripClient(t, "default follow client should not handle image media"),
-		playbackActionClient:      failRoundTripClient(t, "playback action client should not handle image media"),
-		playbackStreamClient:      failRoundTripClient(t, "playback stream client should not handle image media"),
-		playbackStreamProbeClient: failRoundTripClient(t, "playback stream probe client should not handle image media"),
-		imageFollowClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			imageCalls++
-			return bytesResponse(http.StatusOK, []byte("image"), http.Header{
-				"Content-Type": []string{"image/jpeg"},
-			}), nil
-		})},
-	}
-	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary.mp4", nil).WithContext(ctx)
-	finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary.mp4")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example", DirectExternal: true}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary.mp4"}, finalURL, nil, config.ProxyEnv{}, true, true, false, "", "127.0.0.1")
-	if err != nil {
-		t.Fatalf("handleMediaProxy() error = %v", err)
-	}
-	_ = res.Body.Close()
-	if imageCalls != 1 {
-		t.Fatalf("image upstream calls = %d, want 1", imageCalls)
 	}
 }
 
@@ -1051,13 +1044,7 @@ func TestHandleNodeHidesTargetErrorDetails(t *testing.T) {
 
 func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
 	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
@@ -1095,13 +1082,7 @@ func TestHandleMediaProxyStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := WithAccessLogFields(context.Background())
-			store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				_ = store.Close()
-			})
+			store := newProxyTestStore(t)
 			h := New(config.Config{}, store, nil, logging.New("silent", false))
 			h.playbackStreamClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if got := req.Header.Get("Range"); got != "bytes=1024-" {
@@ -1131,26 +1112,14 @@ func TestHandleMediaProxyStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 			_, _ = io.Copy(io.Discard, res.Body)
 			_ = res.Body.Close()
 
-			fields := AccessLogFields(ctx)
-			if got := fields["range"]; got != "bytes=1024-" {
-				t.Fatalf("range access log field = %v, want bytes=1024-", got)
-			}
-			if got := fields["contentRange"]; got != "bytes 1024-2047/4096" {
-				t.Fatalf("contentRange access log field = %v, want bytes 1024-2047/4096", got)
-			}
+			assertAccessLogRangeFields(t, ctx, "bytes=1024-", "bytes 1024-2047/4096")
 		})
 	}
 }
 
 func TestHandleMediaProxySkipsRangeFieldsForProgressAccessLog(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
 	actionCalls := 0
 	h.defaultFollowClient = failRoundTripClient(t, "default follow client should not handle progress requests")
@@ -1213,13 +1182,7 @@ func TestResponseReadyLogFieldsUsesResponseTarget(t *testing.T) {
 
 func TestHandleNodeStripsClientIPHeadersFromForwardedRequest(t *testing.T) {
 	ctx := context.Background()
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	var upstreamHeaders http.Header
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
 	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1227,19 +1190,7 @@ func TestHandleNodeStripsClientIPHeadersFromForwardedRequest(t *testing.T) {
 		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 	})}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/System/Ping", nil)
-	req.Header.Set("Remote-Host", "203.0.113.10")
-	req.Header.Set("X-Forwarded-For", "203.0.113.10")
-	req.Header.Set("CF-Connecting-IP", "203.0.113.10")
-	req.Header.Set("X-Remote-Addr", "203.0.113.10")
-	req.Header.Set("CloudFront-Viewer-Address", "203.0.113.10:4430")
-	req.Header.Set("X-Azure-ClientIP", "203.0.113.10")
-	req.Header.Set("X-Envoy-External-Address", "203.0.113.10")
-	req.Header.Set("X-Original-Forwarded-For", "203.0.113.10")
-	req.Header.Set("Proxy-Client-IP", "203.0.113.10")
-	req.Header.Set("Ali-Cdn-Real-IP", "203.0.113.10")
-	req.Header.Set("Ali-Real-Client-IP", "203.0.113.10")
-	req.Header.Set("Client-Real-IP", "203.0.113.10")
-	req.Header.Set("X-Client-Real-IP", "203.0.113.10")
+	setClientIPHeaders(req)
 
 	res, err := h.handleNode(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/System/Ping"}, nil, config.ProxyEnv{})
 	if err != nil {
@@ -1248,7 +1199,7 @@ func TestHandleNodeStripsClientIPHeadersFromForwardedRequest(t *testing.T) {
 	_, _ = io.Copy(io.Discard, res.Body)
 	_ = res.Body.Close()
 
-	assertHeadersAbsent(t, upstreamHeaders, "Remote-Host", "X-Forwarded-For", "CF-Connecting-IP", "X-Remote-Addr", "CloudFront-Viewer-Address", "X-Azure-ClientIP", "X-Envoy-External-Address", "X-Original-Forwarded-For", "Proxy-Client-IP", "Ali-Cdn-Real-IP", "Ali-Real-Client-IP", "Client-Real-IP", "X-Client-Real-IP")
+	assertHeadersAbsent(t, upstreamHeaders, clientIPHeaderKeys...)
 }
 
 func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
@@ -1260,19 +1211,7 @@ func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
 		})},
 	}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/movie.strm", nil)
-	req.Header.Set("Remote-Host", "203.0.113.10")
-	req.Header.Set("X-Forwarded-For", "203.0.113.10")
-	req.Header.Set("CF-Connecting-IP", "203.0.113.10")
-	req.Header.Set("X-Remote-Addr", "203.0.113.10")
-	req.Header.Set("CloudFront-Viewer-Address", "203.0.113.10:4430")
-	req.Header.Set("X-Azure-ClientIP", "203.0.113.10")
-	req.Header.Set("X-Envoy-External-Address", "203.0.113.10")
-	req.Header.Set("X-Original-Forwarded-For", "203.0.113.10")
-	req.Header.Set("Proxy-Client-IP", "203.0.113.10")
-	req.Header.Set("Ali-Cdn-Real-IP", "203.0.113.10")
-	req.Header.Set("Ali-Real-Client-IP", "203.0.113.10")
-	req.Header.Set("Client-Real-IP", "203.0.113.10")
-	req.Header.Set("X-Client-Real-IP", "203.0.113.10")
+	setClientIPHeaders(req)
 	finalURL, err := url.Parse("https://upstream.example/movie.strm")
 	if err != nil {
 		t.Fatal(err)
@@ -1285,18 +1224,12 @@ func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
 	_, _ = io.Copy(io.Discard, res.Body)
 	_ = res.Body.Close()
 
-	assertHeadersAbsent(t, upstreamHeaders, "Remote-Host", "X-Forwarded-For", "CF-Connecting-IP", "X-Remote-Addr", "CloudFront-Viewer-Address", "X-Azure-ClientIP", "X-Envoy-External-Address", "X-Original-Forwarded-For", "Proxy-Client-IP", "Ali-Cdn-Real-IP", "Ali-Real-Client-IP", "Client-Real-IP", "X-Client-Real-IP")
+	assertHeadersAbsent(t, upstreamHeaders, clientIPHeaderKeys...)
 }
 
 func TestHandleSTRMBlocksPrivateDirectTarget(t *testing.T) {
 	ctx := context.Background()
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	rawCalls := 0
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
 	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1381,13 +1314,7 @@ func TestHandleDirectStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 	_, _ = io.Copy(io.Discard, res.Body)
 	_ = res.Body.Close()
 
-	fields := AccessLogFields(ctx)
-	if got := fields["range"]; got != "bytes=4096-" {
-		t.Fatalf("range access log field = %v, want bytes=4096-", got)
-	}
-	if got := fields["contentRange"]; got != "bytes 4096-8191/16384" {
-		t.Fatalf("contentRange access log field = %v, want bytes 4096-8191/16384", got)
-	}
+	assertAccessLogRangeFields(t, ctx, "bytes=4096-", "bytes 4096-8191/16384")
 }
 
 func TestRetryableStatusReasonDetectsLocalForbiddenResponses(t *testing.T) {
@@ -1485,77 +1412,65 @@ func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 	}
 }
 
-func TestFinishGeneralResponseBlocksPrivateCrossHostLocationDirect(t *testing.T) {
-	ctx := context.Background()
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
+func TestFinishGeneralResponseBlocksUnsafeCrossHostLocations(t *testing.T) {
+	tests := []struct {
+		name       string
+		requestURI string
+		location   string
+		node       storage.Node
+		route      parsedRoute
+		env        config.ProxyEnv
+	}{
+		{
+			name:       "private direct location",
+			requestURI: "https://proxy.example/node/emby/redirect",
+			location:   "http://127.0.0.1/private",
+			node:       storage.Node{Name: "node", Target: "https://upstream.example"},
+			route:      parsedRoute{Name: "node", Path: "/emby/redirect"},
+			env:        config.ProxyEnv{ExternalAllowAny: true},
+		},
+		{
+			name:       "untrusted public location",
+			requestURI: "https://proxy.example/node/secret/emby/redirect-public",
+			location:   "http://8.8.8.8/video.mkv?sign=abc",
+			node:       storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"},
+			route:      parsedRoute{Name: "node", Secret: "secret", Path: "/emby/redirect-public"},
+		},
 	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
-	rawCalls := 0
-	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		rawCalls++
-		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
-	})}
-	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/redirect", nil)
-	finalURL, err := url.Parse("https://upstream.example/emby/redirect")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res := textResponse(http.StatusFound, "", http.Header{"Location": []string{"http://127.0.0.1/private"}})
 
-	out, err := h.finishGeneralResponse(ctx, req, res, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/redirect"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{ExternalAllowAny: true}, "", false, false, false)
-	if err != nil {
-		t.Fatalf("finishGeneralResponse() error = %v", err)
-	}
-	defer out.Body.Close()
-	if out.StatusCode != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", out.StatusCode, http.StatusForbidden)
-	}
-	if rawCalls != 0 {
-		t.Fatalf("raw direct calls = %d, want 0", rawCalls)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rawCalls := 0
+			h := New(config.Config{}, nil, nil, logging.New("silent", false))
+			h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				rawCalls++
+				return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+			})}
+			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil)
+			finalURL, err := url.Parse("https://upstream.example" + tt.route.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := textResponse(http.StatusFound, "", http.Header{"Location": []string{tt.location}})
 
-func TestFinishGeneralResponseBlocksUntrustedCrossHostLocation(t *testing.T) {
-	rawCalls := 0
-	h := New(config.Config{}, nil, nil, logging.New("silent", false))
-	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		rawCalls++
-		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
-	})}
-	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/redirect-public", nil)
-	finalURL, err := url.Parse("https://upstream.example/emby/redirect-public")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res := textResponse(http.StatusFound, "", http.Header{"Location": []string{"http://8.8.8.8/video.mkv?sign=abc"}})
-
-	out, err := h.finishGeneralResponse(context.Background(), req, res, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/redirect-public"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
-	if err != nil {
-		t.Fatalf("finishGeneralResponse() error = %v", err)
-	}
-	defer out.Body.Close()
-	if out.StatusCode != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", out.StatusCode, http.StatusForbidden)
-	}
-	if rawCalls != 0 {
-		t.Fatalf("raw direct calls = %d, want 0", rawCalls)
+			out, err := h.finishGeneralResponse(context.Background(), req, res, tt.node, tt.route, finalURL, finalURL, http.Header{}, tt.env, "", false, false, false)
+			if err != nil {
+				t.Fatalf("finishGeneralResponse() error = %v", err)
+			}
+			defer out.Body.Close()
+			if out.StatusCode != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d", out.StatusCode, http.StatusForbidden)
+			}
+			if rawCalls != 0 {
+				t.Fatalf("raw direct calls = %d, want 0", rawCalls)
+			}
+		})
 	}
 }
 
 func TestServeHTTPRewritesSystemInfoAddressesWithTargetPathPrefix(t *testing.T) {
 	ctx := context.Background()
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	if err := store.SaveNode(ctx, "admin", storage.Node{
 		Name:           "node",
 		Secret:         "secret",
@@ -1836,13 +1751,7 @@ func TestPlaybackRedirectModeClassifiesExternalLocations(t *testing.T) {
 
 func TestHandleMediaProxyDoesNotCacheImageErrors(t *testing.T) {
 	ctx := context.Background()
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	sys := storage.DefaultSystemConfig()
 	sys.ImageCacheEnabled = true
 	if err := store.SaveSystemConfig(ctx, sys); err != nil {
@@ -1872,13 +1781,7 @@ func TestHandleMediaProxyDoesNotCacheImageErrors(t *testing.T) {
 }
 
 func TestHandleMediaProxySkipsImageCacheWhenDisabled(t *testing.T) {
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
 	upstreamCalls := 0
 	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1912,13 +1815,7 @@ func TestHandleMediaProxySkipsImageCacheWhenDisabled(t *testing.T) {
 
 func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	sys := storage.DefaultSystemConfig()
 	sys.ImageProxyLimitEnabled = true
 	sys.ImageProxyMaxConcurrent = 1
@@ -1995,13 +1892,7 @@ func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 }
 
 func TestHandleMediaProxyCoalescesConcurrentImageCacheMisses(t *testing.T) {
-	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newProxyTestStore(t)
 	sys := storage.DefaultSystemConfig()
 	sys.ImageCacheEnabled = true
 	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
@@ -2105,6 +1996,39 @@ func (repeatingReader) Read(p []byte) (int, error) {
 		p[i] = 'x'
 	}
 	return len(p), nil
+}
+
+var clientIPHeaderKeys = []string{
+	"Remote-Host",
+	"X-Forwarded-For",
+	"CF-Connecting-IP",
+	"X-Remote-Addr",
+	"CloudFront-Viewer-Address",
+	"X-Azure-ClientIP",
+	"X-Envoy-External-Address",
+	"X-Original-Forwarded-For",
+	"Proxy-Client-IP",
+	"Ali-Cdn-Real-IP",
+	"Ali-Real-Client-IP",
+	"Client-Real-IP",
+	"X-Client-Real-IP",
+}
+
+func setClientIPHeaders(req *http.Request) {
+	for _, key := range clientIPHeaderKeys {
+		req.Header.Set(key, "203.0.113.10")
+	}
+}
+
+func assertAccessLogRangeFields(t *testing.T, ctx context.Context, wantRange, wantContentRange string) {
+	t.Helper()
+	fields := AccessLogFields(ctx)
+	if got := fields["range"]; got != wantRange {
+		t.Fatalf("range access log field = %v, want %s", got, wantRange)
+	}
+	if got := fields["contentRange"]; got != wantContentRange {
+		t.Fatalf("contentRange access log field = %v, want %s", got, wantContentRange)
+	}
 }
 
 func assertHeadersAbsent(t *testing.T, headers http.Header, keys ...string) {

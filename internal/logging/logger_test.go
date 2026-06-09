@@ -8,28 +8,40 @@ import (
 )
 
 func TestRedactTextRedactsEmbeddedURLQuerySecrets(t *testing.T) {
-	input := `Get "https://emby.example/emby/Items/1?X-Emby-Token=secret-token&fields=ShareLevel&api_key=secret-key": context canceled`
-
-	got := RedactText(input)
-	if strings.Contains(got, "secret-token") || strings.Contains(got, "secret-key") {
-		t.Fatalf("RedactText() leaked sensitive query values: %q", got)
+	tests := []struct {
+		name  string
+		input string
+		leaks []string
+		wants []string
+	}{
+		{
+			name:  "regular URL",
+			input: `Get "https://emby.example/emby/Items/1?X-Emby-Token=secret-token&fields=ShareLevel&api_key=secret-key": context canceled`,
+			leaks: []string{"secret-token", "secret-key"},
+			wants: []string{"X-Emby-Token=<redacted>", "api_key=<redacted>", "fields=ShareLevel"},
+		},
+		{
+			name:  "parentheses in path",
+			input: `Get "https://cdn.example/video/Devote%20100%20Days%20(2025)%5Btmdb=306641%5D/S01E03.mkv?auth_key=secret-auth-key": net/http: TLS handshake timeout`,
+			leaks: []string{"secret-auth-key"},
+			wants: []string{"auth_key=<redacted>"},
+		},
 	}
-	for _, want := range []string{"X-Emby-Token=<redacted>", "api_key=<redacted>", "fields=ShareLevel"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("RedactText() = %q, want to contain %q", got, want)
-		}
-	}
-}
 
-func TestRedactTextRedactsEmbeddedURLAfterParenthesesInPath(t *testing.T) {
-	input := `Get "https://cdn.example/video/Devote%20100%20Days%20(2025)%5Btmdb=306641%5D/S01E03.mkv?auth_key=secret-auth-key": net/http: TLS handshake timeout`
-
-	got := RedactText(input)
-	if strings.Contains(got, "secret-auth-key") {
-		t.Fatalf("RedactText() leaked auth_key value after parentheses in path: %q", got)
-	}
-	if !strings.Contains(got, "auth_key=<redacted>") {
-		t.Fatalf("RedactText() = %q, want redacted auth_key", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RedactText(tt.input)
+			for _, leak := range tt.leaks {
+				if strings.Contains(got, leak) {
+					t.Fatalf("RedactText() leaked %q in %q", leak, got)
+				}
+			}
+			for _, want := range tt.wants {
+				if !strings.Contains(got, want) {
+					t.Fatalf("RedactText() = %q, want to contain %q", got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -155,62 +167,54 @@ func TestLoggerEntriesHonorsLimit(t *testing.T) {
 	}
 }
 
-func TestLoggerHistoryPagesOlderEntries(t *testing.T) {
-	log := New("debug", true)
-	if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 3); err != nil {
-		t.Fatalf("EnableHistory() error = %v", err)
-	}
-	t.Cleanup(func() { _ = log.Close() })
-	for i := 1; i <= 5; i++ {
-		log.Info("test", fmt.Sprintf("line-%d", i), nil)
-	}
-
-	latest := log.Page(2, 0)
-	if !latest.History || !latest.HasOlder {
-		t.Fatalf("latest page metadata = %+v", latest)
-	}
-	if messages(latest.Entries) != "line-4,line-5" {
-		t.Fatalf("latest messages = %q", messages(latest.Entries))
+func TestLoggerHistoryPagination(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxFiles   int
+		wantOldest string
+	}{
+		{name: "history pages older entries", maxFiles: 3, wantOldest: "line-1"},
+		{name: "latest page uses memory buffer when history rotated away", maxFiles: 1},
 	}
 
-	older := log.Page(2, latest.Entries[0].ID)
-	if !older.HasOlder {
-		t.Fatalf("older page metadata = %+v", older)
-	}
-	if messages(older.Entries) != "line-2,line-3" {
-		t.Fatalf("older messages = %q", messages(older.Entries))
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := New("debug", true)
+			if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, tt.maxFiles); err != nil {
+				t.Fatalf("EnableHistory() error = %v", err)
+			}
+			t.Cleanup(func() { _ = log.Close() })
+			for i := 1; i <= 5; i++ {
+				log.Info("test", fmt.Sprintf("line-%d", i), nil)
+			}
 
-	oldest := log.Page(2, older.Entries[0].ID)
-	if oldest.HasOlder {
-		t.Fatalf("oldest page metadata = %+v", oldest)
-	}
-	if messages(oldest.Entries) != "line-1" {
-		t.Fatalf("oldest messages = %q", messages(oldest.Entries))
-	}
-}
+			latest := log.Page(2, 0)
+			if !latest.History || !latest.HasOlder {
+				t.Fatalf("latest page metadata = %+v", latest)
+			}
+			if messages(latest.Entries) != "line-4,line-5" {
+				t.Fatalf("latest messages = %q", messages(latest.Entries))
+			}
 
-func TestLoggerLatestPageUsesMemoryBufferWhenHistoryRotatedAway(t *testing.T) {
-	log := New("debug", true)
-	if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 1); err != nil {
-		t.Fatalf("EnableHistory() error = %v", err)
-	}
-	t.Cleanup(func() { _ = log.Close() })
-	for i := 1; i <= 5; i++ {
-		log.Info("test", fmt.Sprintf("line-%d", i), nil)
-	}
+			older := log.Page(2, latest.Entries[0].ID)
+			if messages(older.Entries) != "line-2,line-3" {
+				t.Fatalf("older messages = %q", messages(older.Entries))
+			}
+			if tt.wantOldest == "" {
+				return
+			}
+			if !older.HasOlder {
+				t.Fatalf("older page metadata = %+v", older)
+			}
 
-	latest := log.Page(2, 0)
-	if !latest.History || !latest.HasOlder {
-		t.Fatalf("latest page metadata = %+v", latest)
-	}
-	if messages(latest.Entries) != "line-4,line-5" {
-		t.Fatalf("latest messages = %q", messages(latest.Entries))
-	}
-
-	older := log.Page(2, latest.Entries[0].ID)
-	if messages(older.Entries) != "line-2,line-3" {
-		t.Fatalf("older messages = %q", messages(older.Entries))
+			oldest := log.Page(2, older.Entries[0].ID)
+			if oldest.HasOlder {
+				t.Fatalf("oldest page metadata = %+v", oldest)
+			}
+			if messages(oldest.Entries) != tt.wantOldest {
+				t.Fatalf("oldest messages = %q", messages(oldest.Entries))
+			}
+		})
 	}
 }
 

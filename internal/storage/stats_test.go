@@ -14,13 +14,7 @@ import (
 
 func TestLogPlaybackConcurrentSessionDedup(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	headers := http.Header{
 		"User-Agent":        {"test-client"},
@@ -82,13 +76,7 @@ func TestLogPlaybackConcurrentSessionDedup(t *testing.T) {
 
 func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	headers := http.Header{
 		"User-Agent":        {"session-client"},
@@ -158,13 +146,7 @@ func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
 
 func TestLogPlaybackDedupsSessionsAcrossMediaPlaySessionIDs(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	headers := http.Header{
 		"User-Agent":       {"session-client"},
@@ -207,13 +189,7 @@ func TestLogPlaybackDedupsSessionsAcrossMediaPlaySessionIDs(t *testing.T) {
 
 func TestLogPlaybackDedupsSessionWithoutDeviceOrSessionID(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	base := time.Date(2026, 6, 9, 15, 45, 0, 0, localtime.Location()).UnixMilli()
 	input := PlaybackInput{
@@ -249,13 +225,7 @@ func TestLogPlaybackDedupsSessionWithoutDeviceOrSessionID(t *testing.T) {
 
 func TestLogPlaybackDoesNotCountHeadResponseBytes(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	input := PlaybackInput{
 		Node:       Node{Name: "alpha"},
@@ -287,13 +257,7 @@ func TestLogPlaybackDoesNotCountHeadResponseBytes(t *testing.T) {
 
 func TestLogPlaybackTrafficCountsReadAndWriteBytes(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	input := PlaybackInput{
 		Node:      Node{Name: "alpha"},
@@ -335,13 +299,7 @@ func TestLogPlaybackTrafficCountsReadAndWriteBytes(t *testing.T) {
 
 func TestLogPlaybackAsyncDoesNotWaitForDatabase(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -391,13 +349,7 @@ func TestLogPlaybackAsyncDoesNotWaitForDatabase(t *testing.T) {
 
 func TestLogPlaybackAsyncUsesOccurredAtForStatsTime(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	occurredAt := time.Date(2000, 1, 2, 16, 0, 1, 0, time.UTC).UnixMilli()
 	input := PlaybackInput{
@@ -458,13 +410,7 @@ func TestLogPlaybackAsyncUsesOccurredAtForStatsTime(t *testing.T) {
 
 func TestGetPlayStatsUsesUTC8CalendarWindow(t *testing.T) {
 	ctx := context.Background()
-	store, err := New(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.Close()
-	})
+	store := newStatsTestStore(t)
 
 	now := localtime.Now()
 	today := now.Format("2006-01-02")
@@ -548,4 +494,16 @@ func TestInitSchemaDoesNotPromoteLegacyPlayStatsBytes(t *testing.T) {
 	if stats[0].Bytes != 0 || stats[0].OutboundBytes != 0 || stats[0].InboundBytes != 0 {
 		t.Fatalf("migrated traffic = bytes %d inbound %d outbound %d; want 0, 0, 0", stats[0].Bytes, stats[0].InboundBytes, stats[0].OutboundBytes)
 	}
+}
+
+func newStatsTestStore(t *testing.T) *Store {
+	t.Helper()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	return store
 }

@@ -19,54 +19,36 @@ import (
 	"embyproxy/internal/storage"
 )
 
-func TestServeAdminReportsMissingAdminToken(t *testing.T) {
-	cfg := config.Config{}
-	handler := New(cfg, nil, auth.NewChecker(cfg, nil), nil, nil, nil)
-	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+func TestServeAdminValidatesTokenConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		token      string
+		wantStatus int
+		wantBody   []string
+	}{
+		{name: "missing admin token", wantStatus: http.StatusInternalServerError, wantBody: []string{auth.AdminTokenNotConfigured}},
+		{name: "configured admin token", token: "strong-random-admin-token", wantStatus: http.StatusOK, wantBody: []string{`id="loginWrap"`, `id="appVersion"`}},
+		{name: "default admin token", token: "change-me-please", wantStatus: http.StatusInternalServerError, wantBody: []string{auth.AdminTokenDefault}},
 	}
-	if !strings.Contains(rec.Body.String(), auth.AdminTokenNotConfigured) {
-		t.Fatalf("body does not include config error: %q", rec.Body.String())
-	}
-}
 
-func TestServeAdminWithConfiguredTokenReturnsIndex(t *testing.T) {
-	cfg := config.Config{AdminToken: "strong-random-admin-token"}
-	handler := New(cfg, nil, auth.NewChecker(cfg, nil), nil, nil, nil)
-	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	rec := httptest.NewRecorder()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{AdminToken: tt.token}
+			handler := New(cfg, nil, auth.NewChecker(cfg, nil), nil, nil, nil)
+			req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+			rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, req)
+			handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if !strings.Contains(rec.Body.String(), `id="loginWrap"`) {
-		t.Fatal("expected admin index content")
-	}
-	if !strings.Contains(rec.Body.String(), `id="appVersion"`) {
-		t.Fatal("expected version display container")
-	}
-}
-
-func TestServeAdminReportsDefaultAdminToken(t *testing.T) {
-	cfg := config.Config{AdminToken: "change-me-please"}
-	handler := New(cfg, nil, auth.NewChecker(cfg, nil), nil, nil, nil)
-	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
-	}
-	if !strings.Contains(rec.Body.String(), auth.AdminTokenDefault) {
-		t.Fatalf("body does not include default token error: %q", rec.Body.String())
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			for _, want := range tt.wantBody {
+				if !strings.Contains(rec.Body.String(), want) {
+					t.Fatalf("body = %q, want to contain %q", rec.Body.String(), want)
+				}
+			}
+		})
 	}
 }
 
@@ -210,82 +192,102 @@ func TestNormalizeTrafficCaptureFileRequiresDataDirectory(t *testing.T) {
 	}
 }
 
-func TestConfigSetSavesImageSettings(t *testing.T) {
-	ctx := context.Background()
-	handler, closeStore := newConfigTestHandler(t)
-	defer closeStore()
+func TestConfigSetImageSettings(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(*testing.T, context.Context, *Handler)
+		payload map[string]any
+		want    storage.SystemConfig
+	}{
+		{
+			name: "saves explicit settings",
+			payload: map[string]any{
+				"imageProxyLimitEnabled":      true,
+				"imageProxyMaxConcurrent":     8,
+				"imageProxyRequestIntervalMs": 100,
+				"imageCacheEnabled":           true,
+				"imageCacheTtlDays":           30,
+			},
+			want: storage.SystemConfig{
+				ImageProxyLimitEnabled:      true,
+				ImageProxyMaxConcurrent:     8,
+				ImageProxyRequestIntervalMS: 100,
+				ImageCacheEnabled:           true,
+				ImageCacheTTLDays:           30,
+			},
+		},
+		{
+			name: "preserves omitted image settings",
+			setup: func(t *testing.T, ctx context.Context, handler *Handler) {
+				t.Helper()
+				saved := storage.DefaultSystemConfig()
+				saved.ImageProxyLimitEnabled = true
+				saved.ImageProxyMaxConcurrent = 8
+				saved.ImageProxyRequestIntervalMS = 100
+				saved.ImageCacheEnabled = true
+				saved.ImageCacheTTLDays = 30
+				if err := handler.store.SaveSystemConfig(ctx, saved); err != nil {
+					t.Fatalf("SaveSystemConfig() error = %v", err)
+				}
+			},
+			payload: map[string]any{"logLevel": "debug"},
+			want: storage.SystemConfig{
+				LogLevel:                    "debug",
+				ImageProxyLimitEnabled:      true,
+				ImageProxyMaxConcurrent:     8,
+				ImageProxyRequestIntervalMS: 100,
+				ImageCacheEnabled:           true,
+				ImageCacheTTLDays:           30,
+			},
+		},
+		{
+			name: "clamps out-of-range settings",
+			payload: map[string]any{
+				"imageProxyMaxConcurrent":     0,
+				"imageProxyRequestIntervalMs": 999999,
+				"imageCacheTtlDays":           9999,
+			},
+			want: storage.SystemConfig{
+				ImageProxyMaxConcurrent:     1,
+				ImageProxyRequestIntervalMS: 5000,
+				ImageCacheTTLDays:           365,
+			},
+		},
+	}
 
-	res := handler.configSet(ctx, map[string]any{"config": map[string]any{
-		"imageProxyLimitEnabled":      true,
-		"imageProxyMaxConcurrent":     8,
-		"imageProxyRequestIntervalMs": 100,
-		"imageCacheEnabled":           true,
-		"imageCacheTtlDays":           30,
-	}})
-	if res["ok"] != true {
-		t.Fatalf("configSet() = %+v", res)
-	}
-	got, err := handler.store.GetSystemConfig(ctx, storage.DefaultSystemConfig())
-	if err != nil {
-		t.Fatalf("GetSystemConfig() error = %v", err)
-	}
-	if !got.ImageProxyLimitEnabled || got.ImageProxyMaxConcurrent != 8 || got.ImageProxyRequestIntervalMS != 100 || !got.ImageCacheEnabled || got.ImageCacheTTLDays != 30 {
-		t.Fatalf("image settings = %+v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			handler, closeStore := newConfigTestHandler(t)
+			defer closeStore()
+			if tt.setup != nil {
+				tt.setup(t, ctx, handler)
+			}
+
+			res := handler.configSet(ctx, map[string]any{"config": tt.payload})
+			if res["ok"] != true {
+				t.Fatalf("configSet() = %+v", res)
+			}
+			got, err := handler.store.GetSystemConfig(ctx, storage.DefaultSystemConfig())
+			if err != nil {
+				t.Fatalf("GetSystemConfig() error = %v", err)
+			}
+			assertImageConfig(t, got, tt.want)
+		})
 	}
 }
 
-func TestConfigSetPreservesImageSettingsWhenOmitted(t *testing.T) {
-	ctx := context.Background()
-	handler, closeStore := newConfigTestHandler(t)
-	defer closeStore()
-
-	saved := storage.DefaultSystemConfig()
-	saved.ImageProxyLimitEnabled = true
-	saved.ImageProxyMaxConcurrent = 8
-	saved.ImageProxyRequestIntervalMS = 100
-	saved.ImageCacheEnabled = true
-	saved.ImageCacheTTLDays = 30
-	if err := handler.store.SaveSystemConfig(ctx, saved); err != nil {
-		t.Fatalf("SaveSystemConfig() error = %v", err)
+func assertImageConfig(t *testing.T, got, want storage.SystemConfig) {
+	t.Helper()
+	if want.LogLevel != "" && got.LogLevel != want.LogLevel {
+		t.Fatalf("LogLevel = %q, want %q", got.LogLevel, want.LogLevel)
 	}
-
-	res := handler.configSet(ctx, map[string]any{"config": map[string]any{
-		"logLevel": "debug",
-	}})
-	if res["ok"] != true {
-		t.Fatalf("configSet() = %+v", res)
-	}
-	got, err := handler.store.GetSystemConfig(ctx, storage.DefaultSystemConfig())
-	if err != nil {
-		t.Fatalf("GetSystemConfig() error = %v", err)
-	}
-	if got.LogLevel != "debug" {
-		t.Fatalf("LogLevel = %q, want debug", got.LogLevel)
-	}
-	if !got.ImageProxyLimitEnabled || got.ImageProxyMaxConcurrent != 8 || got.ImageProxyRequestIntervalMS != 100 || !got.ImageCacheEnabled || got.ImageCacheTTLDays != 30 {
-		t.Fatalf("image settings = %+v", got)
-	}
-}
-
-func TestConfigSetClampsImageSettings(t *testing.T) {
-	ctx := context.Background()
-	handler, closeStore := newConfigTestHandler(t)
-	defer closeStore()
-
-	res := handler.configSet(ctx, map[string]any{"config": map[string]any{
-		"imageProxyMaxConcurrent":     0,
-		"imageProxyRequestIntervalMs": 999999,
-		"imageCacheTtlDays":           9999,
-	}})
-	if res["ok"] != true {
-		t.Fatalf("configSet() = %+v", res)
-	}
-	got, err := handler.store.GetSystemConfig(ctx, storage.DefaultSystemConfig())
-	if err != nil {
-		t.Fatalf("GetSystemConfig() error = %v", err)
-	}
-	if got.ImageProxyLimitEnabled || got.ImageProxyMaxConcurrent != 1 || got.ImageProxyRequestIntervalMS != 5000 || got.ImageCacheEnabled || got.ImageCacheTTLDays != 365 {
-		t.Fatalf("clamped image settings = %+v", got)
+	if got.ImageProxyLimitEnabled != want.ImageProxyLimitEnabled ||
+		got.ImageProxyMaxConcurrent != want.ImageProxyMaxConcurrent ||
+		got.ImageProxyRequestIntervalMS != want.ImageProxyRequestIntervalMS ||
+		got.ImageCacheEnabled != want.ImageCacheEnabled ||
+		got.ImageCacheTTLDays != want.ImageCacheTTLDays {
+		t.Fatalf("image settings = %+v, want %+v", got, want)
 	}
 }
 
