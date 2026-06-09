@@ -165,7 +165,7 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		return err
 	}
 
-	if countable && (sessionID != "" || deviceID != "") {
+	if countable {
 		sessKey := strings.Join([]string{day, nodeName, client, ip, deviceID, sessionID}, "|")
 		var lastTS int64
 		err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_sessions WHERE k = ?`, sessKey).Scan(&lastTS)

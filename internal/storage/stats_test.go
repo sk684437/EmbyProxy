@@ -205,6 +205,48 @@ func TestLogPlaybackDedupsSessionsAcrossMediaPlaySessionIDs(t *testing.T) {
 	}
 }
 
+func TestLogPlaybackDedupsSessionWithoutDeviceOrSessionID(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	base := time.Date(2026, 6, 9, 15, 45, 0, 0, localtime.Location()).UnixMilli()
+	input := PlaybackInput{
+		Node:       Node{Name: "alpha"},
+		RequestIP:  "198.51.100.42",
+		Headers:    http.Header{"User-Agent": {"test-client"}},
+		Status:     http.StatusPartialContent,
+		IsPlayback: true,
+		Mode:       "proxy",
+		Method:     http.MethodGet,
+		RequestURL: "/emby/smartstrm?item_id=item-a&media_id=source-a",
+		OccurredAt: base,
+	}
+	for idx := 0; idx < 9; idx++ {
+		input.OccurredAt = base + int64(idx)*int64(time.Second/time.Millisecond)
+		if err := store.LogPlayback(ctx, input); err != nil {
+			t.Fatalf("LogPlayback(%d) error = %v", idx, err)
+		}
+	}
+
+	var plays, sessions int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0), COALESCE(SUM(sessions), 0)
+		FROM play_stats
+		WHERE node = ? AND client = ?
+	`, "alpha", "test-client").Scan(&plays, &sessions); err != nil {
+		t.Fatalf("query play_stats error = %v", err)
+	}
+	if plays != 1 || sessions != 1 {
+		t.Fatalf("play_stats = plays %d sessions %d; want 1, 1", plays, sessions)
+	}
+}
+
 func TestLogPlaybackDoesNotCountHeadResponseBytes(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "test.db"))
