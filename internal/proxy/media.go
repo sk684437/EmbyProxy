@@ -26,7 +26,7 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 	headers.Del("If-Range")
 	applyIdentity(h.ids, headers, node, true)
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-source", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	res, err := h.doFetch(ctx, h.playbackFollowClient, finalURL, http.MethodGet, headers, nil)
+	res, err := h.doFetch(ctx, h.playbackActionClient, finalURL, http.MethodGet, headers, nil)
 	if err != nil {
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-source-failed", "targetUrl": finalURL.String(), "outboundHeaders": headers})
 		return nil, err
@@ -112,7 +112,7 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 
 func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, body []byte, env config.ProxyEnv, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI bool, reqOrigin, clientIP string) (*http.Response, error) {
 	isStreamingMedia := isPlaybackStreamRequest(r, finalURL)
-	probeDirectExternalRedirect := node.DirectExternal && isPlaybackAPI && !isAdditionalPartsAPI && (r.Method == http.MethodGet || r.Method == http.MethodHead)
+	probeDirectExternalRedirect := node.DirectExternal && isPlaybackAPI && !isImageAPI && isStreamingMedia
 	hClean := buildCleanProxyHeaders(h.ids, r.Header, finalURL, node, env, isStreamingMedia)
 	for _, key := range []string{"X-Emby-Authorization", "X-Emby-Token", "X-MediaBrowser-Token", "Authorization", "Cookie"} {
 		if value := r.Header.Get(key); value != "" {
@@ -186,11 +186,13 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	var client *http.Client
 	switch {
 	case probeDirectExternalRedirect:
-		client = h.noRedirectClient
+		client = h.playbackStreamProbeClient
 	case isImageAPI:
 		client = h.imageFollowClient
 	case isStreamingMedia:
-		client = h.playbackFollowClient
+		client = h.playbackStreamClient
+	case isPlaybackAPI || isAdditionalPartsAPI:
+		client = h.playbackActionClient
 	default:
 		client = h.defaultFollowClient
 	}

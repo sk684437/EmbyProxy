@@ -24,24 +24,26 @@ import (
 )
 
 type Handler struct {
-	cfg                  config.Config
-	store                *storage.Store
-	ids                  *identity.Manager
-	log                  *logging.Logger
-	lineBan              *ttlMap
-	progressThrottle     *ttlMap
-	playbackDedup        *ttlMap
-	imageLimiterMu       sync.Mutex
-	imageLimiter         *imageRequestLimiter
-	imageCacheMu         sync.Mutex
-	imageCache           *imageDiskCache
-	activeMu             sync.Mutex
-	activeTarget         map[string]string
-	noRedirectClient     *http.Client
-	defaultFollowClient  *http.Client
-	playbackFollowClient *http.Client
-	imageFollowClient    *http.Client
-	rawDirectClient      *http.Client
+	cfg                       config.Config
+	store                     *storage.Store
+	ids                       *identity.Manager
+	log                       *logging.Logger
+	lineBan                   *ttlMap
+	progressThrottle          *ttlMap
+	playbackDedup             *ttlMap
+	imageLimiterMu            sync.Mutex
+	imageLimiter              *imageRequestLimiter
+	imageCacheMu              sync.Mutex
+	imageCache                *imageDiskCache
+	activeMu                  sync.Mutex
+	activeTarget              map[string]string
+	noRedirectClient          *http.Client
+	defaultFollowClient       *http.Client
+	playbackActionClient      *http.Client
+	playbackStreamClient      *http.Client
+	playbackStreamProbeClient *http.Client
+	imageFollowClient         *http.Client
+	rawDirectClient           *http.Client
 }
 
 type parsedRoute struct {
@@ -64,27 +66,38 @@ func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *lo
 	if defaults.ImageProxyLimitEnabled {
 		imageLimiter = newImageRequestLimiter(defaults.ImageProxyMaxConcurrent, time.Duration(defaults.ImageProxyRequestIntervalMS)*time.Millisecond)
 	}
+	playbackActionTransport := newProxyTransport(false)
+	playbackStreamTransport := newProxyTransport(false)
 	return &Handler{
-		cfg:                  cfg,
-		store:                store,
-		ids:                  ids,
-		log:                  log,
-		lineBan:              newTTLMap(),
-		progressThrottle:     newTTLMap(),
-		playbackDedup:        newTTLMap(),
-		imageLimiter:         imageLimiter,
-		imageCache:           newImageCacheFromSystemConfig(cfg, defaults),
-		activeTarget:         map[string]string{},
-		noRedirectClient:     newProxyHTTPClient(false),
-		defaultFollowClient:  newProxyHTTPClient(true),
-		playbackFollowClient: newProxyHTTPClient(true),
-		imageFollowClient:    newProxyHTTPClient(true),
-		rawDirectClient:      newRawHTTPClient(),
+		cfg:                       cfg,
+		store:                     store,
+		ids:                       ids,
+		log:                       log,
+		lineBan:                   newTTLMap(),
+		progressThrottle:          newTTLMap(),
+		playbackDedup:             newTTLMap(),
+		imageLimiter:              imageLimiter,
+		imageCache:                newImageCacheFromSystemConfig(cfg, defaults),
+		activeTarget:              map[string]string{},
+		noRedirectClient:          newProxyHTTPClient(false),
+		defaultFollowClient:       newProxyHTTPClient(true),
+		playbackActionClient:      newProxyHTTPClientWithTransport(true, playbackActionTransport),
+		playbackStreamClient:      newProxyHTTPClientWithTransport(true, playbackStreamTransport),
+		playbackStreamProbeClient: newProxyHTTPClientWithTransport(false, playbackStreamTransport),
+		imageFollowClient:         newProxyHTTPClient(true),
+		rawDirectClient:           newRawHTTPClient(),
 	}
 }
 
 func newProxyHTTPClient(follow bool) *http.Client {
-	client := &http.Client{Transport: newProxyTransport(false)}
+	return newProxyHTTPClientWithTransport(follow, newProxyTransport(false))
+}
+
+func newProxyHTTPClientWithTransport(follow bool, transport http.RoundTripper) *http.Client {
+	if transport == nil {
+		transport = newProxyTransport(false)
+	}
+	client := &http.Client{Transport: transport}
 	if !follow {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
