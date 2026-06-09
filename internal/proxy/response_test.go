@@ -216,6 +216,27 @@ func (b *partialFailBody) Close() error {
 	return nil
 }
 
+type failingWriteResponseWriter struct {
+	header http.Header
+	status int
+	err    error
+}
+
+func (w *failingWriteResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = http.Header{}
+	}
+	return w.header
+}
+
+func (w *failingWriteResponseWriter) WriteHeader(status int) {
+	w.status = status
+}
+
+func (w *failingWriteResponseWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
 func TestSendResponseResumesInterruptedPlaybackStream(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/node/secret/emby/videos/1/original.mkv", nil).WithContext(ctx)
@@ -289,6 +310,91 @@ func TestSendResponseResumesInterruptedPlaybackStream(t *testing.T) {
 	}
 	if _, ok := fields["streamResumeError"]; ok {
 		t.Fatalf("streamResumeError was set on successful resume: %v", fields["streamResumeError"])
+	}
+}
+
+func TestSendResponseOmitsStreamResumeErrorBeforeResumeAttempt(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/node/secret/emby/videos/1/original.mkv", nil).WithContext(ctx)
+	req.Header.Set("Range", "bytes=0-10")
+	upstreamReq := httptest.NewRequest(http.MethodGet, "https://cdn.example/video/original.mkv", nil)
+	upstreamReq.Header.Set("Range", "bytes=0-10")
+	res := &http.Response{
+		StatusCode:    http.StatusPartialContent,
+		Status:        "206 Partial Content",
+		ContentLength: 11,
+		Header: http.Header{
+			"Accept-Ranges":  []string{"bytes"},
+			"Content-Length": []string{"11"},
+			"Content-Range":  []string{"bytes 0-10/11"},
+			"Content-Type":   []string{"video/x-matroska"},
+			"ETag":           []string{`"media-v1"`},
+		},
+		Body:    io.NopCloser(strings.NewReader("hello world")),
+		Request: upstreamReq,
+	}
+	attachUpstreamClient(res, failRoundTripClient(t, "resume request should not be attempted"))
+	markStreamResumeCandidate(res, "playback")
+	writer := &failingWriteResponseWriter{err: errors.New("broken pipe")}
+
+	(&Handler{log: logging.New("silent", false)}).sendResponse(writer, req, res)
+
+	fields := AccessLogFields(ctx)
+	if got := fields["streamResumeAttempts"]; got != 0 {
+		t.Fatalf("streamResumeAttempts = %v, want 0", got)
+	}
+	if _, ok := fields["streamResumeError"]; ok {
+		t.Fatalf("streamResumeError was set before a resume attempt: %v", fields["streamResumeError"])
+	}
+}
+
+func TestSendResponseLogsStreamResumeErrorForResumeValidationFailure(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/node/secret/emby/videos/1/original.mkv", nil).WithContext(ctx)
+	req.Header.Set("Range", "bytes=0-10")
+	upstreamErr := errors.New("upstream reset")
+	client := &http.Client{Transport: roundTripFunc(func(resumeReq *http.Request) (*http.Response, error) {
+		out := bytesResponse(http.StatusPartialContent, []byte("world"), http.Header{
+			"Accept-Ranges":  []string{"bytes"},
+			"Content-Length": []string{"5"},
+			"Content-Range":  []string{"bytes 7-10/11"},
+			"Content-Type":   []string{"video/x-matroska"},
+			"ETag":           []string{`"media-v1"`},
+		})
+		out.Request = resumeReq
+		return out, nil
+	})}
+	upstreamReq := httptest.NewRequest(http.MethodGet, "https://cdn.example/video/original.mkv", nil)
+	upstreamReq.Header.Set("Range", "bytes=0-10")
+	res := &http.Response{
+		StatusCode:    http.StatusPartialContent,
+		Status:        "206 Partial Content",
+		ContentLength: 11,
+		Header: http.Header{
+			"Accept-Ranges":  []string{"bytes"},
+			"Content-Length": []string{"11"},
+			"Content-Range":  []string{"bytes 0-10/11"},
+			"Content-Type":   []string{"video/x-matroska"},
+			"ETag":           []string{`"media-v1"`},
+		},
+		Body:    &partialFailBody{data: []byte("hello "), err: upstreamErr},
+		Request: upstreamReq,
+	}
+	attachUpstreamClient(res, client)
+	markStreamResumeCandidate(res, "playback")
+	rec := httptest.NewRecorder()
+
+	(&Handler{log: logging.New("silent", false)}).sendResponse(rec, req, res)
+
+	fields := AccessLogFields(ctx)
+	if got := fields["streamResumeAttempts"]; got != 1 {
+		t.Fatalf("streamResumeAttempts = %v, want 1", got)
+	}
+	if got := fields["streamResumeFrom"]; got != int64(6) {
+		t.Fatalf("streamResumeFrom = %v, want 6", got)
+	}
+	if got, ok := fields["streamResumeError"].(string); !ok || got == "" {
+		t.Fatalf("streamResumeError = %v, want non-empty string", fields["streamResumeError"])
 	}
 }
 

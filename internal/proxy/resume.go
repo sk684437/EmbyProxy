@@ -39,6 +39,7 @@ type streamResumeProgress struct {
 	resumedBytes int64
 	firstFrom    int64
 	err          error
+	resumeErr    bool
 }
 
 func attachUpstreamClient(res *http.Response, client *http.Client) {
@@ -177,6 +178,7 @@ func (h *Handler) copyResponseBodyWithResume(w http.ResponseWriter, r *http.Requ
 		}
 		if progress.attempts >= streamResumeMaxAttempts {
 			progress.err = fmt.Errorf("stream resume attempts exhausted: %w", chunkReadErr)
+			progress.resumeErr = true
 			closeResponseBody(current)
 			readErr = progress.err
 			break
@@ -191,6 +193,7 @@ func (h *Handler) copyResponseBodyWithResume(w http.ResponseWriter, r *http.Requ
 		drainAndCloseResponseBody(current)
 		if err != nil {
 			progress.err = err
+			progress.resumeErr = true
 			readErr = err
 			break
 		}
@@ -459,6 +462,7 @@ func setStreamResumeAccessLogFields(ctx context.Context, progress streamResumePr
 	if ctx == nil || (progress.attempts == 0 && progress.err == nil) {
 		return
 	}
+	logResumeErr := progress.err != nil && (progress.attempts > 0 || progress.resumeErr)
 	SetAccessLogField(ctx, "streamResumeAttempts", progress.attempts)
 	if progress.resumedBytes > 0 {
 		SetAccessLogField(ctx, "streamResumeBytes", progress.resumedBytes)
@@ -466,7 +470,7 @@ func setStreamResumeAccessLogFields(ctx context.Context, progress streamResumePr
 	if progress.firstFrom >= 0 {
 		SetAccessLogField(ctx, "streamResumeFrom", progress.firstFrom)
 	}
-	if progress.err != nil {
+	if logResumeErr {
 		SetAccessLogField(ctx, "streamResumeError", progress.err.Error())
 	}
 }
