@@ -156,6 +156,55 @@ func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
 	}
 }
 
+func TestLogPlaybackDedupsSessionsAcrossMediaPlaySessionIDs(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	headers := http.Header{
+		"User-Agent":       {"session-client"},
+		"X-Emby-Device-Id": {"device-1"},
+	}
+	base := time.Date(2026, 6, 8, 9, 0, 0, 0, localtime.Location()).UnixMilli()
+	input := PlaybackInput{
+		Node:       Node{Name: "alpha"},
+		RequestIP:  "127.0.0.1",
+		Headers:    headers,
+		Status:     http.StatusPartialContent,
+		IsPlayback: true,
+		Mode:       "proxy",
+		Method:     http.MethodGet,
+		OccurredAt: base,
+	}
+	for idx, reqURL := range []string{
+		"/emby/videos/3197063/original.mkv?DeviceId=device-1&MediaSourceId=mediasource_3197063&PlaySessionId=play-session-1",
+		"/emby/videos/3407103/original.mkv?DeviceId=device-1&MediaSourceId=mediasource_3407141&PlaySessionId=play-session-2",
+	} {
+		input.RequestURL = reqURL
+		input.OccurredAt = base + int64(idx)*int64(time.Minute/time.Millisecond)
+		if err := store.LogPlayback(ctx, input); err != nil {
+			t.Fatalf("LogPlayback(%d) error = %v", idx, err)
+		}
+	}
+
+	var plays, sessions int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0), COALESCE(SUM(sessions), 0)
+		FROM play_stats
+		WHERE node = ? AND client = ?
+	`, "alpha", "session-client").Scan(&plays, &sessions); err != nil {
+		t.Fatalf("query play_stats error = %v", err)
+	}
+	if plays != 2 || sessions != 1 {
+		t.Fatalf("play_stats = plays %d sessions %d; want 2, 1", plays, sessions)
+	}
+}
+
 func TestLogPlaybackDoesNotCountHeadResponseBytes(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "test.db"))

@@ -145,7 +145,7 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	}
 	reqURL := parseRequestURL(in.RequestURL)
 	deviceID := cutString(headerOrQuery(in.Headers, reqURL, "X-Emby-Device-Id", "X-MediaBrowser-Device-Id", "DeviceId", "deviceId"), 64)
-	sessionID := cutString(headerOrQuery(in.Headers, reqURL, "X-Emby-Session-Id", "SessionId", "PlaySessionId", "playSessionId"), 64)
+	sessionID := cutString(headerOrQuery(in.Headers, reqURL, "X-Emby-Session-Id", "SessionId", "sessionId"), 64)
 
 	sessInc := int64(0)
 	if countable {
