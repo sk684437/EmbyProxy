@@ -91,12 +91,12 @@ func (b *trackedBody) Close() error {
 	return nil
 }
 
-func TestFetchTargetDoesNotDowngradeHTTPS(t *testing.T) {
+func TestDoFetchDoesNotDowngradeHTTPS(t *testing.T) {
 	body := newTrackedBody("first")
 	schemes := []string{}
 
 	h := &Handler{
-		manualClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		noRedirectClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			schemes = append(schemes, req.URL.Scheme)
 			return &http.Response{StatusCode: 530, Header: http.Header{}, Body: body, Request: req}, nil
 		})},
@@ -106,15 +106,15 @@ func TestFetchTargetDoesNotDowngradeHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := h.fetchTarget(context.Background(), nil, target, http.MethodGet, http.Header{}, nil, false)
+	res, err := h.doFetch(context.Background(), h.noRedirectClient, target, http.MethodGet, http.Header{}, nil)
 	if err != nil {
-		t.Fatalf("fetchTarget() error = %v", err)
+		t.Fatalf("doFetch() error = %v", err)
 	}
 	t.Cleanup(func() {
 		_ = res.Body.Close()
 	})
 	if res.Body != body {
-		t.Fatal("fetchTarget() did not return the original response")
+		t.Fatal("doFetch() did not return the original response")
 	}
 	if got := strings.Join(schemes, ","); got != "https" {
 		t.Fatalf("schemes = %q, want https", got)
@@ -596,11 +596,11 @@ func TestServeHTTPMarksAccessLogURIWithRedactedSecret(t *testing.T) {
 	}
 }
 
-func TestFetchTargetDoesNotRetryHTTPAfterHTTPSError(t *testing.T) {
+func TestDoFetchDoesNotRetryHTTPAfterHTTPSError(t *testing.T) {
 	schemes := []string{}
 	wantErr := errors.New("upstream timeout")
 	h := &Handler{
-		manualClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		noRedirectClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			schemes = append(schemes, req.URL.Scheme)
 			return nil, wantErr
 		})},
@@ -610,9 +610,9 @@ func TestFetchTargetDoesNotRetryHTTPAfterHTTPSError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = h.fetchTarget(context.Background(), nil, target, http.MethodGet, http.Header{}, nil, false)
+	_, err = h.doFetch(context.Background(), h.noRedirectClient, target, http.MethodGet, http.Header{}, nil)
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("fetchTarget() error = %v, want %v", err, wantErr)
+		t.Fatalf("doFetch() error = %v, want %v", err, wantErr)
 	}
 	if got := strings.Join(schemes, ","); got != "https" {
 		t.Fatalf("schemes = %q, want https", got)
@@ -635,12 +635,12 @@ func TestNewProxyHTTPClientUsesTransportTimeouts(t *testing.T) {
 		t.Fatal("TLSHandshakeTimeout was not configured")
 	}
 	if client.CheckRedirect == nil {
-		t.Fatal("manual client should disable automatic redirects")
+		t.Fatal("no-redirect client should disable automatic redirects")
 	}
 
-	followClient := newProxyHTTPClient(true)
-	if followClient.CheckRedirect != nil {
-		t.Fatal("follow client should use default redirect behavior")
+	defaultFollowClient := newProxyHTTPClient(true)
+	if defaultFollowClient.CheckRedirect != nil {
+		t.Fatal("default follow client should use default redirect behavior")
 	}
 }
 
@@ -648,9 +648,9 @@ func TestHandleMediaProxyUsesPlaybackClientForStreaming(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	playbackCalls := 0
 	h := &Handler{
-		followClient: failRoundTripClient(t, "shared follow client should not handle playback media"),
-		imageClient:  failRoundTripClient(t, "image client should not handle playback media"),
-		playbackClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		defaultFollowClient: failRoundTripClient(t, "default follow client should not handle playback media"),
+		imageFollowClient:   failRoundTripClient(t, "image follow client should not handle playback media"),
+		playbackFollowClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			playbackCalls++
 			return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
 				"Accept-Ranges": []string{"bytes"},
@@ -679,9 +679,9 @@ func TestHandleMediaProxyUsesImageClientForImages(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	imageCalls := 0
 	h := &Handler{
-		followClient:   failRoundTripClient(t, "shared follow client should not handle image media"),
-		playbackClient: failRoundTripClient(t, "playback client should not handle image media"),
-		imageClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		defaultFollowClient:  failRoundTripClient(t, "default follow client should not handle image media"),
+		playbackFollowClient: failRoundTripClient(t, "playback follow client should not handle image media"),
+		imageFollowClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			imageCalls++
 			return bytesResponse(http.StatusOK, []byte("image"), http.Header{
 				"Content-Type": []string{"image/jpeg"},
@@ -708,10 +708,10 @@ func TestHandleMediaProxyUsesImageClientForImageRetries(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	imageCalls := 0
 	h := &Handler{
-		manualClient:   failRoundTripClient(t, "manual client should not handle image retry"),
-		followClient:   failRoundTripClient(t, "shared follow client should not handle image retry"),
-		playbackClient: failRoundTripClient(t, "playback client should not handle image retry"),
-		imageClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		noRedirectClient:     failRoundTripClient(t, "no-redirect client should not handle image retry"),
+		defaultFollowClient:  failRoundTripClient(t, "default follow client should not handle image retry"),
+		playbackFollowClient: failRoundTripClient(t, "playback follow client should not handle image retry"),
+		imageFollowClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			imageCalls++
 			if imageCalls == 1 {
 				return textResponse(http.StatusForbidden, "forbidden", nil), nil
@@ -846,7 +846,7 @@ func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
 		_ = store.Close()
 	})
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.manualClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 	})}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/System/Ping", nil).WithContext(ctx)
@@ -890,7 +890,7 @@ func TestHandleMediaProxyStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 				_ = store.Close()
 			})
 			h := New(config.Config{}, store, nil, logging.New("silent", false))
-			h.playbackClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			h.playbackFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if got := req.Header.Get("Range"); got != "bytes=1024-" {
 					t.Fatalf("Range = %q, want bytes=1024-", got)
 				}
@@ -939,7 +939,7 @@ func TestHandleMediaProxySkipsRangeFieldsForProgressAccessLog(t *testing.T) {
 		_ = store.Close()
 	})
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.playbackClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.playbackFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return textResponse(http.StatusNoContent, "", http.Header{
 			"Content-Range": []string{"bytes 0-0/1"},
 		}), nil
@@ -1002,7 +1002,7 @@ func TestHandleNodeStripsClientIPHeadersFromForwardedRequest(t *testing.T) {
 	})
 	var upstreamHeaders http.Header
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.manualClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		upstreamHeaders = cloneHeader(req.Header)
 		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 	})}
@@ -1034,7 +1034,7 @@ func TestHandleNodeStripsClientIPHeadersFromForwardedRequest(t *testing.T) {
 func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
 	var upstreamHeaders http.Header
 	h := &Handler{
-		playbackClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		playbackFollowClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			upstreamHeaders = cloneHeader(req.Header)
 			return bytesResponse(http.StatusForbidden, []byte("forbidden"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 		})},
@@ -1079,10 +1079,10 @@ func TestHandleSTRMBlocksPrivateDirectTarget(t *testing.T) {
 	})
 	rawCalls := 0
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.playbackClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.playbackFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return bytesResponse(http.StatusOK, []byte("http://127.0.0.1/private"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 	})}
-	h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		rawCalls++
 		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 	})}
@@ -1111,7 +1111,7 @@ func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
 	h := &Handler{
 		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
 		log: logging.New("silent", false),
-		rawClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rawDirectClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			rawCalls++
 			if req.URL.String() != "http://8.8.8.8/video.mkv?sign=abc" {
 				t.Fatalf("raw URL = %q, want direct URL without request query", req.URL.String())
@@ -1139,7 +1139,7 @@ func TestHandleDirectStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 	h := &Handler{
 		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
 		log: logging.New("silent", false),
-		rawClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rawDirectClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			if got := req.Header.Get("Range"); got != "bytes=4096-" {
 				t.Fatalf("Range = %q, want bytes=4096-", got)
 			}
@@ -1204,7 +1204,7 @@ func TestHandleDirectBlocksPrivateRedirect(t *testing.T) {
 	h := &Handler{
 		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
 		log: logging.New("silent", false),
-		rawClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rawDirectClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			rawCalls++
 			return textResponse(http.StatusFound, "", http.Header{"Location": []string{"http://127.0.0.1/private"}}), nil
 		})},
@@ -1276,7 +1276,7 @@ func TestFinishGeneralResponseBlocksPrivateCrossHostLocationDirect(t *testing.T)
 	})
 	rawCalls := 0
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		rawCalls++
 		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 	})}
@@ -1303,7 +1303,7 @@ func TestFinishGeneralResponseBlocksPrivateCrossHostLocationDirect(t *testing.T)
 func TestFinishGeneralResponseBlocksUntrustedCrossHostLocation(t *testing.T) {
 	rawCalls := 0
 	h := New(config.Config{}, nil, nil, logging.New("silent", false))
-	h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		rawCalls++
 		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 	})}
@@ -1347,7 +1347,7 @@ func TestServeHTTPRewritesSystemInfoAddressesWithTargetPathPrefix(t *testing.T) 
 
 	var upstreamRequestURL string
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.manualClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		upstreamRequestURL = req.URL.String()
 		return bytesResponse(http.StatusOK, []byte(`{"ServerName":"demo","Version":"4.9.3.0","WanAddress":"https://upstream.example","LocalAddress":"http://192.168.1.2:8096"}`), http.Header{
 			"Content-Type": []string{"application/json"},
@@ -1441,7 +1441,7 @@ func TestDirectExternalPlaybackUsesObservedUpstreamResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			upstreamCalls := 0
 			h := newProxyTestHandler(t, storage.Node{DirectExternal: true})
-			h.manualClient = noRedirectClient(func(req *http.Request) (*http.Response, error) {
+			h.noRedirectClient = noRedirectClient(func(req *http.Request) (*http.Response, error) {
 				upstreamCalls++
 				if req.URL.String() != tt.wantUpstreamURL {
 					t.Fatalf("upstream request URL = %q, want %q", req.URL.String(), tt.wantUpstreamURL)
@@ -1451,9 +1451,9 @@ func TestDirectExternalPlaybackUsesObservedUpstreamResponse(t *testing.T) {
 				}
 				return tt.upstream, nil
 			})
-			h.followClient = failRoundTripClient(t, "follow client should not be used for DirectExternal playback probe")
-			h.playbackClient = failRoundTripClient(t, "playback client should not be used for DirectExternal playback probe")
-			h.rawClient = failRoundTripClient(t, "raw client should not be used for DirectExternal playback response")
+			h.defaultFollowClient = failRoundTripClient(t, "default follow client should not be used for DirectExternal playback probe")
+			h.playbackFollowClient = failRoundTripClient(t, "playback follow client should not be used for DirectExternal playback probe")
+			h.rawDirectClient = failRoundTripClient(t, "raw direct client should not be used for DirectExternal playback response")
 
 			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil)
 			if tt.rangeHeader != "" {
@@ -1487,7 +1487,7 @@ func TestDirectExternalPlaybackUsesObservedUpstreamResponse(t *testing.T) {
 
 func TestSmartSTRMUsesPlaybackProxyWithoutWhitelist(t *testing.T) {
 	h := newProxyTestHandler(t, storage.Node{})
-	h.playbackClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.playbackFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.String() != "https://upstream.example/emby/smartstrm?item_id=1&media_id=2" {
 			t.Fatalf("upstream request URL = %q", req.URL.String())
 		}
@@ -1496,7 +1496,7 @@ func TestSmartSTRMUsesPlaybackProxyWithoutWhitelist(t *testing.T) {
 			"Content-Type":  []string{"video/mp4"},
 		}), nil
 	})}
-	h.rawClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		t.Fatalf("raw client should not be used for /smartstrm playback proxy")
 		return nil, nil
 	})}
@@ -1515,7 +1515,7 @@ func TestSmartSTRMUsesPlaybackProxyWithoutWhitelist(t *testing.T) {
 
 func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
 	h := newProxyTestHandler(t, storage.Node{})
-	h.playbackClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.playbackFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
 			"Accept-Ranges":  []string{"bytes"},
 			"Content-Length": []string{"4096"},
@@ -1560,7 +1560,7 @@ func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
 
 func TestServeHTTPDoesNotLogImageTrafficAsPlayback(t *testing.T) {
 	h := newProxyTestHandler(t, storage.Node{})
-	h.imageClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return bytesResponse(http.StatusOK, []byte("image"), http.Header{"Content-Type": []string{"image/jpeg"}}), nil
 	})}
 
@@ -1627,7 +1627,7 @@ func TestHandleMediaProxyDoesNotCacheImageErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
-	h.imageClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return bytesResponse(http.StatusTooManyRequests, []byte("rate limited"), http.Header{
 			"Cache-Control": []string{"public, max-age=60"},
 			"Content-Type":  []string{"text/html; charset=UTF-8"},
@@ -1659,7 +1659,7 @@ func TestHandleMediaProxySkipsImageCacheWhenDisabled(t *testing.T) {
 	})
 	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
 	upstreamCalls := 0
-	h.imageClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		upstreamCalls++
 		return bytesResponse(http.StatusOK, []byte("image"), http.Header{"Content-Type": []string{"image/jpeg"}}), nil
 	})}
@@ -1707,7 +1707,7 @@ func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 	}
 	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
 	upstreamCalls := 0
-	h.imageClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		upstreamCalls++
 		if upstreamCalls > 1 {
 			return nil, errors.New("unexpected upstream request")
@@ -1788,7 +1788,7 @@ func TestHandleMediaProxyCoalescesConcurrentImageCacheMisses(t *testing.T) {
 	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
 	var upstreamMu sync.Mutex
 	upstreamCalls := 0
-	h.imageClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		upstreamMu.Lock()
 		upstreamCalls++
 		upstreamMu.Unlock()

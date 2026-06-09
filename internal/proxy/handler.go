@@ -24,24 +24,24 @@ import (
 )
 
 type Handler struct {
-	cfg              config.Config
-	store            *storage.Store
-	ids              *identity.Manager
-	log              *logging.Logger
-	lineBan          *ttlMap
-	progressThrottle *ttlMap
-	playbackDedup    *ttlMap
-	imageLimiterMu   sync.Mutex
-	imageLimiter     *imageRequestLimiter
-	imageCacheMu     sync.Mutex
-	imageCache       *imageDiskCache
-	activeMu         sync.Mutex
-	activeTarget     map[string]string
-	manualClient     *http.Client
-	followClient     *http.Client
-	playbackClient   *http.Client
-	imageClient      *http.Client
-	rawClient        *http.Client
+	cfg                  config.Config
+	store                *storage.Store
+	ids                  *identity.Manager
+	log                  *logging.Logger
+	lineBan              *ttlMap
+	progressThrottle     *ttlMap
+	playbackDedup        *ttlMap
+	imageLimiterMu       sync.Mutex
+	imageLimiter         *imageRequestLimiter
+	imageCacheMu         sync.Mutex
+	imageCache           *imageDiskCache
+	activeMu             sync.Mutex
+	activeTarget         map[string]string
+	noRedirectClient     *http.Client
+	defaultFollowClient  *http.Client
+	playbackFollowClient *http.Client
+	imageFollowClient    *http.Client
+	rawDirectClient      *http.Client
 }
 
 type parsedRoute struct {
@@ -65,21 +65,21 @@ func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *lo
 		imageLimiter = newImageRequestLimiter(defaults.ImageProxyMaxConcurrent, time.Duration(defaults.ImageProxyRequestIntervalMS)*time.Millisecond)
 	}
 	return &Handler{
-		cfg:              cfg,
-		store:            store,
-		ids:              ids,
-		log:              log,
-		lineBan:          newTTLMap(),
-		progressThrottle: newTTLMap(),
-		playbackDedup:    newTTLMap(),
-		imageLimiter:     imageLimiter,
-		imageCache:       newImageCacheFromSystemConfig(cfg, defaults),
-		activeTarget:     map[string]string{},
-		manualClient:     newProxyHTTPClient(false),
-		followClient:     newProxyHTTPClient(true),
-		playbackClient:   newProxyHTTPClient(true),
-		imageClient:      newProxyHTTPClient(true),
-		rawClient:        newRawHTTPClient(),
+		cfg:                  cfg,
+		store:                store,
+		ids:                  ids,
+		log:                  log,
+		lineBan:              newTTLMap(),
+		progressThrottle:     newTTLMap(),
+		playbackDedup:        newTTLMap(),
+		imageLimiter:         imageLimiter,
+		imageCache:           newImageCacheFromSystemConfig(cfg, defaults),
+		activeTarget:         map[string]string{},
+		noRedirectClient:     newProxyHTTPClient(false),
+		defaultFollowClient:  newProxyHTTPClient(true),
+		playbackFollowClient: newProxyHTTPClient(true),
+		imageFollowClient:    newProxyHTTPClient(true),
+		rawDirectClient:      newRawHTTPClient(),
 	}
 }
 
@@ -522,7 +522,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		return h.handleMediaProxy(ctx, r, node, parsed, finalURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-proxy", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	res, err := h.fetchTarget(ctx, nil, finalURL, r.Method, headers, body, false)
+	res, err := h.doFetch(ctx, h.noRedirectClient, finalURL, r.Method, headers, body)
 	if err != nil {
 		return nil, err
 	}
@@ -536,7 +536,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		h2.Set("Referer", reqBase+"/")
 		currentHeaders = h2
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-retry-compat-origin", "targetUrl": finalURL.String(), "outboundHeaders": h2})
-		res, err = h.fetchTarget(ctx, nil, finalURL, r.Method, h2, body, false)
+		res, err = h.doFetch(ctx, h.noRedirectClient, finalURL, r.Method, h2, body)
 		if err != nil {
 			return nil, err
 		}
@@ -822,20 +822,6 @@ func bodyCopyIssueSide(copyErr, ctxErr error, reader *bodyCopyReader, writer *bo
 		return "copy"
 	}
 	return "context"
-}
-
-func (h *Handler) fetchTarget(ctx context.Context, client *http.Client, target *url.URL, method string, headers http.Header, body []byte, follow bool) (*http.Response, error) {
-	selectedClient := h.manualClient
-	if follow {
-		selectedClient = client
-		if selectedClient == nil {
-			selectedClient = h.followClient
-		}
-	}
-	if selectedClient == nil {
-		selectedClient = newProxyHTTPClient(follow)
-	}
-	return h.doFetch(ctx, selectedClient, target, method, headers, body)
 }
 
 func (h *Handler) doFetch(ctx context.Context, client *http.Client, target *url.URL, method string, headers http.Header, body []byte) (*http.Response, error) {

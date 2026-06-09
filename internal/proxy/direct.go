@@ -29,7 +29,7 @@ func (h *Handler) handleProtectedDirect(ctx context.Context, r *http.Request, ra
 }
 
 func (h *Handler) protectedDirectClient(node storage.Node, env config.ProxyEnv) *http.Client {
-	base := h.rawClient
+	base := h.rawDirectClient
 	if base == nil {
 		base = newRawHTTPClient()
 	}
@@ -59,7 +59,7 @@ func (h *Handler) directURLAllowed(ctx context.Context, node storage.Node, u *ur
 
 func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, client *http.Client, protectDirect bool, inheritRequestQuery bool) (*http.Response, error) {
 	if client == nil {
-		client = h.followClient
+		client = h.defaultFollowClient
 	}
 	if client == nil {
 		client = newProxyHTTPClient(true)

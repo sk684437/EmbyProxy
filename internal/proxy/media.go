@@ -26,7 +26,7 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 	headers.Del("If-Range")
 	applyIdentity(h.ids, headers, node, true)
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-source", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	res, err := h.fetchTarget(ctx, h.playbackClient, finalURL, http.MethodGet, headers, nil, true)
+	res, err := h.doFetch(ctx, h.playbackFollowClient, finalURL, http.MethodGet, headers, nil)
 	if err != nil {
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-source-failed", "targetUrl": finalURL.String(), "outboundHeaders": headers})
 		return nil, err
@@ -96,7 +96,7 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 				hh.Del("Referer")
 			}
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "auth-" + mode, "targetUrl": u.String(), "outboundHeaders": hh})
-			res, err := h.fetchTarget(ctx, nil, u, r.Method, hh, body, false)
+			res, err := h.doFetch(ctx, h.noRedirectClient, u, r.Method, hh, body)
 			if err != nil {
 				continue
 			}
@@ -112,7 +112,7 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 
 func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, body []byte, env config.ProxyEnv, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI bool, reqOrigin, clientIP string) (*http.Response, error) {
 	isStreamingMedia := isPlaybackAPI || streamingRE.MatchString(finalURL.Path)
-	directExternalPlayback := node.DirectExternal && isPlaybackAPI && !isAdditionalPartsAPI && (r.Method == http.MethodGet || r.Method == http.MethodHead)
+	probeDirectExternalRedirect := node.DirectExternal && isPlaybackAPI && !isAdditionalPartsAPI && (r.Method == http.MethodGet || r.Method == http.MethodHead)
 	hClean := buildCleanProxyHeaders(h.ids, r.Header, finalURL, node, env, isStreamingMedia)
 	for _, key := range []string{"X-Emby-Authorization", "X-Emby-Token", "X-MediaBrowser-Token", "Authorization", "Cookie"} {
 		if value := r.Header.Get(key); value != "" {
@@ -184,17 +184,22 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": finalURL.String(), "outboundHeaders": hClean})
 	var client *http.Client
-	if isImageAPI {
-		client = h.imageClient
-	} else if isStreamingMedia {
-		client = h.playbackClient
+	switch {
+	case probeDirectExternalRedirect:
+		client = h.noRedirectClient
+	case isImageAPI:
+		client = h.imageFollowClient
+	case isStreamingMedia:
+		client = h.playbackFollowClient
+	default:
+		client = h.defaultFollowClient
 	}
-	res, err := h.fetchTarget(ctx, client, finalURL, r.Method, hClean, body, !directExternalPlayback)
+	res, err := h.doFetch(ctx, client, finalURL, r.Method, hClean, body)
 	if err != nil {
 		finishImageCacheFill()
 		return nil, err
 	}
-	if directExternalPlayback && isRedirectStatus(res.StatusCode) && res.Header.Get("Location") != "" {
+	if probeDirectExternalRedirect && isRedirectStatus(res.StatusCode) && res.Header.Get("Location") != "" {
 		base := finalURL
 		if parsedBase, err := url.Parse(node.Target); err == nil && parsedBase.Host != "" {
 			base = parsedBase
@@ -226,7 +231,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		hImg.Set("Accept-Encoding", "identity")
 		applyIdentity(h.ids, hImg, node, true)
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-clean", "targetUrl": finalURL.String(), "outboundHeaders": hImg})
-		res, err = h.fetchTarget(ctx, h.imageClient, finalURL, r.Method, hImg, nil, true)
+		res, err = h.doFetch(ctx, h.imageFollowClient, finalURL, r.Method, hImg, nil)
 		if err != nil {
 			finishImageCacheFill()
 			return nil, err
@@ -237,7 +242,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			hImg2.Set("Referer", originOf(finalURL)+"/")
 			hImg2.Set("Origin", originOf(finalURL))
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-origin", "targetUrl": finalURL.String(), "outboundHeaders": hImg2})
-			res, err = h.fetchTarget(ctx, h.imageClient, finalURL, r.Method, hImg2, nil, true)
+			res, err = h.doFetch(ctx, h.imageFollowClient, finalURL, r.Method, hImg2, nil)
 			if err != nil {
 				finishImageCacheFill()
 				return nil, err
@@ -315,7 +320,7 @@ func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node sto
 		applyEmosHeaders(h3, env)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-retry-clean", "targetUrl": finalURL.String(), "outboundHeaders": h3})
-	res, err := h.fetchTarget(ctx, nil, finalURL, r.Method, h3, body, false)
+	res, err := h.doFetch(ctx, h.noRedirectClient, finalURL, r.Method, h3, body)
 	if err != nil || res.StatusCode != http.StatusForbidden {
 		return res, h3, err
 	}
@@ -335,7 +340,7 @@ func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node sto
 			applyEmosHeaders(h4, env)
 		}
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": finalURL.String(), "outboundHeaders": h4})
-		res, err = h.fetchTarget(ctx, nil, finalURL, r.Method, h4, body, false)
+		res, err = h.doFetch(ctx, h.noRedirectClient, finalURL, r.Method, h4, body)
 		if err != nil || res.StatusCode != http.StatusForbidden {
 			return res, h4, err
 		}
