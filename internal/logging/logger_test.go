@@ -21,6 +21,18 @@ func TestRedactTextRedactsEmbeddedURLQuerySecrets(t *testing.T) {
 	}
 }
 
+func TestRedactTextRedactsEmbeddedURLAfterParenthesesInPath(t *testing.T) {
+	input := `Get "https://cdn.example/video/Devote%20100%20Days%20(2025)%5Btmdb=306641%5D/S01E03.mkv?auth_key=secret-auth-key": net/http: TLS handshake timeout`
+
+	got := RedactText(input)
+	if strings.Contains(got, "secret-auth-key") {
+		t.Fatalf("RedactText() leaked auth_key value after parentheses in path: %q", got)
+	}
+	if !strings.Contains(got, "auth_key=<redacted>") {
+		t.Fatalf("RedactText() = %q, want redacted auth_key", got)
+	}
+}
+
 func TestFormatValueRedactsEmbeddedURLInErrorMeta(t *testing.T) {
 	got := formatValue(`Get "https://emby.example/emby/Items/1?X-Emby-Token=secret-token&fields=ShareLevel": context canceled`)
 
