@@ -111,7 +111,7 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 }
 
 func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, body []byte, env config.ProxyEnv, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI bool, reqOrigin, clientIP string) (*http.Response, error) {
-	isStreamingMedia := isPlaybackAPI || streamingRE.MatchString(finalURL.Path)
+	isStreamingMedia := isPlaybackStreamRequest(r, finalURL)
 	probeDirectExternalRedirect := node.DirectExternal && isPlaybackAPI && !isAdditionalPartsAPI && (r.Method == http.MethodGet || r.Method == http.MethodHead)
 	hClean := buildCleanProxyHeaders(h.ids, r.Header, finalURL, node, env, isStreamingMedia)
 	for _, key := range []string{"X-Emby-Authorization", "X-Emby-Token", "X-MediaBrowser-Token", "Authorization", "Cookie"} {
@@ -285,6 +285,32 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		markStreamResumeCandidate(res, "playback")
 	}
 	return res, nil
+}
+
+func isPlaybackStreamRequest(r *http.Request, finalURL *url.URL) bool {
+	if r == nil || finalURL == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		return false
+	}
+	path := strings.ToLower(finalURL.Path)
+	if strings.Contains(path, "/sessions/playing") || strings.Contains(path, "/playbackinfo") || strings.Contains(path, "/additionalparts") {
+		return false
+	}
+	if streamingRE.MatchString(path) || playbackMediaExtRE.MatchString(path) {
+		return true
+	}
+	if strings.Contains(path, "/smartstrm") || strings.Contains(path, "/hls/") || strings.Contains(path, "/hls1/") || strings.Contains(path, "/dash/") {
+		return true
+	}
+	if strings.Contains(path, "/items/") && (strings.Contains(path, "/download") || strings.Contains(path, "/stream") || strings.Contains(path, "/file")) {
+		return true
+	}
+	if strings.Contains(path, "/videos/") {
+		return r.Header.Get("Range") != "" || strings.Contains(path, "/stream") || strings.Contains(path, "/original")
+	}
+	if strings.Contains(path, "/audio/") {
+		return r.Header.Get("Range") != "" || strings.Contains(path, "/stream") || strings.Contains(path, "/universal") || strings.Contains(path, "/original")
+	}
+	return false
 }
 
 func setStreamingRangeAccessLogFields(ctx context.Context, r *http.Request, finalURL *url.URL, headers http.Header, isStreamingMedia bool) {

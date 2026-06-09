@@ -675,6 +675,42 @@ func TestHandleMediaProxyUsesPlaybackClientForStreaming(t *testing.T) {
 	}
 }
 
+func TestIsPlaybackStreamRequestClassifiesPlaybackTraffic(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		range_ string
+		want   bool
+	}{
+		{name: "progress", method: http.MethodPost, path: "/emby/Sessions/Playing/Progress"},
+		{name: "playback info", method: http.MethodGet, path: "/emby/Items/1/PlaybackInfo"},
+		{name: "additional parts", method: http.MethodGet, path: "/emby/Videos/1/AdditionalParts"},
+		{name: "original media", method: http.MethodGet, path: "/emby/Videos/1/original.mkv", want: true},
+		{name: "stream endpoint", method: http.MethodGet, path: "/emby/Videos/1/stream", want: true},
+		{name: "dynamic hls", method: http.MethodGet, path: "/emby/Videos/1/hls1/main/0.ts", want: true},
+		{name: "universal audio", method: http.MethodGet, path: "/emby/Audio/1/universal", want: true},
+		{name: "ranged video path", method: http.MethodGet, path: "/emby/Videos/1/file", range_: "bytes=0-", want: true},
+		{name: "item download", method: http.MethodGet, path: "/emby/Items/1/Download", want: true},
+		{name: "media post", method: http.MethodPost, path: "/emby/Videos/1/original.mkv"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "https://proxy.example"+tt.path, nil)
+			if tt.range_ != "" {
+				req.Header.Set("Range", tt.range_)
+			}
+			finalURL, err := url.Parse("https://upstream.example" + tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := isPlaybackStreamRequest(req, finalURL); got != tt.want {
+				t.Fatalf("isPlaybackStreamRequest() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHandleMediaProxyUsesImageClientForImages(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	imageCalls := 0
@@ -939,11 +975,14 @@ func TestHandleMediaProxySkipsRangeFieldsForProgressAccessLog(t *testing.T) {
 		_ = store.Close()
 	})
 	h := New(config.Config{}, store, nil, logging.New("silent", false))
-	h.playbackFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	defaultCalls := 0
+	h.defaultFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		defaultCalls++
 		return textResponse(http.StatusNoContent, "", http.Header{
 			"Content-Range": []string{"bytes 0-0/1"},
 		}), nil
 	})}
+	h.playbackFollowClient = failRoundTripClient(t, "playback follow client should not handle progress requests")
 	req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/emby/Sessions/Playing/Progress", nil).WithContext(ctx)
 	req.Header.Set("Range", "bytes=0-")
 	finalURL, err := url.Parse("https://upstream.example/emby/Sessions/Playing/Progress")
@@ -956,6 +995,9 @@ func TestHandleMediaProxySkipsRangeFieldsForProgressAccessLog(t *testing.T) {
 		t.Fatalf("handleMediaProxy() error = %v", err)
 	}
 	_ = res.Body.Close()
+	if defaultCalls != 1 {
+		t.Fatalf("default upstream calls = %d, want 1", defaultCalls)
+	}
 
 	fields := AccessLogFields(ctx)
 	if _, ok := fields["range"]; ok {
