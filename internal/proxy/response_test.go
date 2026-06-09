@@ -198,9 +198,10 @@ func (b failingReadBody) Close() error {
 }
 
 type partialFailBody struct {
-	data []byte
-	err  error
-	done bool
+	data   []byte
+	err    error
+	done   bool
+	closed bool
 }
 
 func (b *partialFailBody) Read(p []byte) (int, error) {
@@ -213,6 +214,7 @@ func (b *partialFailBody) Read(p []byte) (int, error) {
 }
 
 func (b *partialFailBody) Close() error {
+	b.closed = true
 	return nil
 }
 
@@ -237,6 +239,66 @@ func (w *failingWriteResponseWriter) Write([]byte) (int, error) {
 	return 0, w.err
 }
 
+func TestStreamResumeValidatorRequiresStrongValidator(t *testing.T) {
+	lastModified := "Tue, 09 Jun 2026 10:00:00 GMT"
+	laterDate := "Tue, 09 Jun 2026 10:00:01 GMT"
+	sameSecondDate := "Tue, 09 Jun 2026 10:00:00 GMT"
+	for _, tt := range []struct {
+		name        string
+		header      http.Header
+		wantOK      bool
+		wantIfRange string
+	}{
+		{
+			name: "strong etag wins without date",
+			header: http.Header{
+				"ETag":          []string{`"media-v1"`},
+				"Last-Modified": []string{lastModified},
+			},
+			wantOK:      true,
+			wantIfRange: `"media-v1"`,
+		},
+		{
+			name: "weak etag disables date fallback",
+			header: http.Header{
+				"ETag":          []string{`W/"media-v1"`},
+				"Last-Modified": []string{lastModified},
+				"Date":          []string{laterDate},
+			},
+		},
+		{
+			name: "last modified needs date",
+			header: http.Header{
+				"Last-Modified": []string{lastModified},
+			},
+		},
+		{
+			name: "last modified same second is not strong enough",
+			header: http.Header{
+				"Last-Modified": []string{lastModified},
+				"Date":          []string{sameSecondDate},
+			},
+		},
+		{
+			name: "invalid last modified is rejected",
+			header: http.Header{
+				"Last-Modified": []string{"not-a-date"},
+				"Date":          []string{laterDate},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			validator, ok := newStreamResumeValidator(tt.header)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v; validator=%+v", ok, tt.wantOK, validator)
+			}
+			if ok && validator.ifRange != tt.wantIfRange {
+				t.Fatalf("If-Range = %q, want %q", validator.ifRange, tt.wantIfRange)
+			}
+		})
+	}
+}
+
 func TestSendResponseResumesInterruptedPlaybackStream(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/node/secret/emby/videos/1/original.mkv", nil).WithContext(ctx)
@@ -244,11 +306,11 @@ func TestSendResponseResumesInterruptedPlaybackStream(t *testing.T) {
 	upstreamErr := errors.New("upstream reset")
 	resumeRanges := []string{}
 	resumeIfRanges := []string{}
+	body := &partialFailBody{data: []byte("hello "), err: upstreamErr}
 	client := &http.Client{Transport: roundTripFunc(func(resumeReq *http.Request) (*http.Response, error) {
 		resumeRanges = append(resumeRanges, resumeReq.Header.Get("Range"))
 		resumeIfRanges = append(resumeIfRanges, resumeReq.Header.Get("If-Range"))
 		out := bytesResponse(http.StatusPartialContent, []byte("world"), http.Header{
-			"Accept-Ranges":  []string{"bytes"},
 			"Content-Length": []string{"5"},
 			"Content-Range":  []string{"bytes 6-10/11"},
 			"Content-Type":   []string{"video/x-matroska"},
@@ -270,7 +332,7 @@ func TestSendResponseResumesInterruptedPlaybackStream(t *testing.T) {
 			"Content-Type":   []string{"video/x-matroska"},
 			"ETag":           []string{`"media-v1"`},
 		},
-		Body:    &partialFailBody{data: []byte("hello "), err: upstreamErr},
+		Body:    body,
 		Request: upstreamReq,
 	}
 	attachUpstreamClient(res, client)
@@ -288,6 +350,9 @@ func TestSendResponseResumesInterruptedPlaybackStream(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != "hello world" {
 		t.Fatalf("body = %q, want hello world; ranges=%v ifRanges=%v fields=%v", got, resumeRanges, resumeIfRanges, AccessLogFields(ctx))
+	}
+	if !body.closed {
+		t.Fatal("original response body was not closed after resume")
 	}
 	if got := rec.Header().Get("Content-Length"); got != "11" {
 		t.Fatalf("Content-Length = %q, want 11", got)

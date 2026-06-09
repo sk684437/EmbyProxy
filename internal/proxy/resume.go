@@ -284,9 +284,6 @@ func validateStreamResumeResponse(resp *http.Response, plan streamResumePlan, ne
 	if resp.Uncompressed || strings.TrimSpace(resp.Header.Get("Content-Encoding")) != "" {
 		return errors.New("stream resume response was decoded")
 	}
-	if !streamResumeAcceptsBytes(resp.Header) {
-		return errors.New("stream resume response does not support byte ranges")
-	}
 	if streamResumeMultipart(resp.Header) {
 		return errors.New("stream resume response returned multipart ranges")
 	}
@@ -309,11 +306,18 @@ func validateStreamResumeResponse(resp *http.Response, plan streamResumePlan, ne
 func newStreamResumeValidator(header http.Header) (streamResumeValidator, bool) {
 	etag := strings.TrimSpace(streamResumeHeader(header, "ETag"))
 	lastModified := strings.TrimSpace(streamResumeHeader(header, "Last-Modified"))
-	if etag != "" && !strings.HasPrefix(strings.ToUpper(etag), "W/") {
+	if etag != "" {
+		if strings.HasPrefix(strings.ToUpper(etag), "W/") {
+			return streamResumeValidator{}, false
+		}
 		return streamResumeValidator{etag: etag, ifRange: etag}, true
 	}
 	if lastModified != "" {
-		return streamResumeValidator{lastModified: lastModified, ifRange: lastModified}, true
+		modifiedAt, errModified := http.ParseTime(lastModified)
+		date, errDate := http.ParseTime(strings.TrimSpace(streamResumeHeader(header, "Date")))
+		if errModified == nil && errDate == nil && !date.Before(modifiedAt.Add(time.Second)) {
+			return streamResumeValidator{lastModified: lastModified, ifRange: lastModified}, true
+		}
 	}
 	return streamResumeValidator{}, false
 }
