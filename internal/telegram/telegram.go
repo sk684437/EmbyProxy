@@ -323,11 +323,25 @@ func formatBytes(value int64) string {
 	if value <= 0 {
 		return "0B"
 	}
-	gb := float64(value) / 1e9
-	if gb >= 1 {
-		return fmt.Sprintf("%.2f GB", gb)
+	units := []struct {
+		name   string
+		size   float64
+		digits int
+	}{
+		{name: "PB", size: 1e15, digits: 2},
+		{name: "TB", size: 1e12, digits: 2},
+		{name: "GB", size: 1e9, digits: 2},
+		{name: "MB", size: 1e6, digits: 1},
 	}
-	return fmt.Sprintf("%.1f MB", float64(value)/1e6)
+	for _, unit := range units {
+		if float64(value) >= unit.size {
+			return fmt.Sprintf("%.*f %s", unit.digits, float64(value)/unit.size, unit.name)
+		}
+	}
+	if value >= 1e3 {
+		return fmt.Sprintf("%.1f KB", float64(value)/1e3)
+	}
+	return fmt.Sprintf("%dB", value)
 }
 
 func formatAverageBytes(bytes, count int64) string {

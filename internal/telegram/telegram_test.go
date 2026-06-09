@@ -73,3 +73,22 @@ func TestReportFormatHelpersHandleEmptyValues(t *testing.T) {
 		t.Fatalf("formatSignedBytes() = %q", got)
 	}
 }
+
+func TestFormatBytesScalesBeyondGB(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value int64
+		want  string
+	}{
+		{name: "bytes", value: 999, want: "999B"},
+		{name: "kilobytes", value: 1_500, want: "1.5 KB"},
+		{name: "terabytes", value: 1_500_000_000_000, want: "1.50 TB"},
+		{name: "petabytes", value: 1_500_000_000_000_000, want: "1.50 PB"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatBytes(tc.value); got != tc.want {
+				t.Fatalf("formatBytes() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
