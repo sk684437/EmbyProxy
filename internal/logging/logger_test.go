@@ -73,6 +73,7 @@ func TestFormatMetaUsesSemanticFieldOrder(t *testing.T) {
 	got := formatMeta(map[string]any{
 		"bodyCopyError":   "broken pipe",
 		"target":          "https://cdn.example",
+		"upstreamPool":    "playbackStream",
 		"event":           "requestFinished",
 		"totalMs":         24,
 		"range":           "bytes=1024-",
@@ -95,6 +96,7 @@ func TestFormatMetaUsesSemanticFieldOrder(t *testing.T) {
 		"ip=127.0.0.1",
 		"nodeTarget=https://upstream.example",
 		"target=https://cdn.example",
+		"upstreamPool=playbackStream",
 		"range=\"bytes=1024-\"",
 		"contentRange=\"bytes 1024-2047/4096\"",
 		" bytes=1024 ",

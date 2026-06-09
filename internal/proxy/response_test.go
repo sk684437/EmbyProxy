@@ -28,6 +28,12 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+type okRoundTripper struct{}
+
+func (okRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return textResponse(http.StatusOK, "ok", nil), nil
+}
+
 func newProxyTestHandler(t *testing.T, node storage.Node) *Handler {
 	t.Helper()
 	if node.Name == "" {
@@ -660,6 +666,57 @@ func TestNewHandlerSeparatesPlaybackConnectionPools(t *testing.T) {
 	}
 	if h.playbackActionClient.CheckRedirect != nil || h.playbackStreamClient.CheckRedirect != nil {
 		t.Fatal("playback action and stream clients should follow redirects")
+	}
+}
+
+func TestDoFetchStoresUpstreamPoolAccessLogField(t *testing.T) {
+	okClient := func() *http.Client {
+		return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return textResponse(http.StatusOK, "ok", nil), nil
+		})}
+	}
+	h := &Handler{
+		noRedirectClient:          okClient(),
+		defaultFollowClient:       okClient(),
+		playbackActionClient:      okClient(),
+		playbackStreamClient:      okClient(),
+		playbackStreamProbeClient: okClient(),
+		imageFollowClient:         okClient(),
+		rawDirectClient:           &http.Client{Transport: okRoundTripper{}},
+	}
+	protectedRawClient := &http.Client{Transport: h.rawDirectClient.Transport}
+	undefinedClient := okClient()
+	target, err := url.Parse("https://upstream.example/emby/System/Ping")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		client *http.Client
+		want   string
+	}{
+		{name: "no redirect", client: h.noRedirectClient, want: upstreamPoolNoRedirect},
+		{name: "default follow", client: h.defaultFollowClient, want: upstreamPoolDefaultFollow},
+		{name: "playback action", client: h.playbackActionClient, want: upstreamPoolPlaybackAction},
+		{name: "playback stream", client: h.playbackStreamClient, want: upstreamPoolPlaybackStream},
+		{name: "playback stream probe", client: h.playbackStreamProbeClient, want: upstreamPoolPlaybackStreamProbe},
+		{name: "image follow", client: h.imageFollowClient, want: upstreamPoolImageFollow},
+		{name: "raw direct", client: h.rawDirectClient, want: upstreamPoolRawDirect},
+		{name: "protected raw direct", client: protectedRawClient, want: upstreamPoolRawDirect},
+		{name: "undefined", client: undefinedClient, want: upstreamPoolUndefined},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithAccessLogFields(context.Background())
+			res, err := h.doFetch(ctx, tt.client, target, http.MethodGet, http.Header{}, nil)
+			if err != nil {
+				t.Fatalf("doFetch() error = %v", err)
+			}
+			_ = res.Body.Close()
+			if got := AccessLogFields(ctx)[accessLogFieldUpstreamPool]; got != tt.want {
+				t.Fatalf("upstreamPool = %v, want %s", got, tt.want)
+			}
+		})
 	}
 }
 

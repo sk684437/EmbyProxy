@@ -51,6 +51,7 @@ var metaFieldOrder = map[string]int{
 	"node":                 60,
 	"nodeTarget":           70,
 	"target":               80,
+	"upstreamPool":         85,
 	"location":             90,
 	"range":                100,
 	"contentRange":         110,

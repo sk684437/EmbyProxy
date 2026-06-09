@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,19 @@ type Handler struct {
 	imageFollowClient         *http.Client
 	rawDirectClient           *http.Client
 }
+
+const (
+	accessLogFieldUpstreamPool = "upstreamPool"
+
+	upstreamPoolNoRedirect          = "noRedirect"
+	upstreamPoolDefaultFollow       = "defaultFollow"
+	upstreamPoolPlaybackAction      = "playbackAction"
+	upstreamPoolPlaybackStream      = "playbackStream"
+	upstreamPoolPlaybackStreamProbe = "playbackStreamProbe"
+	upstreamPoolImageFollow         = "imageFollow"
+	upstreamPoolRawDirect           = "rawDirect"
+	upstreamPoolUndefined           = "undefined"
+)
 
 type parsedRoute struct {
 	URL      *url.URL
@@ -346,7 +360,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 		res, err := h.handleOneTarget(ctx, r, nodeTry, parsed, body, env)
 		if err != nil {
 			h.lineBan.Set(banKey, 1, time.Minute)
-			h.log.Warn("proxy", "target failed", map[string]any{"event": "targetFailed", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()})
+			h.log.Warn("proxy", "target failed", withAccessLogFields(ctx, map[string]any{"event": "targetFailed", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()}))
 			lastErr = err
 			h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Bad Gateway", nil))
 			continue
@@ -365,7 +379,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)
-		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, map[string]any{"event": "upstreamRetryableStatus", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "targetAttemptMs": time.Since(started).Milliseconds()}))
+		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, withAccessLogFields(ctx, map[string]any{"event": "upstreamRetryableStatus", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "targetAttemptMs": time.Since(started).Milliseconds()})))
 		h.setLastResponse(&lastRes, res)
 	}
 	if tried == 0 {
@@ -838,6 +852,9 @@ func bodyCopyIssueSide(copyErr, ctxErr error, reader *bodyCopyReader, writer *bo
 }
 
 func (h *Handler) doFetch(ctx context.Context, client *http.Client, target *url.URL, method string, headers http.Header, body []byte) (*http.Response, error) {
+	if pool := h.upstreamPoolName(client); pool != "" {
+		SetAccessLogField(ctx, accessLogFieldUpstreamPool, pool)
+	}
 	var reader io.Reader
 	if method != http.MethodGet && method != http.MethodHead && body != nil {
 		reader = bytes.NewReader(body)
@@ -854,6 +871,44 @@ func (h *Handler) doFetch(ctx context.Context, client *http.Client, target *url.
 	}
 	attachUpstreamClient(res, client)
 	return res, nil
+}
+
+func (h *Handler) upstreamPoolName(client *http.Client) string {
+	if client == nil {
+		return ""
+	}
+	switch client {
+	case h.noRedirectClient:
+		return upstreamPoolNoRedirect
+	case h.defaultFollowClient:
+		return upstreamPoolDefaultFollow
+	case h.playbackActionClient:
+		return upstreamPoolPlaybackAction
+	case h.playbackStreamClient:
+		return upstreamPoolPlaybackStream
+	case h.playbackStreamProbeClient:
+		return upstreamPoolPlaybackStreamProbe
+	case h.imageFollowClient:
+		return upstreamPoolImageFollow
+	case h.rawDirectClient:
+		return upstreamPoolRawDirect
+	}
+	if h.rawDirectClient != nil && sameRoundTripper(client.Transport, h.rawDirectClient.Transport) {
+		return upstreamPoolRawDirect
+	}
+	return upstreamPoolUndefined
+}
+
+func sameRoundTripper(a, b http.RoundTripper) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if !av.IsValid() || !bv.IsValid() || av.Type() != bv.Type() || !av.Comparable() {
+		return false
+	}
+	return av.Interface() == bv.Interface()
 }
 
 func textResponse(status int, body string, headers http.Header) *http.Response {

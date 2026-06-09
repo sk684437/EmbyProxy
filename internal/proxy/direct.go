@@ -106,7 +106,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 				capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-forbidden-redirect", "targetUrl": targetURL})
 				return localForbiddenResponse("direct", targetURL), nil
 			}
-			h.log.Warn("direct", "target failed", map[string]any{"event": "targetFailed", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()})
+			h.log.Warn("direct", "target failed", withAccessLogFields(ctx, map[string]any{"event": "targetFailed", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()}))
 			lastErr = err
 			continue
 		}
@@ -212,7 +212,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-completed", "targetUrl": targetURL, "outboundHeaders": currentHeaders})
 		responseReadyMs := time.Since(started).Milliseconds()
 		formattedTarget := logging.FormatTarget(targetURL)
-		h.log.Info("direct", "response ready", map[string]any{"event": "upstreamReady", "id": requestID, "node": nodeName, "target": formattedTarget, "status": res.StatusCode, "responseReadyMs": responseReadyMs})
+		h.log.Info("direct", "response ready", withAccessLogFields(ctx, map[string]any{"event": "upstreamReady", "id": requestID, "node": nodeName, "target": formattedTarget, "status": res.StatusCode, "responseReadyMs": responseReadyMs}))
 		SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
 		MarkAccessLogResponseBodyStart(ctx, time.Now())
 		res.Header = rh
