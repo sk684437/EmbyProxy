@@ -783,6 +783,44 @@ func TestHandleMediaProxyUsesPlaybackActionClientForDirectExternalNonStreamPlayb
 	}
 }
 
+func TestHandleNodeRoutesDirectExternalPlaybackActionToPlaybackActionClient(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	actionCalls := 0
+	h := newProxyTestHandler(t, storage.Node{DirectExternal: true})
+	h.noRedirectClient = failRoundTripClient(t, "general no-redirect client should not handle DirectExternal playback action")
+	h.defaultFollowClient = failRoundTripClient(t, "default follow client should not handle DirectExternal playback action")
+	h.playbackStreamProbeClient = failRoundTripClient(t, "playback stream probe client should not handle DirectExternal playback action")
+	h.playbackStreamClient = failRoundTripClient(t, "playback stream client should not handle DirectExternal playback action")
+	h.imageFollowClient = failRoundTripClient(t, "image follow client should not handle DirectExternal playback action")
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		actionCalls++
+		if req.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", req.Method)
+		}
+		if req.URL.String() != "https://upstream.example/emby/Sessions/Playing/Progress?reqformat=json" {
+			t.Fatalf("upstream request URL = %q", req.URL.String())
+		}
+		return textResponse(http.StatusNoContent, "", nil), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/secret/emby/Sessions/Playing/Progress?reqformat=json", nil).WithContext(ctx)
+	res, err := h.handleNode(ctx, req, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example", DirectExternal: true}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/Sessions/Playing/Progress"}, nil, config.ProxyEnv{})
+	if err != nil {
+		t.Fatalf("handleNode() error = %v", err)
+	}
+	_ = res.Body.Close()
+
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusNoContent)
+	}
+	if actionCalls != 1 {
+		t.Fatalf("playback action upstream calls = %d, want 1", actionCalls)
+	}
+	if got := AccessLogFields(ctx)[accessLogFieldUpstreamPool]; got != upstreamPoolPlaybackAction {
+		t.Fatalf("upstreamPool = %v, want %s", got, upstreamPoolPlaybackAction)
+	}
+}
+
 func TestIsPlaybackStreamRequestClassifiesPlaybackTraffic(t *testing.T) {
 	tests := []struct {
 		name   string

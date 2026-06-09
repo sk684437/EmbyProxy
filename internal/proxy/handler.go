@@ -542,9 +542,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 			return res, nil
 		}
 	}
-	nodeDirect := node.DirectExternal
-	isGetLike := r.Method == http.MethodGet || r.Method == http.MethodHead
-	shouldProxyMedia := (!nodeDirect && (isPlaybackAPI || isImageAPI || isAdditionalPartsAPI)) || (nodeDirect && (isAdditionalPartsAPI || isImageAPI || (isPlaybackAPI && isGetLike)))
+	shouldProxyMedia := isPlaybackAPI || isImageAPI || isAdditionalPartsAPI
 	if shouldProxyMedia {
 		return h.handleMediaProxy(ctx, r, node, parsed, finalURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
 	}
