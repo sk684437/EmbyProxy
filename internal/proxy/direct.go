@@ -207,7 +207,8 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		if res.Request != nil && res.Request.URL != nil {
 			rangeTarget = res.Request.URL
 		}
-		setStreamingRangeAccessLogFields(ctx, r, rangeTarget, rh, isDirectStreamingMedia(r, rangeTarget, rh, res.StatusCode))
+		isStreaming := isDirectStreamingMedia(r, rangeTarget, rh, res.StatusCode)
+		setStreamingRangeAccessLogFields(ctx, r, rangeTarget, rh, isStreaming)
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-completed", "targetUrl": targetURL, "outboundHeaders": currentHeaders})
 		responseReadyMs := time.Since(started).Milliseconds()
 		formattedTarget := logging.FormatTarget(targetURL)
@@ -215,6 +216,9 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
 		MarkAccessLogResponseBodyStart(ctx, time.Now())
 		res.Header = rh
+		if isStreaming {
+			markStreamResumeCandidate(res, "direct")
+		}
 		h.closeBody(lastRes)
 		lastRes = nil
 		return res, nil

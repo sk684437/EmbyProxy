@@ -599,10 +599,18 @@ func (h *Handler) sendResponse(w http.ResponseWriter, r *http.Request, res *http
 	}
 	defer res.Body.Close()
 	copyResponseHeaders(w.Header(), res.Header, res.Uncompressed)
+	resumePlan, canResume := h.streamResumePlan(r, res)
+	if canResume {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", resumePlan.responseLength()))
+	}
 	w.WriteHeader(res.StatusCode)
 	stats := bodyCopyStats{}
 	if res.Body != nil && r.Method != http.MethodHead {
-		stats, _ = h.copyResponseBody(w, r, res)
+		if canResume {
+			stats, _ = h.copyResponseBodyWithResume(w, r, res, resumePlan)
+		} else {
+			stats, _ = h.copyResponseBody(w, r, res)
+		}
 	}
 	h.finishPlaybackLog(r, stats.readBytes, stats.writeBytes)
 }
@@ -753,6 +761,7 @@ func (h *Handler) logBodyCopyIssue(r *http.Request, res *http.Response, copied i
 		meta["contextErr"] = ctxErr.Error()
 		setBodyCopyAccessLogField(reqCtx, "bodyCopyContextErr", ctxErr.Error())
 	}
+	addStreamResumeLogFields(reqCtx, meta)
 	setBodyCopyFirstReadAccessLogFields(reqCtx, reader, true)
 	setBodyCopyAccessLogField(reqCtx, "bodyCopySide", side)
 	h.log.Warn("proxy", "response body copy interrupted", meta)
@@ -840,7 +849,12 @@ func (h *Handler) doFetch(ctx context.Context, client *http.Client, target *url.
 	}
 	req.Header = cloneHeader(headers)
 	req.Host = target.Host
-	return client.Do(req)
+	res, err := client.Do(req)
+	if err != nil {
+		return res, err
+	}
+	attachUpstreamClient(res, client)
+	return res, nil
 }
 
 func textResponse(status int, body string, headers http.Header) *http.Response {

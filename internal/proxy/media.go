@@ -276,6 +276,9 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	}
 	h.registerPlayback(r, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: headers, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method})
 	res.Header = headers
+	if isStreamingMedia && !isImageAPI {
+		markStreamResumeCandidate(res, "playback")
+	}
 	return res, nil
 }
 
@@ -407,6 +410,9 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 		return bytesResponse(res.StatusCode, rewritten, headers), nil
 	}
 	res.Header = headers
+	if isStreaming {
+		markStreamResumeCandidate(res, "stream")
+	}
 	return res, nil
 }
 

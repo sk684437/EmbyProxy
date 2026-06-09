@@ -197,6 +197,101 @@ func (b failingReadBody) Close() error {
 	return nil
 }
 
+type partialFailBody struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (b *partialFailBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, b.err
+	}
+	b.done = true
+	n := copy(p, b.data)
+	return n, b.err
+}
+
+func (b *partialFailBody) Close() error {
+	return nil
+}
+
+func TestSendResponseResumesInterruptedPlaybackStream(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/node/secret/emby/videos/1/original.mkv", nil).WithContext(ctx)
+	req.Header.Set("Range", "bytes=0-10")
+	upstreamErr := errors.New("upstream reset")
+	resumeRanges := []string{}
+	resumeIfRanges := []string{}
+	client := &http.Client{Transport: roundTripFunc(func(resumeReq *http.Request) (*http.Response, error) {
+		resumeRanges = append(resumeRanges, resumeReq.Header.Get("Range"))
+		resumeIfRanges = append(resumeIfRanges, resumeReq.Header.Get("If-Range"))
+		out := bytesResponse(http.StatusPartialContent, []byte("world"), http.Header{
+			"Accept-Ranges":  []string{"bytes"},
+			"Content-Length": []string{"5"},
+			"Content-Range":  []string{"bytes 6-10/11"},
+			"Content-Type":   []string{"video/x-matroska"},
+			"ETag":           []string{`"media-v1"`},
+		})
+		out.Request = resumeReq
+		return out, nil
+	})}
+	upstreamReq := httptest.NewRequest(http.MethodGet, "https://cdn.example/video/original.mkv", nil)
+	upstreamReq.Header.Set("Range", "bytes=0-10")
+	res := &http.Response{
+		StatusCode:    http.StatusPartialContent,
+		Status:        "206 Partial Content",
+		ContentLength: 11,
+		Header: http.Header{
+			"Accept-Ranges":  []string{"bytes"},
+			"Content-Length": []string{"11"},
+			"Content-Range":  []string{"bytes 0-10/11"},
+			"Content-Type":   []string{"video/x-matroska"},
+			"ETag":           []string{`"media-v1"`},
+		},
+		Body:    &partialFailBody{data: []byte("hello "), err: upstreamErr},
+		Request: upstreamReq,
+	}
+	attachUpstreamClient(res, client)
+	markStreamResumeCandidate(res, "playback")
+	if _, ok := (&Handler{}).streamResumePlan(req, res); !ok {
+		validator, hasValidator := newStreamResumeValidator(res.Header)
+		t.Fatalf("streamResumePlan disabled: source=%q client=%v media=%v accepts=%v validator=%v hasValidator=%v range=%q contentRange=%q", streamResumeSource(res), upstreamClientForResponse(res), streamResumeResponseLooksLikeMedia(res), streamResumeAcceptsBytes(res.Header), validator, hasValidator, res.Request.Header.Get("Range"), res.Header.Get("Content-Range"))
+	}
+	rec := httptest.NewRecorder()
+
+	(&Handler{log: logging.New("silent", false)}).sendResponse(rec, req, res)
+
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPartialContent)
+	}
+	if got := rec.Body.String(); got != "hello world" {
+		t.Fatalf("body = %q, want hello world; ranges=%v ifRanges=%v fields=%v", got, resumeRanges, resumeIfRanges, AccessLogFields(ctx))
+	}
+	if got := rec.Header().Get("Content-Length"); got != "11" {
+		t.Fatalf("Content-Length = %q, want 11", got)
+	}
+	if got := strings.Join(resumeRanges, ","); got != "bytes=6-10" {
+		t.Fatalf("resume ranges = %q, want bytes=6-10", got)
+	}
+	if got := strings.Join(resumeIfRanges, ","); got != `"media-v1"` {
+		t.Fatalf("resume If-Range = %q, want media-v1", got)
+	}
+	fields := AccessLogFields(ctx)
+	if got := fields["streamResumeAttempts"]; got != 1 {
+		t.Fatalf("streamResumeAttempts = %v, want 1", got)
+	}
+	if got := fields["streamResumeFrom"]; got != int64(6) {
+		t.Fatalf("streamResumeFrom = %v, want 6", got)
+	}
+	if got := fields["streamResumeBytes"]; got != int64(5) {
+		t.Fatalf("streamResumeBytes = %v, want 5", got)
+	}
+	if _, ok := fields["streamResumeError"]; ok {
+		t.Fatalf("streamResumeError was set on successful resume: %v", fields["streamResumeError"])
+	}
+}
+
 func TestSendResponseLogsBodyCopyReadError(t *testing.T) {
 	log := logging.New("debug", false)
 	h := &Handler{log: log}
