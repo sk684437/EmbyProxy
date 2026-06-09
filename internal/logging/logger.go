@@ -36,7 +36,7 @@ var levels = map[string]int{
 }
 
 var (
-	sensitiveQueryRE  = regexp.MustCompile(`(?i)(token|api[_-]?key|access[_-]?token|auth|authorization|password|secret|session)`)
+	sensitiveQueryRE  = regexp.MustCompile(`(?i)(token|api[_-]?key|access[_-]?token|auth|authorization|password|secret|session|^(sign|signature)$)`)
 	httpURLRE         = regexp.MustCompile(`(?i)^https?://`)
 	embeddedHTTPURLRE = regexp.MustCompile(`(?i)https?://[^\s"'<>\\]+`)
 	safeLogValueRE    = regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`)

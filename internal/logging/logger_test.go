@@ -33,6 +33,19 @@ func TestRedactTextRedactsEmbeddedURLAfterParenthesesInPath(t *testing.T) {
 	}
 }
 
+func TestRedactURLRedactsSignedURLQuery(t *testing.T) {
+	got := RedactURL("https://cdn.example/video.mkv?sign=secret-sign&signature=secret-signature&design=poster")
+
+	if strings.Contains(got, "secret-sign") || strings.Contains(got, "secret-signature") {
+		t.Fatalf("RedactURL() leaked signed URL query values: %q", got)
+	}
+	for _, want := range []string{"sign=<redacted>", "signature=<redacted>", "design=poster"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RedactURL() = %q, want to contain %q", got, want)
+		}
+	}
+}
+
 func TestFormatValueRedactsEmbeddedURLInErrorMeta(t *testing.T) {
 	got := formatValue(`Get "https://emby.example/emby/Items/1?X-Emby-Token=secret-token&fields=ShareLevel": context canceled`)
 

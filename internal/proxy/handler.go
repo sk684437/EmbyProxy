@@ -1295,7 +1295,7 @@ func withRedirectLocationLogField(res *http.Response, fields map[string]any) map
 	if fields == nil {
 		fields = map[string]any{}
 	}
-	fields["location"] = logging.RedactURL(location)
+	fields["location"] = location
 	return fields
 }
 
