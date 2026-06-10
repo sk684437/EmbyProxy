@@ -228,7 +228,11 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		if cfg.Token == "" || cfg.Chat == "" {
 			return fail("TG 未配置"), http.StatusOK
 		}
-		return map[string]any{"ok": h.telegram.Send(ctx, cfg.Token, cfg.Chat, "Emby Proxy 测试消息")}, http.StatusOK
+		text, err := h.telegram.BuildReport(ctx, time.Now().UnixMilli())
+		if err != nil {
+			return fail(err.Error()), http.StatusInternalServerError
+		}
+		return map[string]any{"ok": h.telegram.Send(ctx, cfg.Token, cfg.Chat, text)}, http.StatusOK
 	case "config.get":
 		cfg, err := h.store.GetSystemConfig(ctx, h.defaultSystemConfig())
 		if err != nil {

@@ -1,76 +1,166 @@
 package telegram
 
 import (
+	"embyproxy/internal/localtime"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestBuildReportTextIncludesExpandedDailyStats(t *testing.T) {
-	today := summary{
-		Plays:         12,
-		InboundBytes:  10_000_000_000,
-		OutboundBytes: 9_000_000_000,
-		Sessions:      8,
-		Errors:        1,
-		NodeMap: map[string]int64{
-			"alpha": 8,
-			"beta":  4,
+func TestBuildReportText(t *testing.T) {
+	tests := []struct {
+		name                 string
+		day                  string
+		today                summary
+		yesterday            summary
+		proxyPlaysToday      int64
+		directPlaysToday     int64
+		proxyPlaysYesterday  int64
+		directPlaysYesterday int64
+		nodeDisplay          map[string]string
+		wantContains         []string
+		wantNotContains      []string
+	}{
+		{
+			name: "normal day",
+			day:  "2026-06-08",
+			today: summary{
+				Plays:         12,
+				InboundBytes:  10_000_000_000,
+				OutboundBytes: 9_000_000_000,
+				Sessions:      8,
+				Errors:        1,
+				NodeMap:       map[string]int64{"alpha": 8, "beta": 4},
+				ClientMap:     map[string]int64{"Infuse/8.0": 6, "Emby Theater": 4, "Unknown": 2},
+			},
+			yesterday: summary{
+				Plays:         7,
+				InboundBytes:  5_000_000_000,
+				OutboundBytes: 4_000_000_000,
+				Sessions:      5,
+				NodeMap:       map[string]int64{"alpha": 7},
+				ClientMap:     map[string]int64{"Infuse/8.0": 7},
+			},
+			proxyPlaysToday:      9,
+			directPlaysToday:     3,
+			proxyPlaysYesterday:  6,
+			directPlaysYesterday: 1,
+			nodeDisplay:          map[string]string{"alpha": "朋友服"},
+			wantContains: []string{
+				"📊 Emby 播放日报 · 2026-06-08",
+				"▶ 播放 12 次 · 8 会话 · 2 节点",
+				"代理 9 | 302直链 3 (25.0%)",
+				"入站 10.00 GB | 出站 9.00 GB",
+				"⚠️ 5xx: 1 次",
+				"📈 较昨日  播放 +5 · 会话 +3 · 流量 +5.00 GB",
+				"🏆 节点排行:",
+				"1. 朋友服 — 8 次 (66.7%)",
+				"2. beta — 4 次 (33.3%)",
+				"📱 客户端排行:",
+				"1. Infuse/8.0 — 6 次 (50.0%)",
+				"2. Emby Theater — 4 次 (33.3%)",
+				"3. Unknown — 2 次 (16.7%)",
+			},
 		},
-		ClientMap: map[string]int64{
-			"Infuse/8.0":   6,
-			"Emby Theater": 4,
-			"Unknown":      2,
+		{
+			name:  "empty day with yesterday",
+			day:   "2026-06-10",
+			today: summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			yesterday: summary{
+				Plays:         22,
+				Sessions:      18,
+				InboundBytes:  10_000_000_000,
+				OutboundBytes: 9_230_000_000,
+				Errors:        2,
+				NodeMap:       map[string]int64{"alpha": 15, "beta": 7},
+				ClientMap:     map[string]int64{"Infuse/8.0": 14, "Emby Theater": 8},
+			},
+			proxyPlaysYesterday:  18,
+			directPlaysYesterday: 4,
+			nodeDisplay:          map[string]string{"alpha": "朋友服"},
+			wantContains: []string{
+				"📊 Emby 播放日报 · 2026-06-10",
+				"📭 今日无播放",
+				"📅 昨日回顾",
+				"▶ 播放 22 次 · 18 会话 · 2 节点",
+				"代理 18 | 302直链 4 (18.2%)",
+				"入站 10.00 GB | 出站 9.23 GB",
+				"⚠️ 5xx: 2 次",
+				"🏆 节点排行:",
+				"1. 朋友服 — 15 次 (68.2%)",
+				"2. beta — 7 次 (31.8%)",
+				"📱 客户端排行:",
+				"1. Infuse/8.0 — 14 次 (63.6%)",
+				"2. Emby Theater — 8 次 (36.4%)",
+			},
+			wantNotContains: []string{"📈 较昨日"},
 		},
-	}
-	yesterday := summary{
-		Plays:         7,
-		InboundBytes:  5_000_000_000,
-		OutboundBytes: 4_000_000_000,
-		Sessions:      5,
-		Errors:        0,
-		NodeMap: map[string]int64{
-			"alpha": 7,
+		{
+			name: "normal day without errors or yesterday",
+			day:  "2026-06-08",
+			today: summary{
+				Plays:     5,
+				Sessions:  3,
+				NodeMap:   map[string]int64{"a": 5},
+				ClientMap: map[string]int64{"b": 5},
+			},
+			yesterday:       summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			proxyPlaysToday: 5,
+			wantNotContains: []string{"5xx", "较昨日"},
 		},
-		ClientMap: map[string]int64{
-			"Infuse/8.0": 7,
+		{
+			name:            "empty day without yesterday",
+			day:             "2026-06-10",
+			today:           summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			yesterday:       summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			wantContains:    []string{"📭 今日无播放"},
+			wantNotContains: []string{"昨日"},
 		},
 	}
 
-	text := buildReportText("2026-06-08", today, yesterday, 9, 3, 6, 1, map[string]string{
-		"alpha": "朋友服",
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text := buildReportText(
+				tt.day,
+				tt.today,
+				tt.yesterday,
+				tt.proxyPlaysToday,
+				tt.directPlaysToday,
+				tt.proxyPlaysYesterday,
+				tt.directPlaysYesterday,
+				tt.nodeDisplay,
+			)
+			assertContainsAll(t, text, tt.wantContains)
+			assertContainsNone(t, text, tt.wantNotContains)
+		})
+	}
+}
 
-	for _, want := range []string{
-		"今日: 12 次播放 | 8 会话 | 2 节点活跃",
-		"  代理: 9 | 直连: 3 | 直连占比: 25.0%",
-		"  代理流量: 入站 10.00 GB | 出站 9.00 GB | 单次出站: 1.00 GB",
-		"  5xx: 1 次",
-		"较昨日:",
-		"  播放: +5 | 会话: +3 | 流量: 入站 +5.00 GB | 出站 +5.00 GB",
-		"  活跃节点: +1 | 5xx: +1",
-		"昨日: 7 次播放 | 5 会话 | 1 节点活跃",
-		"  代理: 6 | 直连: 1 | 直连占比: 14.3%",
-		"  朋友服: 8 次，占 66.7%",
-		"  beta: 4 次，占 33.3%",
-		"  Infuse/8.0: 6 次，占 50.0%",
-		"  Emby Theater: 4 次，占 33.3%",
-		"  Unknown: 2 次，占 16.7%",
-	} {
+func assertContainsAll(t *testing.T, text string, wants []string) {
+	t.Helper()
+	for _, want := range wants {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report text missing %q\n%s", want, text)
 		}
 	}
 }
 
-func TestReportFormatHelpersHandleEmptyValues(t *testing.T) {
-	if got := modeSummaryLine(0, 0); got != "  代理: 0 | 直连: 0 | 直连占比: 0.0%" {
-		t.Fatalf("modeSummaryLine() = %q", got)
+func assertContainsNone(t *testing.T, text string, values []string) {
+	t.Helper()
+	for _, value := range values {
+		if strings.Contains(text, value) {
+			t.Fatalf("report text should not contain %q\n%s", value, text)
+		}
 	}
-	if got := trafficSummaryLine(0, 0, 0); got != "  代理流量: 入站 0B | 出站 0B | 单次出站: 0B" {
-		t.Fatalf("trafficSummaryLine() = %q", got)
-	}
-	if got := formatSignedBytes(-1_500_000_000); got != "-1.50 GB" {
-		t.Fatalf("formatSignedBytes() = %q", got)
+}
+
+func TestPreviousReportDateUsesCalendarDayAroundDST(t *testing.T) {
+	t.Setenv(localtime.EnvName, "America/New_York")
+	loc := localtime.Location()
+	now := time.Date(2026, 3, 9, 0, 30, 0, 0, loc).UnixMilli()
+
+	if got := previousReportDate(now); got != "2026-03-08" {
+		t.Fatalf("previousReportDate() = %q, want %q", got, "2026-03-08")
 	}
 }
 
@@ -80,8 +170,11 @@ func TestFormatBytesScalesBeyondGB(t *testing.T) {
 		value int64
 		want  string
 	}{
+		{name: "zero", value: 0, want: "0B"},
+		{name: "negative", value: -1, want: "0B"},
 		{name: "bytes", value: 999, want: "999B"},
 		{name: "kilobytes", value: 1_500, want: "1.5 KB"},
+		{name: "gigabytes", value: 1_500_000_000, want: "1.50 GB"},
 		{name: "terabytes", value: 1_500_000_000_000, want: "1.50 TB"},
 		{name: "petabytes", value: 1_500_000_000_000_000, want: "1.50 PB"},
 	} {
@@ -90,5 +183,14 @@ func TestFormatBytesScalesBeyondGB(t *testing.T) {
 				t.Fatalf("formatBytes() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFormatSignedBytes(t *testing.T) {
+	if got := formatSignedBytes(-1_500_000_000); got != "-1.50 GB" {
+		t.Fatalf("formatSignedBytes() = %q", got)
+	}
+	if got := formatSignedBytes(0); got != "0B" {
+		t.Fatalf("formatSignedBytes(0) = %q", got)
 	}
 }
