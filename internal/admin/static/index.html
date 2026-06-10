@@ -31,6 +31,7 @@
   --focus:0 0 0 4px rgba(36,89,77,.16);
 }
 *{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
 html,body{min-height:100%;background:var(--canvas);color:var(--ink-2);font-family:"HarmonyOS Sans SC","MiSans","PingFang SC","Microsoft YaHei UI",sans-serif;font-size:14px;line-height:1.5}
 body{background:linear-gradient(120deg,rgba(36,89,77,.10),transparent 34%),radial-gradient(circle at 94% 4%,rgba(189,106,52,.14),transparent 30rem),var(--canvas)}
 button,input,select,textarea{font:inherit}
@@ -223,6 +224,8 @@ tr:last-child td{border-bottom:0}
 .section-grid{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .inline-check,.toggle-row{min-height:48px;display:flex;align-items:center;gap:10px}
 .toggle-row[hidden]{display:none}
+#tgForm .toggle-row{border:1px solid var(--line);border-radius:16px;background:rgba(255,253,248,.78);padding:0 12px}
+#tgForm #tg-changeOnlyRow{align-self:end}
 .inline-check input,.toggle-row input{width:19px;height:19px;accent-color:var(--pine);cursor:pointer;flex-shrink:0}
 .inline-check label,.toggle-row label{font-size:13px;color:var(--ink-2);font-weight:900;cursor:pointer}
 .identity-policy{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px;align-items:center;border:1px solid var(--line);background:linear-gradient(135deg,var(--pine-wash),var(--paper));border-radius:24px;padding:16px}
@@ -869,7 +872,7 @@ tr:last-child td{border-bottom:0}
     <div class="sheet-head">
       <div>
         <h2>Telegram 通知</h2>
-        <p>配置日报通知、变更通知和测试消息</p>
+        <p>配置推送通道与每日日报</p>
       </div>
       <button class="sheet-close" onclick="closeTgModal()">×</button>
     </div>
@@ -877,8 +880,8 @@ tr:last-child td{border-bottom:0}
       <div class="form-section">通道设置</div>
 
       <div class="toggle-row form-full">
-        <input type="checkbox" id="tg-enabled"/>
-        <label for="tg-enabled">启用推送</label>
+        <input type="checkbox" id="tg-enabled" onchange="syncTgNotificationControls()"/>
+        <label for="tg-enabled">启用 Telegram 通知</label>
       </div>
 
       <div class="form-group form-full">
@@ -891,24 +894,29 @@ tr:last-child td{border-bottom:0}
         <input type="text" id="tg-chat" placeholder="-1001234567890 或 @频道"/>
       </div>
 
-      <div class="form-section">推送策略</div>
+      <div class="form-section">每日日报</div>
 
-      <div class="form-group">
+      <div class="toggle-row form-full">
+        <input type="checkbox" id="tg-reportEnabled" onchange="syncTgReportControls()"/>
+        <label for="tg-reportEnabled">启用每日日报</label>
+      </div>
+
+      <div class="form-group tg-report-setting">
         <label for="tg-reportTime">日报推送时间 <span class="form-hint">北京时间</span></label>
         <input type="time" id="tg-reportTime" value="08:00"/>
       </div>
 
-      <div class="form-group">
+      <div class="form-group tg-report-setting">
         <label for="tg-reportEveryMin">推送间隔 <span class="form-hint">单位：分钟，最小 60</span></label>
         <input type="number" id="tg-reportEveryMin" value="1440" min="60" max="1440"/>
       </div>
 
-      <div class="form-group">
+      <div class="form-group tg-report-setting">
         <label for="tg-reportMaxPerDay">每日最多推送次数</label>
         <input type="number" id="tg-reportMaxPerDay" value="1" min="1" max="24" oninput="syncTgChangeOnlyVisibility()"/>
       </div>
 
-      <div class="toggle-row" id="tg-changeOnlyRow" style="align-self: end;" hidden>
+      <div class="toggle-row tg-report-setting" id="tg-changeOnlyRow" hidden>
         <input type="checkbox" id="tg-changeOnly" checked/>
         <label for="tg-changeOnly">仅内容变化时推送</label>
       </div>
@@ -1628,20 +1636,37 @@ async function openTgModal() {
     document.getElementById('tg-enabled').checked = !!c.enabled;
     document.getElementById('tg-token').value = c.token || '';
     document.getElementById('tg-chat').value = c.chat || '';
+    document.getElementById('tg-reportEnabled').checked = c.reportEnabled === true;
     document.getElementById('tg-reportTime').value = c.reportTime || '08:00';
     document.getElementById('tg-reportEveryMin').value = c.reportEveryMin || 1440;
     document.getElementById('tg-reportMaxPerDay').value = c.reportMaxPerDay || 1;
     document.getElementById('tg-changeOnly').checked = c.reportChangeOnly !== false;
   }
-  syncTgChangeOnlyVisibility();
+  syncTgNotificationControls();
   showModal('tgModal');
 }
 
 function closeTgModal() { hideModal('tgModal'); }
 
+function syncTgNotificationControls() {
+  syncTgReportControls();
+}
+
+function syncTgReportControls() {
+  const reportEnabled = document.getElementById('tg-reportEnabled').checked;
+  document.querySelectorAll('.tg-report-setting').forEach(el => {
+    el.hidden = !reportEnabled;
+  });
+  ['tg-reportTime', 'tg-reportEveryMin', 'tg-reportMaxPerDay', 'tg-changeOnly'].forEach(id => {
+    document.getElementById(id).disabled = !reportEnabled;
+  });
+  syncTgChangeOnlyVisibility();
+}
+
 function syncTgChangeOnlyVisibility() {
+  const reportEnabled = document.getElementById('tg-reportEnabled').checked;
   const maxPerDay = parseInt(document.getElementById('tg-reportMaxPerDay').value, 10);
-  document.getElementById('tg-changeOnlyRow').hidden = !Number.isFinite(maxPerDay) || maxPerDay <= 1;
+  document.getElementById('tg-changeOnlyRow').hidden = !reportEnabled || !Number.isFinite(maxPerDay) || maxPerDay <= 1;
 }
 
 async function saveTg() {
@@ -1650,6 +1675,7 @@ async function saveTg() {
     enabled: document.getElementById('tg-enabled').checked,
     token: document.getElementById('tg-token').value.trim(),
     chat: document.getElementById('tg-chat').value.trim(),
+    reportEnabled: document.getElementById('tg-reportEnabled').checked,
     reportTime: document.getElementById('tg-reportTime').value,
     reportEveryMin: parseInt(document.getElementById('tg-reportEveryMin').value, 10),
     reportMaxPerDay,

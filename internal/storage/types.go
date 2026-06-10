@@ -36,6 +36,7 @@ type TGConfig struct {
 	Enabled          bool   `json:"enabled"`
 	Token            string `json:"token"`
 	Chat             string `json:"chat"`
+	ReportEnabled    bool   `json:"reportEnabled"`
 	ReportTime       string `json:"reportTime"`
 	ReportEveryMin   int    `json:"reportEveryMin"`
 	ReportMaxPerDay  int    `json:"reportMaxPerDay"`

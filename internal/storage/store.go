@@ -384,9 +384,19 @@ func (s *Store) GetHostIndex(ctx context.Context, uid string) (map[string]HostMa
 
 func (s *Store) GetTGConfig(ctx context.Context) (TGConfig, error) {
 	var cfg TGConfig
-	ok, err := s.KV().GetJSON(ctx, "tg:config", &cfg)
+	value, ok, err := s.KV().Get(ctx, "tg:config")
 	if err != nil || !ok {
 		return TGConfig{Enabled: false}, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &raw); err != nil {
+		return TGConfig{Enabled: false}, nil
+	}
+	if err := json.Unmarshal([]byte(value), &cfg); err != nil {
+		return TGConfig{Enabled: false}, nil
+	}
+	if _, ok := raw["reportEnabled"]; !ok && cfg.Enabled {
+		cfg.ReportEnabled = true
 	}
 	return cfg, nil
 }

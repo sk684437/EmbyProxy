@@ -72,3 +72,58 @@ func TestSystemConfigCacheRefreshesOnSave(t *testing.T) {
 		t.Fatalf("GetSystemConfig() = %+v; want saved %+v", got, next)
 	}
 }
+
+func TestTGConfigBackfillsReportEnabledForLegacyEnabledConfig(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	if err := store.KV().Put(ctx, "tg:config", map[string]any{
+		"enabled": true,
+		"token":   "token",
+		"chat":    "chat",
+	}); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	got, err := store.GetTGConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetTGConfig() error = %v", err)
+	}
+	if !got.ReportEnabled {
+		t.Fatalf("ReportEnabled = false, want true for legacy enabled config")
+	}
+}
+
+func TestTGConfigKeepsExplicitReportDisabled(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	if err := store.SaveTGConfig(ctx, TGConfig{
+		Enabled:       true,
+		Token:         "token",
+		Chat:          "chat",
+		ReportEnabled: false,
+	}); err != nil {
+		t.Fatalf("SaveTGConfig() error = %v", err)
+	}
+
+	got, err := store.GetTGConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetTGConfig() error = %v", err)
+	}
+	if got.ReportEnabled {
+		t.Fatalf("ReportEnabled = true, want false")
+	}
+}

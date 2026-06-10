@@ -1,7 +1,13 @@
 package telegram
 
 import (
+	"context"
 	"embyproxy/internal/localtime"
+	"embyproxy/internal/logging"
+	"embyproxy/internal/storage"
+	"io"
+	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +168,89 @@ func TestPreviousReportDateUsesCalendarDayAroundDST(t *testing.T) {
 	if got := previousReportDate(now); got != "2026-03-08" {
 		t.Fatalf("previousReportDate() = %q, want %q", got, "2026-03-08")
 	}
+}
+
+func TestCheckAndSendReportSkipsWhenReportDisabled(t *testing.T) {
+	ctx := context.Background()
+	store := newTelegramTestStore(t)
+	if err := store.SaveTGConfig(ctx, storage.TGConfig{
+		Enabled:       true,
+		ReportEnabled: false,
+		Token:         "token",
+		Chat:          "chat",
+		ReportTime:    "00:00",
+	}); err != nil {
+		t.Fatalf("SaveTGConfig() error = %v", err)
+	}
+
+	calls := 0
+	service := New(store, logging.New("silent", false))
+	service.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}
+
+	if err := service.CheckAndSendReport(ctx); err != nil {
+		t.Fatalf("CheckAndSendReport() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("telegram calls = %d, want 0", calls)
+	}
+}
+
+func TestCheckKeepaliveAndNotifyIgnoresReportDisabled(t *testing.T) {
+	ctx := context.Background()
+	store := newTelegramTestStore(t)
+	if err := store.SaveTGConfig(ctx, storage.TGConfig{
+		Enabled:       true,
+		ReportEnabled: false,
+		Token:         "token",
+		Chat:          "chat",
+	}); err != nil {
+		t.Fatalf("SaveTGConfig() error = %v", err)
+	}
+	if err := store.SaveNode(ctx, "admin", storage.Node{
+		Name:             "alpha",
+		Target:           "http://example.test",
+		DisplayName:      "Alpha",
+		RenewDays:        1,
+		RemindBeforeDays: 1,
+		KeepaliveAt:      "00:00",
+	}); err != nil {
+		t.Fatalf("SaveNode() error = %v", err)
+	}
+
+	calls := 0
+	service := New(store, logging.New("silent", false))
+	service.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}
+
+	if err := service.CheckKeepaliveAndNotify(ctx); err != nil {
+		t.Fatalf("CheckKeepaliveAndNotify() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("telegram calls = %d, want 1", calls)
+	}
+}
+
+func newTelegramTestStore(t *testing.T) *storage.Store {
+	t.Helper()
+	store, err := storage.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("storage.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	return store
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestFormatBytesScalesBeyondGB(t *testing.T) {

@@ -84,7 +84,7 @@ func (s *Service) BuildReport(ctx context.Context, now int64) (string, error) {
 
 func (s *Service) CheckAndSendReport(ctx context.Context) error {
 	cfg, err := s.store.GetTGConfig(ctx)
-	if err != nil || !cfg.Enabled || cfg.Token == "" || cfg.Chat == "" {
+	if err != nil || !cfg.Enabled || !cfg.ReportEnabled || cfg.Token == "" || cfg.Chat == "" {
 		return err
 	}
 	now := time.Now().UnixMilli()
