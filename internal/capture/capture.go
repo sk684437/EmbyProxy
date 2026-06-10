@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -236,7 +237,7 @@ func (r *Recorder) appendHTTP(req *http.Request, cw *captureWriter, cfg storage.
 		Stage:           stringMeta(meta, "stage", ""),
 		Method:          strings.ToUpper(req.Method),
 		InboundURL:      inboundURL(req, meta),
-		InboundHeaders:  headersToMap(req.Header),
+		InboundHeaders:  inboundHeadersToMap(req),
 		InboundBody:     inboundBody,
 		TargetURL:       stringMeta(meta, "targetUrl", ""),
 		OutboundHeaders: headersToMap(headerMeta(meta["outboundHeaders"])),
@@ -367,6 +368,38 @@ func headersToMap(headers http.Header) map[string]any {
 		out[lower] = value
 	}
 	return out
+}
+
+func inboundHeadersToMap(req *http.Request) map[string]any {
+	if req == nil {
+		return map[string]any{}
+	}
+	out := headersToMap(req.Header)
+	if req.Host != "" {
+		out["host"] = req.Host
+	}
+	if len(req.TransferEncoding) > 0 {
+		out["transfer-encoding"] = strings.Join(req.TransferEncoding, ", ")
+	}
+	if _, ok := out["content-length"]; !ok && req.ContentLength > 0 {
+		out["content-length"] = strconv.FormatInt(req.ContentLength, 10)
+	}
+	if _, ok := out["connection"]; !ok && req.Close {
+		out["connection"] = "close"
+	}
+	if _, ok := out["trailer"]; !ok && len(req.Trailer) > 0 {
+		out["trailer"] = headerKeysToValue(req.Trailer)
+	}
+	return out
+}
+
+func headerKeysToValue(headers http.Header) string {
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 func headerMeta(value any) http.Header {
