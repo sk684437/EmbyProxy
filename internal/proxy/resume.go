@@ -14,7 +14,6 @@ import (
 const (
 	streamResumeMaxAttempts = 2
 	streamResumeDrainLimit  = 256 * 1024
-	streamResumeBufferSize  = 128 * 1024
 )
 
 type upstreamClientContextKey struct{}
@@ -144,7 +143,8 @@ func (h *Handler) copyResponseBodyWithResume(w http.ResponseWriter, r *http.Requ
 	current := res
 	readErr := error(nil)
 
-	buf := make([]byte, streamResumeBufferSize)
+	buf := getBodyCopyBuffer()
+	defer putBodyCopyBuffer(buf)
 	for {
 		remaining := expectedBytes - sentBytes
 		if remaining <= 0 {

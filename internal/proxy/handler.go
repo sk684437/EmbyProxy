@@ -72,7 +72,14 @@ type parsedRoute struct {
 const (
 	rawHostLookupTimeout = 3 * time.Second
 	proxyConnIdleTimeout = 2 * time.Minute
+	bodyCopyBufferSize   = 256 * 1024
 )
+
+var bodyCopyBufferPool = sync.Pool{
+	New: func() any {
+		return make([]byte, bodyCopyBufferSize)
+	},
+}
 
 func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *logging.Logger) *Handler {
 	defaults := storage.DefaultSystemConfig()
@@ -649,13 +656,26 @@ func (h *Handler) copyResponseBody(w http.ResponseWriter, r *http.Request, res *
 	started := time.Now()
 	reader := &bodyCopyReader{reader: res.Body, started: started}
 	writer := &bodyCopyWriter{writer: w}
-	copied, err := io.Copy(writer, reader)
+	buf := getBodyCopyBuffer()
+	defer putBodyCopyBuffer(buf)
+	copied, err := io.CopyBuffer(writer, reader, buf)
 	stats := bodyCopyStats{readBytes: reader.bytes, writeBytes: writer.bytes}
 	setBodyCopyFirstReadAccessLogFields(requestContext(r), reader, false)
 	if ctxErr := requestContextErr(r); err != nil || ctxErr != nil {
 		h.logBodyCopyIssue(r, res, copied, err, ctxErr, time.Since(started), reader, writer)
 	}
 	return stats, err
+}
+
+func getBodyCopyBuffer() []byte {
+	return bodyCopyBufferPool.Get().([]byte)
+}
+
+func putBodyCopyBuffer(buf []byte) {
+	if cap(buf) != bodyCopyBufferSize {
+		return
+	}
+	bodyCopyBufferPool.Put(buf[:bodyCopyBufferSize])
 }
 
 type bodyCopyReader struct {

@@ -172,6 +172,76 @@ func TestSendResponseDropsContentLengthForDecodedBody(t *testing.T) {
 	}
 }
 
+func TestBodyCopyUsesSharedBufferSize(t *testing.T) {
+	tests := []struct {
+		name string
+		copy func(*bodyCopyBufferRecorder) error
+	}{
+		{
+			name: "standard response copy",
+			copy: func(body *bodyCopyBufferRecorder) error {
+				res := &http.Response{Body: body}
+				_, err := (&Handler{}).copyResponseBody(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/video", nil), res)
+				return err
+			},
+		},
+		{
+			name: "resume chunk copy",
+			copy: func(body *bodyCopyBufferRecorder) error {
+				buf := getBodyCopyBuffer()
+				defer putBodyCopyBuffer(buf)
+				_, readErr, writeErr := copyStreamResumeChunk(&bodyCopyWriter{writer: io.Discard}, &bodyCopyReader{reader: body}, buf)
+				if writeErr != nil {
+					return writeErr
+				}
+				if !errors.Is(readErr, io.EOF) {
+					return fmt.Errorf("read error = %v, want EOF", readErr)
+				}
+				return nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &bodyCopyBufferRecorder{}
+			if err := tt.copy(body); err != nil {
+				t.Fatalf("copy() error = %v", err)
+			}
+			if body.maxReadLen != bodyCopyBufferSize {
+				t.Fatalf("max read buffer = %d, want %d", body.maxReadLen, bodyCopyBufferSize)
+			}
+			if bodyCopyBufferSize != 256*1024 {
+				t.Fatalf("bodyCopyBufferSize = %d, want 256KB", bodyCopyBufferSize)
+			}
+		})
+	}
+}
+
+type bodyCopyBufferRecorder struct {
+	maxReadLen int
+	reads      int
+}
+
+func (r *bodyCopyBufferRecorder) Read(p []byte) (int, error) {
+	if len(p) > r.maxReadLen {
+		r.maxReadLen = len(p)
+	}
+	if r.reads > 0 {
+		return 0, io.EOF
+	}
+	r.reads++
+	if len(p) == 0 {
+		return 0, nil
+	}
+	p[0] = 'x'
+	return 1, nil
+}
+
+func (r *bodyCopyBufferRecorder) Close() error {
+	return nil
+}
+
 func TestFillContentLengthFromContentRange(t *testing.T) {
 	headers := http.Header{
 		"Content-Range": []string{"bytes 1024-2047/4096"},
