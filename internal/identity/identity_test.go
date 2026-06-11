@@ -106,3 +106,16 @@ func TestApplyToURLRewritesEmbyAuthorization(t *testing.T) {
 		t.Fatalf("URL authorization was not rewritten to yamby identity: %s", value)
 	}
 }
+
+func TestYambyDeviceIDUsesUUID(t *testing.T) {
+	manager := NewManager(nil)
+
+	snap := manager.Snapshot("yamby")
+
+	if snap.DeviceName != "Android" {
+		t.Fatalf("DeviceName = %q, want Android", snap.DeviceName)
+	}
+	if !isUUID(snap.DeviceID) {
+		t.Fatalf("DeviceID = %q, want uuid", snap.DeviceID)
+	}
+}

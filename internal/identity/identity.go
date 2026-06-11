@@ -25,6 +25,7 @@ type Profile struct {
 	ClientVersion  string
 	DeviceName     string
 	DeviceIDLength int
+	DeviceIDFormat string
 	UserAgent      string
 }
 
@@ -65,7 +66,7 @@ var Profiles = map[string]Profile{
 		ClientName:     "Yamby",
 		ClientVersion:  "2.0.4.3",
 		DeviceName:     "Android",
-		DeviceIDLength: 32,
+		DeviceIDFormat: "uuid",
 		UserAgent:      "Yamby/2.0.4.3(Android",
 	},
 	"hills_android": {
@@ -320,8 +321,8 @@ func normalizeDeviceState(profile Profile, saved deviceState) deviceState {
 		name = createHillsWindowsDeviceName()
 	}
 	id := strings.ToLower(strings.TrimSpace(saved.DeviceID))
-	if !isHexLength(id, profile.DeviceIDLength) {
-		id = randomHex(profile.DeviceIDLength)
+	if !validDeviceID(profile, id) {
+		id = randomDeviceID(profile)
 	}
 	return deviceState{DeviceName: name, DeviceID: id}
 }
@@ -348,6 +349,24 @@ func isHexLength(value string, length int) bool {
 	return true
 }
 
+func validDeviceID(profile Profile, value string) bool {
+	switch strings.ToLower(strings.TrimSpace(profile.DeviceIDFormat)) {
+	case "uuid":
+		return isUUID(value)
+	default:
+		return isHexLength(value, profile.DeviceIDLength)
+	}
+}
+
+func randomDeviceID(profile Profile) string {
+	switch strings.ToLower(strings.TrimSpace(profile.DeviceIDFormat)) {
+	case "uuid":
+		return randomUUID()
+	default:
+		return randomHex(profile.DeviceIDLength)
+	}
+}
+
 func randomHex(length int) string {
 	if length <= 0 {
 		length = 32
@@ -357,6 +376,37 @@ func randomHex(length int) string {
 		return strings.Repeat("0", length)
 	}
 	return hex.EncodeToString(buf)[:length]
+}
+
+func isUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, ch := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if ch != '-' {
+				return false
+			}
+		default:
+			if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func randomUUID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "00000000-0000-4000-8000-000000000000"
+	}
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	hexed := hex.EncodeToString(buf)
+	return hexed[:8] + "-" + hexed[8:12] + "-" + hexed[12:16] + "-" + hexed[16:20] + "-" + hexed[20:]
 }
 
 func createHillsWindowsDeviceName() string {
