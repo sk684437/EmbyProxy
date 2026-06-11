@@ -64,6 +64,7 @@ func TestApplyToHeadersRewritesEmbyAuthorization(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("Authorization", `Emby Client="Synthetic Client", Device="SYNTHETIC-PC", DeviceId="synthetic-source-device-id", Version="1.2.0"`)
 	headers.Set("X-Emby-Authorization", `Emby Client="Synthetic Client", Device="SYNTHETIC-PC", DeviceId="synthetic-source-device-id", Version="1.2.0"`)
+	headers.Set("X-Application", "Original/1.0")
 
 	manager.ApplyToHeaders(headers, "yamby")
 
@@ -73,6 +74,9 @@ func TestApplyToHeadersRewritesEmbyAuthorization(t *testing.T) {
 			t.Fatalf("%s was not rewritten to yamby identity: %s", key, value)
 		}
 	}
+	if got := headers.Get("X-Application"); got != "Yamby/2.0.4.3" {
+		t.Fatalf("X-Application = %q, want %q", got, "Yamby/2.0.4.3")
+	}
 }
 
 func TestApplyToHeadersDoesNotAddMissingEmbyHeaders(t *testing.T) {
@@ -81,7 +85,7 @@ func TestApplyToHeadersDoesNotAddMissingEmbyHeaders(t *testing.T) {
 
 	manager.ApplyToHeaders(headers, "yamby")
 
-	for _, key := range []string{"Authorization", "X-Emby-Authorization", "X-Emby-Client", "X-Emby-Client-Version", "X-Emby-Device-Name", "X-Emby-Device-Id"} {
+	for _, key := range []string{"Authorization", "X-Application", "X-Emby-Authorization", "X-Emby-Client", "X-Emby-Client-Version", "X-Emby-Device-Name", "X-Emby-Device-Id"} {
 		if got := headers.Get(key); got != "" {
 			t.Fatalf("%s = %q, want empty", key, got)
 		}

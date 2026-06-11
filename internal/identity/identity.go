@@ -157,6 +157,8 @@ func (m *Manager) ApplyToHeaders(headers http.Header, profile string) {
 			headers.Set(key, snap.DeviceID)
 		case "xembyauthorization", "xmediabrowserauthorization", "xauthorization":
 			headers.Set(key, RewriteMediaBrowserAuthorization(value, snap))
+		case "xapplication":
+			headers.Set(key, snap.ClientName+"/"+snap.ClientVersion)
 		}
 	}
 	for _, key := range []string{"X-Emby-Authorization", "X-MediaBrowser-Authorization", "Authorization"} {
