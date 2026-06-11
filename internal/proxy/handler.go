@@ -252,6 +252,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Node not found", http.StatusNotFound)
 		return
 	}
+	capture.SetMeta(r, map[string]any{"node": parsed.Name, "impersonated": node.Impersonate})
 	requestlog.SetRequestURI(ctx, logging.RedactProxyURL(r.URL.RequestURI(), parsed.Name, node.Secret))
 	LogRequestStarted(ctx, h.log, r, auth.ClientIP(r, h.trustsProxy(ctx)), parsed.Name)
 	parsed.Secret = node.Secret

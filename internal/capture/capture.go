@@ -53,9 +53,11 @@ type BodySummary struct {
 type Record struct {
 	ID              string         `json:"id"`
 	TS              int64          `json:"ts"`
+	Time            string         `json:"time"`
 	Mode            string         `json:"mode"`
 	Node            string         `json:"node"`
 	AdminAction     string         `json:"adminAction"`
+	Impersonated    bool           `json:"impersonated"`
 	Stage           string         `json:"stage"`
 	Method          string         `json:"method"`
 	InboundURL      string         `json:"inboundUrl"`
@@ -228,12 +230,15 @@ func (r *Recorder) appendHTTP(req *http.Request, cw *captureWriter, cfg storage.
 	} else if st.RequestBody != nil {
 		inboundBody = summarizeBuffer(st.RequestBody, int64(len(st.RequestBody)), req.Header.Get("Content-Type"), false, cfg)
 	}
+	now := time.Now()
 	record := Record{
 		ID:              requestID(req, r.log),
-		TS:              time.Now().UnixMilli(),
+		TS:              now.UnixMilli(),
+		Time:            formatCaptureTime(now),
 		Mode:            stringMeta(meta, "mode", inferMode(req, meta)),
 		Node:            stringMeta(meta, "node", ""),
 		AdminAction:     stringMeta(meta, "adminAction", ""),
+		Impersonated:    boolMeta(meta, "impersonated", false),
 		Stage:           stringMeta(meta, "stage", ""),
 		Method:          strings.ToUpper(req.Method),
 		InboundURL:      inboundURL(req, meta),
@@ -448,6 +453,29 @@ func stringMeta(meta map[string]any, key, fallback string) string {
 		return strings.TrimSpace(fmt.Sprint(value))
 	}
 	return fallback
+}
+
+func boolMeta(meta map[string]any, key string, fallback bool) bool {
+	if meta == nil {
+		return fallback
+	}
+	switch value := meta[key].(type) {
+	case bool:
+		return value
+	case string:
+		value = strings.TrimSpace(strings.ToLower(value))
+		if value == "true" || value == "1" || value == "yes" {
+			return true
+		}
+		if value == "false" || value == "0" || value == "no" {
+			return false
+		}
+	}
+	return fallback
+}
+
+func formatCaptureTime(t time.Time) string {
+	return t.Local().Format("2006-01-02 15:04:05.000 -07:00")
 }
 
 func ReadJSONL(path string) ([]Record, error) {
