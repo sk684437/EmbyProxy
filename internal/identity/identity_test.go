@@ -7,24 +7,55 @@ import (
 	"testing"
 )
 
-func TestRewriteMediaBrowserAuthorizationSupportsEmbyPrefix(t *testing.T) {
-	snap := Snapshot{
-		ClientName:    "Yamby",
-		ClientVersion: "2.0.3.4",
-		DeviceName:    "Android",
-		DeviceID:      "synthetic-yamby-device-id",
+func TestRewriteMediaBrowserAuthorization(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		snap    Snapshot
+		wants   []string
+		rejects []string
+	}{
+		{
+			name: "yamby unquotes fields",
+			raw:  `Emby UserId=user,Client="Synthetic Client",Device="SYNTHETIC-PC",DeviceId="synthetic-source-device-id",Version="1.0"`,
+			snap: Snapshot{
+				Profile:       DefaultProfile,
+				ClientName:    "Yamby",
+				ClientVersion: "2.0.4.3",
+				DeviceName:    "Android",
+				DeviceID:      "synthetic-yamby-device-id",
+			},
+			wants:   []string{`Client=Yamby`, `Device=Android`, `DeviceId=synthetic-yamby-device-id`, `Version=2.0.4.3`},
+			rejects: []string{"Synthetic Client", "SYNTHETIC-PC", "synthetic-source-device-id"},
+		},
+		{
+			name: "hills windows quotes fields",
+			raw:  `Emby Client=Original, Device=HOME-PC, DeviceId=original, Version=1.0`,
+			snap: Snapshot{
+				Profile:       "hills_windows",
+				ClientName:    "Hills Windows",
+				ClientVersion: "1.2.4",
+				DeviceName:    "DESKTOP-TEST",
+				DeviceID:      "synthetic-hills-device-id",
+			},
+			wants: []string{`Client="Hills Windows"`, `Device="DESKTOP-TEST"`, `DeviceId="synthetic-hills-device-id"`, `Version="1.2.4"`},
+		},
 	}
-	raw := `Emby Client="Synthetic Client", Device="SYNTHETIC-PC", DeviceId="synthetic-source-device-id", Version="1.2.0"`
 
-	got := RewriteMediaBrowserAuthorization(raw, snap)
-
-	for _, want := range []string{`Client="Yamby"`, `Device="Android"`, `DeviceId="synthetic-yamby-device-id"`, `Version="2.0.3.4"`} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("rewritten authorization missing %s: %s", want, got)
-		}
-	}
-	if strings.Contains(got, "Synthetic Client") || strings.Contains(got, "SYNTHETIC-PC") || strings.Contains(got, "synthetic-source-device-id") {
-		t.Fatalf("rewritten authorization still contains original identity: %s", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RewriteMediaBrowserAuthorization(tt.raw, tt.snap)
+			for _, want := range tt.wants {
+				if !strings.Contains(got, want) {
+					t.Fatalf("rewritten authorization missing %s: %s", want, got)
+				}
+			}
+			for _, reject := range tt.rejects {
+				if strings.Contains(got, reject) {
+					t.Fatalf("rewritten authorization still contains %s: %s", reject, got)
+				}
+			}
+		})
 	}
 }
 
@@ -38,7 +69,7 @@ func TestApplyToHeadersRewritesEmbyAuthorization(t *testing.T) {
 
 	for _, key := range []string{"Authorization", "X-Emby-Authorization"} {
 		value := headers.Get(key)
-		if !strings.Contains(value, `Client="Yamby"`) || !strings.Contains(value, `Device="Android"`) {
+		if !strings.Contains(value, `Client=Yamby`) || !strings.Contains(value, `Device=Android`) {
 			t.Fatalf("%s was not rewritten to yamby identity: %s", key, value)
 		}
 	}
@@ -67,7 +98,7 @@ func TestApplyToURLRewritesEmbyAuthorization(t *testing.T) {
 	manager.ApplyToURL(u, "yamby")
 
 	value := u.Query().Get("X-Emby-Authorization")
-	if !strings.Contains(value, `Client="Yamby"`) || !strings.Contains(value, `Device="Android"`) {
+	if !strings.Contains(value, `Client=Yamby`) || !strings.Contains(value, `Device=Android`) {
 		t.Fatalf("URL authorization was not rewritten to yamby identity: %s", value)
 	}
 }

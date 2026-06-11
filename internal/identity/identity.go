@@ -63,10 +63,10 @@ var Profiles = map[string]Profile{
 		Key:            "yamby",
 		Label:          "Yamby Android",
 		ClientName:     "Yamby",
-		ClientVersion:  "2.0.3.4",
+		ClientVersion:  "2.0.4.3",
 		DeviceName:     "Android",
 		DeviceIDLength: 32,
-		UserAgent:      "Yamby/2.0.3.4(Android",
+		UserAgent:      "Yamby/2.0.4.3(Android",
 	},
 	"hills_android": {
 		Key:            "hills_android",
@@ -81,9 +81,9 @@ var Profiles = map[string]Profile{
 		Key:            "hills_windows",
 		Label:          "Hills Windows",
 		ClientName:     "Hills Windows",
-		ClientVersion:  "1.2.1",
+		ClientVersion:  "1.2.4",
 		DeviceIDLength: 32,
-		UserAgent:      "Hills Windows/1.2.1 (windows; 19041.vb_release.191206-1406)",
+		UserAgent:      "Hills Windows/1.2.4 (windows; 19041.vb_release.191206-1406)",
 	},
 }
 
@@ -206,11 +206,12 @@ func RewriteMediaBrowserAuthorization(value string, snap Snapshot) string {
 	if !isEmbyAuthorization(raw) {
 		return value
 	}
+	quoted := mediaBrowserAuthValuesQuoted(snap)
 	out := raw
-	out = setMediaBrowserField(out, "Client", snap.ClientName)
-	out = setMediaBrowserField(out, "Device", snap.DeviceName)
-	out = setMediaBrowserField(out, "DeviceId", snap.DeviceID)
-	out = setMediaBrowserField(out, "Version", snap.ClientVersion)
+	out = setMediaBrowserField(out, "Client", snap.ClientName, quoted)
+	out = setMediaBrowserField(out, "Device", snap.DeviceName, quoted)
+	out = setMediaBrowserField(out, "DeviceId", snap.DeviceID, quoted)
+	out = setMediaBrowserField(out, "Version", snap.ClientVersion, quoted)
 	return out
 }
 
@@ -360,16 +361,34 @@ func createHillsWindowsDeviceName() string {
 	return "DESKTOP-" + strings.ToUpper(randomHex(6))
 }
 
-func setMediaBrowserField(auth, key, value string) string {
-	escaped := strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`)
+func setMediaBrowserField(auth, key, value string, quoted bool) string {
 	re := mediaBrowserFieldRE[key]
 	if re == nil {
 		re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(key) + `\s*=\s*(?:"[^"]*"|[^,\s]+)`)
 	}
-	if re.MatchString(auth) {
-		return re.ReplaceAllString(auth, key+`="`+escaped+`"`)
+	if loc := re.FindStringIndex(auth); loc != nil {
+		return auth[:loc[0]] + key + "=" + formatMediaBrowserValue(value, quoted) + auth[loc[1]:]
 	}
-	return strings.TrimRight(auth, " \t\r\n") + `, ` + key + `="` + escaped + `"`
+	return strings.TrimRight(auth, " \t\r\n") + `, ` + key + "=" + formatMediaBrowserValue(value, quoted)
+}
+
+func formatMediaBrowserValue(value string, quoted bool) string {
+	if quoted {
+		return `"` + escapeMediaBrowserValue(value) + `"`
+	}
+	return value
+}
+
+func escapeMediaBrowserValue(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`)
+}
+
+func mediaBrowserAuthValuesQuoted(snap Snapshot) bool {
+	profile := NormalizeProfile(snap.Profile)
+	if snap.Profile == "" {
+		profile = strings.ToLower(strings.TrimSpace(snap.ClientName))
+	}
+	return strings.HasPrefix(profile, "hills")
 }
 
 func normalizeHeaderKey(value string) string {

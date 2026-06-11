@@ -82,7 +82,7 @@ func TestOutboundHeaderBuildersMapClientIdentityHeaders(t *testing.T) {
 			name:      "authorization",
 			raw:       http.Header{"Authorization": {`Emby Client="Original", Device="Original", DeviceId="original", Version="1.0"`}},
 			wantKey:   "Authorization",
-			wantValue: `Client="Yamby"`,
+			wantValue: `Client=Yamby`,
 		},
 		{
 			name:      "x emby client",
@@ -101,7 +101,7 @@ func TestOutboundHeaderBuildersMapClientIdentityHeaders(t *testing.T) {
 	}
 
 	for _, raw := range []http.Header{{}, {"User-Agent": {"Client/1.0"}}} {
-		if got := buildDirect(raw).Get("User-Agent"); got != "Yamby/2.0.3.4(Android" {
+		if got := buildDirect(raw).Get("User-Agent"); got != "Yamby/2.0.4.3(Android" {
 			t.Fatalf("User-Agent = %q, want impersonated user agent", got)
 		}
 	}
