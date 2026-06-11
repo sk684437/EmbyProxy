@@ -139,18 +139,8 @@ func (m *Manager) Snapshot(profile string) Snapshot {
 	}
 }
 
-func (m *Manager) ApplyToHeaders(headers http.Header, profile string, setEmbyIdentity bool) {
+func (m *Manager) ApplyToHeaders(headers http.Header, profile string) {
 	snap := m.Snapshot(profile)
-	if setEmbyIdentity {
-		headers.Set("X-Emby-Client", snap.ClientName)
-		headers.Set("X-Emby-Client-Version", snap.ClientVersion)
-		headers.Set("X-Emby-Device-Name", snap.DeviceName)
-		headers.Set("X-Emby-Device-Id", snap.DeviceID)
-		setIfPresent(headers, "X-MediaBrowser-Client", snap.ClientName)
-		setIfPresent(headers, "X-MediaBrowser-Client-Version", snap.ClientVersion)
-		setIfPresent(headers, "X-MediaBrowser-Device-Name", snap.DeviceName)
-		setIfPresent(headers, "X-MediaBrowser-Device-Id", snap.DeviceID)
-	}
 	for key, values := range cloneHeader(headers) {
 		if len(values) == 0 {
 			continue
@@ -384,12 +374,6 @@ func setMediaBrowserField(auth, key, value string) string {
 
 func normalizeHeaderKey(value string) string {
 	return strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(value))
-}
-
-func setIfPresent(headers http.Header, key, value string) {
-	if headers.Get(key) != "" {
-		headers.Set(key, value)
-	}
 }
 
 func cloneHeader(in http.Header) http.Header {

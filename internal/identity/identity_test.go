@@ -34,12 +34,25 @@ func TestApplyToHeadersRewritesEmbyAuthorization(t *testing.T) {
 	headers.Set("Authorization", `Emby Client="Synthetic Client", Device="SYNTHETIC-PC", DeviceId="synthetic-source-device-id", Version="1.2.0"`)
 	headers.Set("X-Emby-Authorization", `Emby Client="Synthetic Client", Device="SYNTHETIC-PC", DeviceId="synthetic-source-device-id", Version="1.2.0"`)
 
-	manager.ApplyToHeaders(headers, "yamby", true)
+	manager.ApplyToHeaders(headers, "yamby")
 
 	for _, key := range []string{"Authorization", "X-Emby-Authorization"} {
 		value := headers.Get(key)
 		if !strings.Contains(value, `Client="Yamby"`) || !strings.Contains(value, `Device="Android"`) {
 			t.Fatalf("%s was not rewritten to yamby identity: %s", key, value)
+		}
+	}
+}
+
+func TestApplyToHeadersDoesNotAddMissingEmbyHeaders(t *testing.T) {
+	manager := NewManager(nil)
+	headers := http.Header{}
+
+	manager.ApplyToHeaders(headers, "yamby")
+
+	for _, key := range []string{"Authorization", "X-Emby-Authorization", "X-Emby-Client", "X-Emby-Client-Version", "X-Emby-Device-Name", "X-Emby-Device-Id"} {
+		if got := headers.Get(key); got != "" {
+			t.Fatalf("%s = %q, want empty", key, got)
 		}
 	}
 }

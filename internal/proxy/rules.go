@@ -22,7 +22,6 @@ var (
 	strmStreamPathRE       = regexp.MustCompile(`(?i)/emby/videos/[^/]+/stream\.strm$`)
 	authAPIRE              = regexp.MustCompile(`(?i)/users/authenticate(byname)?`)
 	bearerOrTokenRE        = regexp.MustCompile(`(?i)^(Bearer|Token)\s+`)
-	mediaBrowserAuthRE     = regexp.MustCompile(`(?i)^MediaBrowser\s+`)
 	strmExtRE              = regexp.MustCompile(`(?i)\.strm$`)
 	httpURLRE              = regexp.MustCompile(`(?i)^https?://`)
 	defaultPort80RE        = regexp.MustCompile(`(?i):80$`)

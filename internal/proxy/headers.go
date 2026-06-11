@@ -96,8 +96,8 @@ func deleteHeaders(h http.Header, keys ...string) {
 	}
 }
 
-func setProxyUA(ids *identity.Manager, h http.Header, node storage.Node, clientUA string) {
-	ua := strings.TrimSpace(clientUA)
+func setProxyUA(ids *identity.Manager, h http.Header, node storage.Node) {
+	ua := strings.TrimSpace(h.Get("User-Agent"))
 	if node.Impersonate {
 		ua = ids.Snapshot(node.ImpersonateProfile).UserAgent
 	}
@@ -108,9 +108,9 @@ func setProxyUA(ids *identity.Manager, h http.Header, node storage.Node, clientU
 	h.Set("User-Agent", ua)
 }
 
-func applyIdentity(ids *identity.Manager, h http.Header, node storage.Node, setEmbyIdentity bool) {
+func applyIdentity(ids *identity.Manager, h http.Header, node storage.Node) {
 	if node.Impersonate {
-		ids.ApplyToHeaders(h, node.ImpersonateProfile, setEmbyIdentity)
+		ids.ApplyToHeaders(h, node.ImpersonateProfile)
 	}
 }
 
@@ -128,9 +128,9 @@ func buildCleanProxyHeaders(ids *identity.Manager, raw http.Header, targetURL *u
 		deleteHeaders(h, "Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User")
 	}
 	h.Set("Host", targetURL.Host)
-	setProxyUA(ids, h, node, raw.Get("User-Agent"))
+	setProxyUA(ids, h, node)
 	h.Set("Accept-Encoding", "identity")
-	applyIdentity(ids, h, node, true)
+	applyIdentity(ids, h, node)
 	if rg := raw.Get("Range"); rg != "" {
 		h.Set("Range", rg)
 	}
@@ -152,9 +152,9 @@ func buildDirectOutboundHeaders(ids *identity.Manager, raw http.Header, targetUR
 		"Forwarded", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Connection", "Content-Length", "Origin", "Referer",
 	)
 	h.Set("Host", targetURL.Host)
-	setProxyUA(ids, h, node, raw.Get("User-Agent"))
+	setProxyUA(ids, h, node)
 	h.Set("Accept-Encoding", "identity")
-	applyIdentity(ids, h, node, true)
+	applyIdentity(ids, h, node)
 	if rg := raw.Get("Range"); rg != "" {
 		h.Set("Range", rg)
 	}
@@ -176,7 +176,7 @@ func buildDirectOutboundHeaders(ids *identity.Manager, raw http.Header, targetUR
 		h.Del("Referer")
 	}
 	if mode == "retry-browserish" {
-		setProxyUA(ids, h, node, raw.Get("User-Agent"))
+		setProxyUA(ids, h, node)
 		if h.Get("Referer") == "" && adapter.KeepReferer && adapter.Referer != "" {
 			h.Set("Referer", adapter.Referer)
 		}

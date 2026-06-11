@@ -131,8 +131,8 @@ func buildWebSocketHeaders(ids *identity.Manager, raw http.Header, targetURL *ur
 	stripClientIPHeaders(headers)
 	deleteHeaders(headers, "Connection", "Content-Length", "Host")
 	headers.Set("Host", targetURL.Host)
-	setProxyUA(ids, headers, node, raw.Get("User-Agent"))
-	applyIdentity(ids, headers, node, true)
+	setProxyUA(ids, headers, node)
+	applyIdentity(ids, headers, node)
 	headers.Set("Connection", "Upgrade")
 	headers.Set("Upgrade", "websocket")
 	return headers

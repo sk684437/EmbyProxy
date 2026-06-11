@@ -423,7 +423,6 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	if err != nil {
 		return nil, err
 	}
-	ua := r.Header.Get("User-Agent")
 	isCapy := isCapyClient(r)
 	clientIP := auth.ClientIP(r, h.trustsProxy(ctx))
 	reqOrigin := r.Header.Get("Origin")
@@ -489,15 +488,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		}
 	}
 	headers.Set("Host", base.Host)
-	authz := headers.Get("Authorization")
-	xEmby := headers.Get("X-Emby-Authorization")
-	if !isAuthAPI && mediaBrowserAuthRE.MatchString(authz) && xEmby == "" {
-		headers.Set("X-Emby-Authorization", authz)
-	}
-	if !isAuthAPI && authz == "" && xEmby != "" {
-		headers.Set("Authorization", xEmby)
-	}
-	applyIdentity(h.ids, headers, node, true)
+	applyIdentity(h.ids, headers, node)
 	if needCompatOrigin {
 		if isPlaybackAPI {
 			deleteHeaders(headers, "Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User")
@@ -518,7 +509,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 			}
 		}
 	}
-	setProxyUA(h.ids, headers, node, ua)
+	setProxyUA(h.ids, headers, node)
 	headers.Set("Accept-Encoding", "identity")
 	if isPlaybackAPI {
 		deleteHeaders(headers, "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Priority")
@@ -574,7 +565,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		}
 	}
 	if res.StatusCode == http.StatusForbidden {
-		res, currentHeaders, err = h.retryGeneral403(ctx, r, node, parsed, finalURL, headers, body, env, ua, base)
+		res, currentHeaders, err = h.retryGeneral403(ctx, r, node, parsed, finalURL, headers, body, env, base)
 		if err != nil {
 			return nil, err
 		}

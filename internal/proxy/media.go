@@ -24,7 +24,7 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 	stripClientIPHeaders(headers)
 	headers.Del("Range")
 	headers.Del("If-Range")
-	applyIdentity(h.ids, headers, node, true)
+	applyIdentity(h.ids, headers, node)
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-source", "targetUrl": finalURL.String(), "outboundHeaders": headers})
 	res, err := h.doFetch(ctx, h.playbackActionClient, finalURL, http.MethodGet, headers, nil)
 	if err != nil {
@@ -86,8 +86,8 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 			hh := cloneHeader(baseHeaders)
 			hh.Set("Accept", "application/json, text/plain, */*")
 			hh.Set("Content-Type", "application/json;charset=utf-8")
-			setProxyUA(h.ids, hh, node, r.Header.Get("User-Agent"))
-			applyIdentity(h.ids, hh, node, true)
+			setProxyUA(h.ids, hh, node)
+			applyIdentity(h.ids, hh, node)
 			if mode == "with-origin" {
 				hh.Set("Origin", reqBase)
 				hh.Set("Referer", reqBase+"/")
@@ -119,7 +119,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			hClean.Set(key, value)
 		}
 	}
-	applyIdentity(h.ids, hClean, node, true)
+	applyIdentity(h.ids, hClean, node)
 	if finalURL.Query().Get("api_key") == "" {
 		if apiKey := r.URL.Query().Get("api_key"); apiKey != "" {
 			q := finalURL.Query()
@@ -228,10 +228,10 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		hImg := cloneHeader(hClean)
 		stripClientIPHeaders(hImg)
 		deleteHeaders(hImg, "Origin", "Referer", "Range", "If-Range")
-		setProxyUA(h.ids, hImg, node, r.Header.Get("User-Agent"))
+		setProxyUA(h.ids, hImg, node)
 		hImg.Set("Accept", "image/avif,image/webp,image/apng,image*;q=0.8")
 		hImg.Set("Accept-Encoding", "identity")
-		applyIdentity(h.ids, hImg, node, true)
+		applyIdentity(h.ids, hImg, node)
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-clean", "targetUrl": finalURL.String(), "outboundHeaders": hImg})
 		res, err = h.doFetch(ctx, h.imageFollowClient, finalURL, r.Method, hImg, nil)
 		if err != nil {
@@ -335,11 +335,11 @@ func shouldLogStreamingRangeFields(finalURL *url.URL, isStreamingMedia bool) boo
 	return !strings.Contains(path, "/sessions/playing")
 }
 
-func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, headers http.Header, body []byte, env config.ProxyEnv, ua string, base *url.URL) (*http.Response, http.Header, error) {
+func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, finalURL *url.URL, headers http.Header, body []byte, env config.ProxyEnv, base *url.URL) (*http.Response, http.Header, error) {
 	h3 := cloneHeader(headers)
 	stripClientIPHeaders(h3)
 	h3.Set("Host", base.Host)
-	setProxyUA(h.ids, h3, node, ua)
+	setProxyUA(h.ids, h3, node)
 	if rg := r.Header.Get("Range"); rg != "" {
 		h3.Set("Range", rg)
 	}
@@ -357,7 +357,7 @@ func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node sto
 		h4 := cloneHeader(h3)
 		stripClientIPHeaders(h4)
 		h4.Set("Host", base.Host)
-		setProxyUA(h.ids, h4, node, ua)
+		setProxyUA(h.ids, h4, node)
 		h4.Set("Referer", originOf(base)+"/")
 		h4.Set("Origin", originOf(base))
 		if rg := r.Header.Get("Range"); rg != "" {
