@@ -1,10 +1,17 @@
 package capture
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"embyproxy/internal/config"
 	"embyproxy/internal/storage"
@@ -68,4 +75,152 @@ func TestInboundHeadersToMapIncludesRequestFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSummarizeResponseBufferDecodesCompressedTextCopy(t *testing.T) {
+	const body = `{"ok":true,"message":"decoded"}`
+	tests := []struct {
+		name            string
+		contentEncoding string
+		encoded         []byte
+	}{
+		{name: "gzip", contentEncoding: "gzip", encoded: gzipTestBytes(t, []byte(body))},
+		{name: "brotli", contentEncoding: "br", encoded: brotliTestBytes(t, []byte(body))},
+		{name: "zstd", contentEncoding: "zstd", encoded: zstdTestBytes(t, []byte(body))},
+		{name: "deflate zlib", contentEncoding: "deflate", encoded: zlibTestBytes(t, []byte(body))},
+		{name: "deflate raw", contentEncoding: "deflate", encoded: rawDeflateTestBytes(t, []byte(body))},
+		{name: "encoding chain", contentEncoding: "gzip, br", encoded: brotliTestBytes(t, gzipTestBytes(t, []byte(body)))},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := http.Header{
+				"Content-Encoding": []string{tt.contentEncoding},
+				"Content-Type":     []string{"application/json; charset=utf-8"},
+			}
+
+			got := summarizeResponseBuffer(tt.encoded, int64(len(tt.encoded)), headers, false, storage.DefaultSystemConfig())
+
+			if got.Kind != "json" {
+				t.Fatalf("Kind = %q, want json", got.Kind)
+			}
+			if got.Text != body {
+				t.Fatalf("Text = %q, want decoded body", got.Text)
+			}
+			if got.Bytes != int64(len(body)) {
+				t.Fatalf("Bytes = %d, want decoded length %d", got.Bytes, len(body))
+			}
+		})
+	}
+}
+
+func TestSummarizeResponseBufferDoesNotDecodeTruncatedResponse(t *testing.T) {
+	const body = `{"ok":true}`
+	encoded := gzipTestBytes(t, []byte(body))
+	headers := http.Header{
+		"Content-Encoding": []string{"gzip"},
+		"Content-Type":     []string{"application/json"},
+	}
+
+	got := summarizeResponseBuffer(encoded, int64(len(encoded)), headers, true, storage.DefaultSystemConfig())
+
+	if got.Kind != "truncated" {
+		t.Fatalf("Kind = %q, want truncated", got.Kind)
+	}
+	if got.Text != "" {
+		t.Fatalf("Text = %q, want empty for truncated compressed response", got.Text)
+	}
+}
+
+func TestSummarizeResponseBufferLimitsDecodedResponse(t *testing.T) {
+	encoded := gzipTestBytes(t, []byte(`{"message":"decoded body is too large"}`))
+	headers := http.Header{
+		"Content-Encoding": []string{"gzip"},
+		"Content-Type":     []string{"application/json"},
+	}
+	cfg := storage.DefaultSystemConfig()
+	cfg.TrafficCaptureBodyMax = 8
+
+	got := summarizeResponseBuffer(encoded, int64(len(encoded)), headers, false, cfg)
+
+	if got.Kind != "truncated" {
+		t.Fatalf("Kind = %q, want truncated", got.Kind)
+	}
+	if !got.Truncated {
+		t.Fatal("Truncated = false, want true")
+	}
+	if got.Text != "" {
+		t.Fatalf("Text = %q, want empty for oversized decoded response", got.Text)
+	}
+}
+
+func gzipTestBytes(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := gzip.NewWriter(&buf)
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func brotliTestBytes(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := brotli.NewWriter(&buf)
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func zstdTestBytes(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func zlibTestBytes(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := zlib.NewWriter(&buf)
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func rawDeflateTestBytes(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer, err := flate.NewWriter(&buf, flate.DefaultCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }

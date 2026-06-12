@@ -58,6 +58,19 @@ func TestRedactURLRedactsSignedURLQuery(t *testing.T) {
 	}
 }
 
+func TestRedactURLRedactsUserIDQuery(t *testing.T) {
+	got := RedactURL("/node/secret/emby/Sessions/Playing/Progress?UserId=user-secret&X-Emby-Token=token&reqformat=json")
+
+	if strings.Contains(got, "user-secret") || strings.Contains(got, "token") {
+		t.Fatalf("RedactURL() leaked sensitive query values: %q", got)
+	}
+	for _, want := range []string{"UserId=<redacted>", "X-Emby-Token=<redacted>", "reqformat=json"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RedactURL() = %q, want to contain %q", got, want)
+		}
+	}
+}
+
 func TestFormatValueRedactsEmbeddedURLInErrorMeta(t *testing.T) {
 	got := formatValue(`Get "https://emby.example/emby/Items/1?X-Emby-Token=secret-token&fields=ShareLevel": context canceled`)
 

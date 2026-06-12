@@ -3,6 +3,9 @@ package capture
 import (
 	"bufio"
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
@@ -60,12 +66,12 @@ type Record struct {
 	Impersonated    bool           `json:"impersonated"`
 	Stage           string         `json:"stage"`
 	Method          string         `json:"method"`
+	Status          int            `json:"status"`
 	InboundURL      string         `json:"inboundUrl"`
 	InboundHeaders  map[string]any `json:"inboundHeaders"`
 	InboundBody     BodySummary    `json:"inboundBody"`
 	TargetURL       string         `json:"targetUrl"`
 	OutboundHeaders map[string]any `json:"outboundHeaders"`
-	Status          int            `json:"status"`
 	ResponseHeaders map[string]any `json:"responseHeaders"`
 	ResponseBody    BodySummary    `json:"responseBody"`
 	ResponseBytes   int64          `json:"responseBytes"`
@@ -241,14 +247,14 @@ func (r *Recorder) appendHTTP(req *http.Request, cw *captureWriter, cfg storage.
 		Impersonated:    boolMeta(meta, "impersonated", false),
 		Stage:           stringMeta(meta, "stage", ""),
 		Method:          strings.ToUpper(req.Method),
+		Status:          cw.status,
 		InboundURL:      inboundURL(req, meta),
 		InboundHeaders:  inboundHeadersToMap(req),
 		InboundBody:     inboundBody,
 		TargetURL:       stringMeta(meta, "targetUrl", ""),
 		OutboundHeaders: headersToMap(headerMeta(meta["outboundHeaders"])),
-		Status:          cw.status,
 		ResponseHeaders: headersToMap(responseHeaders),
-		ResponseBody:    summarizeBuffer(st.ResponseBody.Bytes(), st.ResponseBytes, responseHeaders.Get("Content-Type"), st.Truncated || cw.status == http.StatusPartialContent || responseHeaders.Get("Content-Range") != "", cfg),
+		ResponseBody:    summarizeResponseBuffer(st.ResponseBody.Bytes(), st.ResponseBytes, responseHeaders, st.Truncated || cw.status == http.StatusPartialContent || responseHeaders.Get("Content-Range") != "", cfg),
 		ResponseBytes:   st.ResponseBytes,
 		DurationMS:      float64(time.Since(st.StartedAt).Microseconds()) / 1000,
 		Meta:            meta["meta"],
@@ -328,6 +334,89 @@ func summarizeBuffer(buf []byte, bytesLen int64, contentType string, truncated b
 		kind = "json"
 	}
 	return BodySummary{Kind: kind, Bytes: bytesLen, SHA256: hex.EncodeToString(sha[:]), Text: text}
+}
+
+func summarizeResponseBuffer(buf []byte, bytesLen int64, headers http.Header, truncated bool, cfg storage.SystemConfig) BodySummary {
+	contentType := headers.Get("Content-Type")
+	if truncated || bytesLen == 0 {
+		return summarizeBuffer(buf, bytesLen, contentType, truncated, cfg)
+	}
+	encodings := responseContentEncodings(headers.Get("Content-Encoding"))
+	if len(encodings) == 0 {
+		return summarizeBuffer(buf, bytesLen, contentType, false, cfg)
+	}
+	decoded, decodedTruncated, err := decodeCapturedResponseBody(buf, encodings, captureBodyMax(cfg))
+	if err != nil {
+		sha := sha256.Sum256(buf)
+		return BodySummary{Kind: "binary", Bytes: bytesLen, SHA256: hex.EncodeToString(sha[:])}
+	}
+	if decodedTruncated {
+		return summarizeBuffer(decoded, int64(len(decoded)), contentType, true, cfg)
+	}
+	return summarizeBuffer(decoded, int64(len(decoded)), contentType, false, cfg)
+}
+
+func responseContentEncodings(value string) []string {
+	parts := strings.Split(value, ",")
+	encodings := make([]string, 0, len(parts))
+	for _, part := range parts {
+		encoding := strings.ToLower(strings.TrimSpace(part))
+		if encoding == "" || encoding == "identity" {
+			continue
+		}
+		encodings = append(encodings, encoding)
+	}
+	return encodings
+}
+
+func decodeCapturedResponseBody(encoded []byte, encodings []string, max int64) ([]byte, bool, error) {
+	decoded := encoded
+	for i := len(encodings) - 1; i >= 0; i-- {
+		reader, err := capturedResponseDecoder(decoded, encodings[i])
+		if err != nil {
+			return nil, false, err
+		}
+		decoded, err = io.ReadAll(io.LimitReader(reader, max+1))
+		_ = reader.Close()
+		if err != nil {
+			return nil, false, err
+		}
+		if int64(len(decoded)) > max {
+			return decoded, true, nil
+		}
+	}
+	return decoded, false, nil
+}
+
+func capturedResponseDecoder(encoded []byte, encoding string) (io.ReadCloser, error) {
+	switch encoding {
+	case "br":
+		return io.NopCloser(brotli.NewReader(bytes.NewReader(encoded))), nil
+	case "zstd":
+		reader, err := zstd.NewReader(bytes.NewReader(encoded))
+		if err != nil {
+			return nil, err
+		}
+		return zstdReadCloser{Decoder: reader}, nil
+	case "gzip", "x-gzip":
+		return gzip.NewReader(bytes.NewReader(encoded))
+	case "deflate":
+		if reader, err := zlib.NewReader(bytes.NewReader(encoded)); err == nil {
+			return reader, nil
+		}
+		return flate.NewReader(bytes.NewReader(encoded)), nil
+	default:
+		return nil, fmt.Errorf("unsupported content encoding: %s", encoding)
+	}
+}
+
+type zstdReadCloser struct {
+	*zstd.Decoder
+}
+
+func (r zstdReadCloser) Close() error {
+	r.Decoder.Close()
+	return nil
 }
 
 func inferMode(req *http.Request, meta map[string]any) string {
