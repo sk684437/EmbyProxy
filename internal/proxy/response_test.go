@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +16,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
@@ -170,6 +175,178 @@ func TestSendResponseDropsContentLengthForDecodedBody(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "text/plain" {
 		t.Fatalf("Content-Type = %q, want text/plain", got)
 	}
+}
+
+func TestSendResponsePreservesContentEncodingForEncodedBody(t *testing.T) {
+	body := gzipTestBody(t, "encoded")
+	res := bytesResponse(http.StatusOK, body, http.Header{
+		"Content-Encoding": []string{"gzip"},
+		"Content-Length":   []string{fmt.Sprintf("%d", len(body))},
+		"Content-Type":     []string{"text/plain"},
+	})
+	rec := httptest.NewRecorder()
+
+	(&Handler{}).sendResponse(rec, httptest.NewRequest(http.MethodGet, "/text", nil), res)
+
+	if got := rec.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got != fmt.Sprintf("%d", len(body)) {
+		t.Fatalf("Content-Length = %q, want %d", got, len(body))
+	}
+	if !bytes.Equal(rec.Body.Bytes(), body) {
+		t.Fatalf("body was not preserved as encoded bytes")
+	}
+}
+
+func TestReadProxyRewriteResponseBodyDecodesEncodedBody(t *testing.T) {
+	tests := []struct {
+		name            string
+		contentEncoding string
+		body            []byte
+	}{
+		{
+			name:            "gzip",
+			contentEncoding: "gzip",
+			body:            gzipTestBody(t, "decoded"),
+		},
+		{
+			name:            "brotli",
+			contentEncoding: "br",
+			body:            brotliTestBody(t, "decoded"),
+		},
+		{
+			name:            "zstd",
+			contentEncoding: "zstd",
+			body:            zstdTestBody(t, "decoded"),
+		},
+		{
+			name:            "encoding chain",
+			contentEncoding: "gzip, br",
+			body:            brotliTestBytes(t, gzipTestBody(t, "decoded")),
+		},
+		{
+			name:            "encoding chain with zstd",
+			contentEncoding: "gzip, zstd",
+			body:            zstdTestBytes(t, gzipTestBody(t, "decoded")),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := bytesResponse(http.StatusOK, tt.body, http.Header{
+				"Content-Encoding": []string{tt.contentEncoding},
+				"Content-Type":     []string{"application/json"},
+			})
+
+			body, encodings, err := readProxyRewriteResponseBody(res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(encodings, ", "); got != tt.contentEncoding {
+				t.Fatalf("encodings = %q, want %q", got, tt.contentEncoding)
+			}
+			if got := string(body); got != "decoded" {
+				t.Fatalf("body = %q, want decoded", got)
+			}
+		})
+	}
+}
+
+func TestEncodeProxyRewriteResponseBodyRecompressesWithOriginalEncoding(t *testing.T) {
+	tests := []struct {
+		name            string
+		contentEncoding string
+	}{
+		{name: "gzip", contentEncoding: "gzip"},
+		{name: "brotli", contentEncoding: "br"},
+		{name: "zstd", contentEncoding: "zstd"},
+		{name: "encoding chain", contentEncoding: "gzip, br"},
+		{name: "encoding chain with zstd", contentEncoding: "gzip, zstd"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := http.Header{}
+			headers.Set("Content-Encoding", tt.contentEncoding)
+			headers.Set("Content-Length", "999")
+			headers.Set("Content-MD5", "stale")
+			encodings := responseContentEncodings(tt.contentEncoding)
+
+			encoded, err := encodeProxyRewriteResponseBody([]byte("rewritten"), encodings, headers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := decodeProxyRewriteBody(encoded, encodings)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := string(decoded); got != "rewritten" {
+				t.Fatalf("decoded body = %q, want rewritten", got)
+			}
+			if got := headers.Get("Content-Encoding"); got != tt.contentEncoding {
+				t.Fatalf("Content-Encoding = %q, want %q", got, tt.contentEncoding)
+			}
+			if got := headers.Get("Content-Length"); got != fmt.Sprintf("%d", len(encoded)) {
+				t.Fatalf("Content-Length = %q, want %d", got, len(encoded))
+			}
+			if got := headers.Get("Content-MD5"); got != "" {
+				t.Fatalf("Content-MD5 = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func gzipTestBody(t *testing.T, body string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := gzip.NewWriter(&buf)
+	if _, err := writer.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func brotliTestBody(t *testing.T, body string) []byte {
+	t.Helper()
+	return brotliTestBytes(t, []byte(body))
+}
+
+func brotliTestBytes(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := brotli.NewWriter(&buf)
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func zstdTestBody(t *testing.T, body string) []byte {
+	t.Helper()
+	return zstdTestBytes(t, []byte(body))
+}
+
+func zstdTestBytes(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func TestBodyCopyUsesSharedBufferSize(t *testing.T) {
@@ -695,6 +872,9 @@ func TestNewProxyHTTPClientUsesTransportTimeouts(t *testing.T) {
 	}
 	if transport.ResponseHeaderTimeout <= 0 {
 		t.Fatal("ResponseHeaderTimeout was not configured")
+	}
+	if !transport.DisableCompression {
+		t.Fatal("DisableCompression should preserve client Accept-Encoding exactly")
 	}
 	if transport.TLSHandshakeTimeout <= 0 {
 		t.Fatal("TLSHandshakeTimeout was not configured")
@@ -1459,12 +1639,12 @@ func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 		t.Fatalf("finishGeneralResponse() error = %v", err)
 	}
 	defer out.Body.Close()
-	if got := out.Header.Get("Content-Length"); got != "" {
-		t.Fatalf("Content-Length = %q, want empty after body rewrite", got)
-	}
 	body, err := io.ReadAll(out.Body)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := out.Header.Get("Content-Length"), fmt.Sprintf("%d", len(body)); got != want {
+		t.Fatalf("Content-Length = %q, want %q", got, want)
 	}
 	if strings.Contains(string(body), "upstream.example") || strings.Contains(string(body), "192.168.1.2") {
 		t.Fatalf("system info leaked upstream address: %s", body)
@@ -1479,6 +1659,37 @@ func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 	}
 	if payload["LocalAddress"] != want {
 		t.Fatalf("LocalAddress = %q, want %q", payload["LocalAddress"], want)
+	}
+}
+
+func TestFinishGeneralResponseDoesNotRewritePartialSystemInfo(t *testing.T) {
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
+	finalURL, err := url.Parse("https://upstream.example/emby/System/Info/Public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"WanAddress":"https://upstream.example"}`)
+	res := bytesResponse(http.StatusPartialContent, raw, http.Header{
+		"Content-Type":   []string{"application/json"},
+		"Content-Range":  []string{"bytes 0-39/40"},
+		"Content-Length": []string{fmt.Sprintf("%d", len(raw))},
+	})
+
+	out, err := h.finishGeneralResponse(context.Background(), req, res, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/System/Info/Public"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+	if err != nil {
+		t.Fatalf("finishGeneralResponse() error = %v", err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, raw) {
+		t.Fatalf("body = %q, want original partial body %q", body, raw)
+	}
+	if got := out.Header.Get("Content-Range"); got != "bytes 0-39/40" {
+		t.Fatalf("Content-Range = %q, want original range", got)
 	}
 }
 

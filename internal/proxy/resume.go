@@ -263,7 +263,6 @@ func newStreamResumeRequest(base *http.Request, plan streamResumePlan, nextStart
 	out.RequestURI = ""
 	out.Header = base.Header.Clone()
 	out.Header.Del("Content-Length")
-	out.Header.Set("Accept-Encoding", "identity")
 	out.Header.Set("Range", plan.resumeRange(nextStart))
 	if plan.validator.ifRange != "" {
 		out.Header.Set("If-Range", plan.validator.ifRange)

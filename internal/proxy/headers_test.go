@@ -107,6 +107,56 @@ func TestOutboundHeaderBuildersMapClientIdentityHeaders(t *testing.T) {
 	}
 }
 
+func TestOutboundHeaderBuildersPreserveClientCompressionAndHopByHopHeaders(t *testing.T) {
+	targetURL, err := url.Parse("https://upstream.example/emby/Items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := identity.NewManager(nil)
+	node := storage.Node{Impersonate: true, ImpersonateProfile: identity.DefaultProfile}
+	raw := http.Header{
+		"Accept-Encoding":  {"gzip, br"},
+		"Connection":       {"Keep-Alive"},
+		"Keep-Alive":       {"timeout=5"},
+		"Proxy-Connection": {"keep-alive"},
+		"Te":               {"trailers"},
+		"User-Agent":       {"Original/1.0"},
+	}
+	tests := []struct {
+		name  string
+		build func(http.Header) http.Header
+	}{
+		{
+			name: "clean proxy",
+			build: func(raw http.Header) http.Header {
+				return buildCleanProxyHeaders(ids, raw, targetURL, node, config.ProxyEnv{}, false)
+			},
+		},
+		{
+			name: "direct",
+			build: func(raw http.Header) http.Header {
+				return buildDirectOutboundHeaders(ids, raw, targetURL, config.ProxyEnv{}, node, "normal")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := tt.build(raw)
+			for key, want := range map[string]string{
+				"Accept-Encoding":  "gzip, br",
+				"Connection":       "Keep-Alive",
+				"Keep-Alive":       "timeout=5",
+				"Proxy-Connection": "keep-alive",
+				"Te":               "trailers",
+			} {
+				if got := headers.Get(key); got != want {
+					t.Fatalf("%s = %q, want passthrough %q", key, got, want)
+				}
+			}
+		})
+	}
+}
+
 func assertNoIdentityHeaders(t *testing.T, headers http.Header, except ...string) {
 	t.Helper()
 	skip := map[string]bool{}

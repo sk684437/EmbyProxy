@@ -123,13 +123,12 @@ func applyIdentityToURL(ids *identity.Manager, u *url.URL, node storage.Node) {
 func buildCleanProxyHeaders(ids *identity.Manager, raw http.Header, targetURL *url.URL, node storage.Node, env config.ProxyEnv, streaming bool) http.Header {
 	h := cloneHeader(raw)
 	stripClientIPHeaders(h)
-	deleteHeaders(h, "Connection", "Content-Length")
+	deleteHeaders(h, "Content-Length")
 	if !streaming {
 		deleteHeaders(h, "Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User")
 	}
 	h.Set("Host", targetURL.Host)
 	setProxyUA(ids, h, node)
-	h.Set("Accept-Encoding", "identity")
 	applyIdentity(ids, h, node)
 	if rg := raw.Get("Range"); rg != "" {
 		h.Set("Range", rg)
@@ -149,11 +148,10 @@ func buildDirectOutboundHeaders(ids *identity.Manager, raw http.Header, targetUR
 	stripClientIPHeaders(h)
 	deleteHeaders(h,
 		"X-Forwarded-For", "X-Real-IP", "X-Forwarded-Proto", "X-Forwarded-Host", "X-Forwarded-Port",
-		"Forwarded", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Connection", "Content-Length", "Origin", "Referer",
+		"Forwarded", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Content-Length", "Origin", "Referer",
 	)
 	h.Set("Host", targetURL.Host)
 	setProxyUA(ids, h, node)
-	h.Set("Accept-Encoding", "identity")
 	applyIdentity(ids, h, node)
 	if rg := raw.Get("Range"); rg != "" {
 		h.Set("Range", rg)
@@ -176,7 +174,6 @@ func buildDirectOutboundHeaders(ids *identity.Manager, raw http.Header, targetUR
 		h.Del("Referer")
 	}
 	if mode == "retry-browserish" {
-		setProxyUA(ids, h, node)
 		if h.Get("Referer") == "" && adapter.KeepReferer && adapter.Referer != "" {
 			h.Set("Referer", adapter.Referer)
 		}
@@ -248,13 +245,12 @@ func rewriteSetCookieHeaders(headers http.Header, prefix string) {
 }
 
 func copyResponseHeaders(dst http.Header, src http.Header, bodyDecoded bool) {
-	skipContentLength := bodyDecoded || src.Get("Content-Encoding") != "" || src.Get("Transfer-Encoding") != ""
 	for key, values := range src {
 		lower := strings.ToLower(key)
-		if lower == "transfer-encoding" || lower == "content-encoding" || lower == "content-md5" {
+		if lower == "transfer-encoding" {
 			continue
 		}
-		if lower == "content-length" && skipContentLength {
+		if bodyDecoded && isDecodedBodyHeader(lower) {
 			continue
 		}
 		for _, value := range values {

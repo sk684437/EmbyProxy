@@ -1,13 +1,21 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"embyproxy/internal/auth"
 	"embyproxy/internal/capture"
@@ -114,12 +122,6 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	isStreamingMedia := isPlaybackStreamRequest(r, finalURL)
 	probeDirectExternalRedirect := node.DirectExternal && isPlaybackAPI && !isImageAPI && isStreamingMedia
 	hClean := buildCleanProxyHeaders(h.ids, r.Header, finalURL, node, env, isStreamingMedia)
-	for _, key := range []string{"X-Emby-Authorization", "X-Emby-Token", "X-MediaBrowser-Token", "Authorization", "Cookie"} {
-		if value := r.Header.Get(key); value != "" {
-			hClean.Set(key, value)
-		}
-	}
-	applyIdentity(h.ids, hClean, node)
 	if finalURL.Query().Get("api_key") == "" {
 		if apiKey := r.URL.Query().Get("api_key"); apiKey != "" {
 			q := finalURL.Query()
@@ -230,7 +232,6 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		deleteHeaders(hImg, "Origin", "Referer", "Range", "If-Range")
 		setProxyUA(h.ids, hImg, node)
 		hImg.Set("Accept", "image/avif,image/webp,image/apng,image*;q=0.8")
-		hImg.Set("Accept-Encoding", "identity")
 		applyIdentity(h.ids, hImg, node)
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-clean", "targetUrl": finalURL.String(), "outboundHeaders": hImg})
 		res, err = h.doFetch(ctx, h.imageFollowClient, finalURL, r.Method, hImg, nil)
@@ -407,40 +408,27 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 		}
 	}
 	ct := strings.ToLower(headers.Get("Content-Type"))
-	if res.StatusCode >= 200 && res.StatusCode < 300 && (strings.Contains(ct, "application/vnd.apple.mpegurl") || strings.Contains(ct, "application/x-mpegurl") || strings.Contains(ct, "application/dash+xml")) {
-		defer res.Body.Close()
-		raw, err := readProxyRewriteBody(res.Body)
-		if err != nil {
-			return nil, err
-		}
-		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "manifest-rewrite", "targetUrl": finalURL.String(), "outboundHeaders": currentHeaders})
-		rewritten := h.rewriteBodyLinks(ctx, string(raw), schemeHost(r)+r.URL.RequestURI(), node, parsed.Name, node.Secret)
-		headers.Del("Content-Length")
-		return bytesResponse(res.StatusCode, []byte(rewritten), headers), nil
+	rewriteWithStage := func(stage string, rewrite func([]byte) []byte) (*http.Response, error) {
+		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": finalURL.String(), "outboundHeaders": currentHeaders})
+		return rewriteProxyResponseBody(res, headers, rewrite)
 	}
-	if res.StatusCode >= 200 && res.StatusCode < 300 && strings.Contains(ct, "application/json") && strings.Contains(strings.ToLower(r.URL.RequestURI()), "/playbackinfo") {
-		defer res.Body.Close()
-		raw, err := readProxyRewriteBody(res.Body)
-		if err != nil {
-			return nil, err
-		}
-		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "playbackinfo-rewrite", "targetUrl": finalURL.String(), "outboundHeaders": currentHeaders})
-		rewritten := h.rewriteBodyLinks(ctx, string(raw), schemeHost(r)+r.URL.RequestURI(), node, parsed.Name, node.Secret)
-		headers.Del("Content-Length")
-		return bytesResponse(res.StatusCode, []byte(rewritten), headers), nil
+	if res.StatusCode == http.StatusOK && (strings.Contains(ct, "application/vnd.apple.mpegurl") || strings.Contains(ct, "application/x-mpegurl") || strings.Contains(ct, "application/dash+xml")) {
+		return rewriteWithStage("manifest-rewrite", func(raw []byte) []byte {
+			rewritten := h.rewriteBodyLinks(ctx, string(raw), schemeHost(r)+r.URL.RequestURI(), node, parsed.Name, node.Secret)
+			return []byte(rewritten)
+		})
 	}
-	if res.StatusCode >= 200 && res.StatusCode < 300 && strings.Contains(ct, "application/json") && isSystemInfoPath(parsed.Path) {
-		defer res.Body.Close()
-		raw, err := readProxyRewriteBody(res.Body)
-		if err != nil {
-			return nil, err
-		}
-		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "systeminfo-rewrite", "targetUrl": finalURL.String(), "outboundHeaders": currentHeaders})
-		rewritten, changed := rewriteSystemInfoAddresses(raw, schemeHost(r)+selfPrefix)
-		if changed {
-			headers.Del("Content-Length")
-		}
-		return bytesResponse(res.StatusCode, rewritten, headers), nil
+	if res.StatusCode == http.StatusOK && strings.Contains(ct, "application/json") && strings.Contains(strings.ToLower(r.URL.RequestURI()), "/playbackinfo") {
+		return rewriteWithStage("playbackinfo-rewrite", func(raw []byte) []byte {
+			rewritten := h.rewriteBodyLinks(ctx, string(raw), schemeHost(r)+r.URL.RequestURI(), node, parsed.Name, node.Secret)
+			return []byte(rewritten)
+		})
+	}
+	if res.StatusCode == http.StatusOK && strings.Contains(ct, "application/json") && isSystemInfoPath(parsed.Path) {
+		return rewriteWithStage("systeminfo-rewrite", func(raw []byte) []byte {
+			rewritten, _ := rewriteSystemInfoAddresses(raw, schemeHost(r)+selfPrefix)
+			return rewritten
+		})
 	}
 	res.Header = headers
 	if isStreaming {
@@ -458,6 +446,150 @@ func readProxyRewriteBody(body io.Reader) ([]byte, error) {
 		return nil, errProxyRewriteBodyTooLarge
 	}
 	return raw, nil
+}
+
+func rewriteProxyResponseBody(res *http.Response, headers http.Header, rewrite func([]byte) []byte) (*http.Response, error) {
+	defer res.Body.Close()
+	raw, encodings, err := readProxyRewriteResponseBody(res)
+	if err != nil {
+		return nil, err
+	}
+	body, err := encodeProxyRewriteResponseBody(rewrite(raw), encodings, headers)
+	if err != nil {
+		return nil, err
+	}
+	return bytesResponse(res.StatusCode, body, headers), nil
+}
+
+func readProxyRewriteResponseBody(res *http.Response) ([]byte, []string, error) {
+	if res == nil || res.Body == nil {
+		return nil, nil, nil
+	}
+	if res.Uncompressed {
+		raw, err := readProxyRewriteBody(res.Body)
+		return raw, nil, err
+	}
+	encodings := responseContentEncodings(res.Header.Get("Content-Encoding"))
+	if len(encodings) == 0 {
+		raw, err := readProxyRewriteBody(res.Body)
+		return raw, nil, err
+	}
+	encoded, err := readProxyRewriteBody(res.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	decoded, err := decodeProxyRewriteBody(encoded, encodings)
+	return decoded, encodings, err
+}
+
+func responseContentEncodings(value string) []string {
+	parts := strings.Split(value, ",")
+	encodings := make([]string, 0, len(parts))
+	for _, part := range parts {
+		encoding := strings.ToLower(strings.TrimSpace(part))
+		if encoding == "" || encoding == "identity" {
+			continue
+		}
+		encodings = append(encodings, encoding)
+	}
+	return encodings
+}
+
+func decodeProxyRewriteBody(encoded []byte, encodings []string) ([]byte, error) {
+	decoded := encoded
+	for i := len(encodings) - 1; i >= 0; i-- {
+		reader, err := proxyRewriteDecoder(decoded, encodings[i])
+		if err != nil {
+			return nil, err
+		}
+		decoded, err = readProxyRewriteBody(reader)
+		_ = reader.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return decoded, nil
+}
+
+func encodeProxyRewriteResponseBody(decoded []byte, encodings []string, headers http.Header) ([]byte, error) {
+	encoded, err := encodeProxyRewriteBody(decoded, encodings)
+	if err != nil {
+		return nil, err
+	}
+	if len(encodings) == 0 {
+		headers.Del("Content-Encoding")
+	} else {
+		headers.Set("Content-Encoding", strings.Join(encodings, ", "))
+	}
+	headers.Set("Content-Length", fmt.Sprintf("%d", len(encoded)))
+	headers.Del("Content-MD5")
+	return encoded, nil
+}
+
+func encodeProxyRewriteBody(decoded []byte, encodings []string) ([]byte, error) {
+	encoded := decoded
+	for _, encoding := range encodings {
+		var buf bytes.Buffer
+		writer, err := proxyRewriteEncoder(&buf, encoding)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := writer.Write(encoded); err != nil {
+			_ = writer.Close()
+			return nil, err
+		}
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
+		encoded = buf.Bytes()
+	}
+	return encoded, nil
+}
+
+func proxyRewriteDecoder(encoded []byte, encoding string) (io.ReadCloser, error) {
+	switch encoding {
+	case "br":
+		return io.NopCloser(brotli.NewReader(bytes.NewReader(encoded))), nil
+	case "zstd":
+		reader, err := zstd.NewReader(bytes.NewReader(encoded))
+		if err != nil {
+			return nil, err
+		}
+		return zstdReadCloser{Decoder: reader}, nil
+	case "gzip", "x-gzip":
+		return gzip.NewReader(bytes.NewReader(encoded))
+	case "deflate":
+		if reader, err := zlib.NewReader(bytes.NewReader(encoded)); err == nil {
+			return reader, nil
+		}
+		return flate.NewReader(bytes.NewReader(encoded)), nil
+	default:
+		return nil, fmt.Errorf("unsupported content encoding: %s", encoding)
+	}
+}
+
+func proxyRewriteEncoder(dst io.Writer, encoding string) (io.WriteCloser, error) {
+	switch encoding {
+	case "br":
+		return brotli.NewWriter(dst), nil
+	case "zstd":
+		return zstd.NewWriter(dst)
+	case "gzip", "x-gzip":
+		return gzip.NewWriter(dst), nil
+	case "deflate":
+		return zlib.NewWriter(dst), nil
+	default:
+		return nil, fmt.Errorf("unsupported content encoding: %s", encoding)
+	}
+}
+
+type zstdReadCloser struct {
+	*zstd.Decoder
+}
+
+func (r zstdReadCloser) Close() error {
+	r.Decoder.Close()
+	return nil
 }
 
 func (h *Handler) rewriteLocation(r *http.Request, location string, node storage.Node, parsed parsedRoute, base *url.URL, selfPrefix string) (string, bool, string) {

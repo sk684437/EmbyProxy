@@ -4,7 +4,11 @@ go 1.26.0
 
 toolchain go1.26.4
 
-require modernc.org/sqlite v1.50.1
+require (
+	github.com/andybalholm/brotli v1.2.1
+	github.com/klauspost/compress v1.18.6
+	modernc.org/sqlite v1.52.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

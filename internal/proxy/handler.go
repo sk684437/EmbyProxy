@@ -139,6 +139,7 @@ func newProxyTransport(protectRaw bool) *http.Transport {
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           dialWithIdleTimeout(dialer, proxyConnIdleTimeout),
+		DisableCompression:    true,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   20,
@@ -478,6 +479,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	needCompatOrigin := isAuthAPI || isPlaybackAPI
 	headers := cloneHeader(r.Header)
 	stripClientIPHeaders(headers)
+	deleteHeaders(headers, "Content-Length")
 	if isCapy && isAuthAPI {
 		deleteHeaders(headers, "X-Emby-Token", "X-MediaBrowser-Token", "X-Authorization")
 		az := headers.Get("Authorization")
@@ -511,7 +513,6 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		}
 	}
 	setProxyUA(h.ids, headers, node)
-	headers.Set("Accept-Encoding", "identity")
 	if isPlaybackAPI {
 		deleteHeaders(headers, "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Priority")
 	}

@@ -97,7 +97,6 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 			continue
 		}
 		headers := buildDirectOutboundHeaders(h.ids, r.Header, u, env, node, "normal")
-		headers.Set("Accept-Encoding", "identity")
 		currentHeaders := headers
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-normal", "targetUrl": targetURL, "outboundHeaders": headers})
 		res, err := h.doFetch(ctx, client, u, method, headers, body)
@@ -116,7 +115,6 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 				hNoRange := cloneHeader(headers)
 				hNoRange.Del("Range")
 				hNoRange.Del("If-Range")
-				hNoRange.Set("Accept-Encoding", "identity")
 				currentHeaders = hNoRange
 				capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-no-range", "targetUrl": targetURL, "outboundHeaders": hNoRange})
 				res, err = h.doFetch(ctx, client, u, method, hNoRange, body)
@@ -129,7 +127,6 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		if res.StatusCode == http.StatusForbidden && int64(len(body)) <= h.cfg.Defaults.MaxRetryBodyBytes {
 			_ = res.Body.Close()
 			h2 := buildDirectOutboundHeaders(h.ids, r.Header, u, env, node, "retry-no-origin")
-			h2.Set("Accept-Encoding", "identity")
 			currentHeaders = h2
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-no-origin", "targetUrl": targetURL, "outboundHeaders": h2})
 			res, err = h.doFetch(ctx, client, u, method, h2, body)
@@ -141,7 +138,6 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		if res.StatusCode == http.StatusForbidden && int64(len(body)) <= h.cfg.Defaults.MaxRetryBodyBytes {
 			_ = res.Body.Close()
 			h3 := buildDirectOutboundHeaders(h.ids, r.Header, u, env, node, "retry-browserish")
-			h3.Set("Accept-Encoding", "identity")
 			currentHeaders = h3
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-browserish", "targetUrl": targetURL, "outboundHeaders": h3})
 			res, err = h.doFetch(ctx, client, u, method, h3, body)
@@ -156,7 +152,6 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 				hNoRange := cloneHeader(currentHeaders)
 				hNoRange.Del("Range")
 				hNoRange.Del("If-Range")
-				hNoRange.Set("Accept-Encoding", "identity")
 				currentHeaders = hNoRange
 				capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-no-range-2", "targetUrl": targetURL, "outboundHeaders": hNoRange})
 				res, err = h.doFetch(ctx, client, u, method, hNoRange, body)
