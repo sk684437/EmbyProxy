@@ -7,53 +7,145 @@ import (
 	"testing"
 )
 
+const (
+	testYambyDeviceID  = "00000000-0000-4000-8000-000000000001"
+	testHillsWindowsID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testHillsAndroidID = "bbbbbbbbbbbbbbbb"
+	testSourceAuth     = `MediaBrowser Token="source-token", Client="Source Client", Device="Source Device", DeviceId="source-device-id", Version="0.0.0-test"`
+	testSourceEmbyAuth = `Emby UserId="source-user", Client="Source Client", Device="Source Device", DeviceId="source-device-id", Version="0.0.0-test"`
+)
+
 func TestRewriteMediaBrowserAuthorization(t *testing.T) {
+	yamby := Snapshot{
+		Profile:       DefaultProfile,
+		ClientName:    "Yamby",
+		ClientVersion: "2.0.4.3",
+		DeviceName:    "Android",
+		DeviceID:      testYambyDeviceID,
+	}
+	hillsWindows := Snapshot{
+		Profile:       "hills_windows",
+		ClientName:    "Hills Windows",
+		ClientVersion: "1.2.4",
+		DeviceName:    "DESKTOP-TEST",
+		DeviceID:      testHillsWindowsID,
+	}
+	hillsAndroid := Snapshot{
+		Profile:       "hills_android",
+		ClientName:    "Hills",
+		ClientVersion: "1.7.1",
+		DeviceName:    "diting",
+		DeviceID:      testHillsAndroidID,
+	}
 	tests := []struct {
-		name    string
-		raw     string
-		snap    Snapshot
-		wants   []string
-		rejects []string
+		name string
+		raw  string
+		snap Snapshot
+		want string
 	}{
 		{
-			name: "yamby unquotes fields",
-			raw:  `Emby UserId=user,Client="Synthetic Client",Device="SYNTHETIC-PC",DeviceId="synthetic-source-device-id",Version="1.0"`,
-			snap: Snapshot{
-				Profile:       DefaultProfile,
-				ClientName:    "Yamby",
-				ClientVersion: "2.0.4.3",
-				DeviceName:    "Android",
-				DeviceID:      "synthetic-yamby-device-id",
-			},
-			wants:   []string{`Client=Yamby`, `Device=Android`, `DeviceId=synthetic-yamby-device-id`, `Version=2.0.4.3`},
-			rejects: []string{"Synthetic Client", "SYNTHETIC-PC", "synthetic-source-device-id"},
+			name: "yamby rewrites emby auth without user id field",
+			raw:  `Emby UserId=user-from-auth,Client="Source Client",Device="Source Device",DeviceId="source-device-id",Version="0.0.0-test"`,
+			snap: yamby,
+			want: `Emby Client=Yamby,Device=Android,DeviceId=` + testYambyDeviceID + `,Version=2.0.4.3`,
 		},
 		{
-			name: "hills windows quotes fields",
-			raw:  `Emby Client=Original, Device=HOME-PC, DeviceId=original, Version=1.0`,
-			snap: Snapshot{
-				Profile:       "hills_windows",
-				ClientName:    "Hills Windows",
-				ClientVersion: "1.2.4",
-				DeviceName:    "DESKTOP-TEST",
-				DeviceID:      "synthetic-hills-device-id",
-			},
-			wants: []string{`Client="Hills Windows"`, `Device="DESKTOP-TEST"`, `DeviceId="synthetic-hills-device-id"`, `Version="1.2.4"`},
+			name: "yamby rewrites media browser auth without token field",
+			raw:  testSourceAuth,
+			snap: yamby,
+			want: `Emby Client=Yamby,Device=Android,DeviceId=` + testYambyDeviceID + `,Version=2.0.4.3`,
+		},
+		{
+			name: "keeps non emby bearer authorization",
+			raw:  `Bearer Token="source-token"`,
+			snap: yamby,
+			want: `Bearer Token="source-token"`,
+		},
+		{
+			name: "keeps emby prefix lookalike",
+			raw:  `EmbyX Client=Original, Device=SOURCE-PC`,
+			snap: yamby,
+			want: `EmbyX Client=Original, Device=SOURCE-PC`,
+		},
+		{
+			name: "hills windows keeps quoted fields",
+			raw:  `Emby Client=Original, Device=SOURCE-PC, DeviceId=original, Version=1.0`,
+			snap: hillsWindows,
+			want: `Emby Client="Hills Windows", Device="DESKTOP-TEST", DeviceId="` + testHillsWindowsID + `", Version="1.2.4"`,
+		},
+		{
+			name: "hills android rewrites media browser auth without token field",
+			raw:  testSourceAuth,
+			snap: hillsAndroid,
+			want: `Emby Client="Hills", Device="diting", DeviceId="` + testHillsAndroidID + `", Version="1.7.1"`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := RewriteMediaBrowserAuthorization(tt.raw, tt.snap)
-			for _, want := range tt.wants {
-				if !strings.Contains(got, want) {
-					t.Fatalf("rewritten authorization missing %s: %s", want, got)
-				}
+			if got := RewriteMediaBrowserAuthorization(tt.raw, tt.snap); got != tt.want {
+				t.Fatalf("RewriteMediaBrowserAuthorization() = %q, want %q", got, tt.want)
 			}
-			for _, reject := range tt.rejects {
-				if strings.Contains(got, reject) {
-					t.Fatalf("rewritten authorization still contains %s: %s", reject, got)
-				}
+		})
+	}
+}
+
+func TestApplyToHeadersMovesMediaBrowserToken(t *testing.T) {
+	tests := []struct {
+		name              string
+		headers           http.Header
+		wantToken         string
+		wantAuthRewritten bool
+		wantAuthorization string
+	}{
+		{
+			name:              "moves media browser token when token header is missing",
+			wantAuthRewritten: true,
+			headers: http.Header{
+				"X-Emby-Authorization": {testSourceAuth},
+			},
+			wantToken: "source-token",
+		},
+		{
+			name:              "preserves existing token header",
+			wantAuthRewritten: true,
+			headers: http.Header{
+				"X-Emby-Authorization": {testSourceAuth},
+				"X-Emby-Token":         {"existing-token"},
+			},
+			wantToken: "existing-token",
+		},
+		{
+			name: "ignores token field without media browser scheme",
+			headers: http.Header{
+				"Authorization": {`Token="source-token"`},
+			},
+			wantToken:         "",
+			wantAuthorization: `Token="source-token"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager(nil)
+			snap := manager.Snapshot(DefaultProfile)
+			wantAuth := "Emby Client=" + snap.ClientName + ",Device=" + snap.DeviceName + ",DeviceId=" + snap.DeviceID + ",Version=" + snap.ClientVersion
+
+			manager.ApplyToHeaders(tt.headers, DefaultProfile)
+
+			if got := tt.headers.Get("X-Emby-Token"); got != tt.wantToken {
+				t.Fatalf("X-Emby-Token = %q, want %q", got, tt.wantToken)
+			}
+			if got := tt.headers.Get("X-Emby-Authorization"); tt.wantAuthRewritten && got != wantAuth {
+				t.Fatalf("X-Emby-Authorization = %q, want %q", got, wantAuth)
+			} else if !tt.wantAuthRewritten && got != "" {
+				t.Fatalf("X-Emby-Authorization = %q, want empty", got)
+			}
+			if strings.Contains(strings.ToLower(tt.headers.Get("X-Emby-Authorization")), "token=") {
+				t.Fatalf("X-Emby-Authorization still contains token: %q", tt.headers.Get("X-Emby-Authorization"))
+			}
+			if got := tt.headers.Get("Authorization"); tt.wantAuthorization != "" && got != tt.wantAuthorization {
+				t.Fatalf("Authorization = %q, want %q", got, tt.wantAuthorization)
 			}
 		})
 	}
@@ -62,8 +154,8 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 func TestApplyToHeadersRewritesEmbyAuthorization(t *testing.T) {
 	manager := NewManager(nil)
 	headers := http.Header{}
-	headers.Set("Authorization", `Emby Client="Synthetic Client", Device="SYNTHETIC-PC", DeviceId="synthetic-source-device-id", Version="1.2.0"`)
-	headers.Set("X-Emby-Authorization", `Emby Client="Synthetic Client", Device="SYNTHETIC-PC", DeviceId="synthetic-source-device-id", Version="1.2.0"`)
+	headers.Set("Authorization", testSourceEmbyAuth)
+	headers.Set("X-Emby-Authorization", testSourceEmbyAuth)
 	headers.Set("X-Application", "Original/1.0")
 
 	manager.ApplyToHeaders(headers, "yamby")

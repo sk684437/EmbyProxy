@@ -91,13 +91,8 @@ var Profiles = map[string]Profile{
 var ProfileOrder = []string{DefaultProfile, "hills_android", "hills_windows"}
 
 var (
-	embyAuthorizationRE = regexp.MustCompile(`(?i)^(MediaBrowser|Emby)\b`)
-	mediaBrowserFieldRE = map[string]*regexp.Regexp{
-		"Client":   regexp.MustCompile(`(?i)\bClient\s*=\s*(?:"[^"]*"|[^,\s]+)`),
-		"Device":   regexp.MustCompile(`(?i)\bDevice\s*=\s*(?:"[^"]*"|[^,\s]+)`),
-		"DeviceId": regexp.MustCompile(`(?i)\bDeviceId\s*=\s*(?:"[^"]*"|[^,\s]+)`),
-		"Version":  regexp.MustCompile(`(?i)\bVersion\s*=\s*(?:"[^"]*"|[^,\s]+)`),
-	}
+	embyAuthorizationRE = regexp.MustCompile(`(?i)^(?:MediaBrowser|Emby)(?:\s|$)`)
+	mediaBrowserTokenRE = regexp.MustCompile(`(?i)^MediaBrowser(?:\s|$).*?\bToken\s*=\s*("[^"]*"|[^,\s]+)`)
 )
 
 func NewManager(store *storage.Store) *Manager {
@@ -142,6 +137,11 @@ func (m *Manager) Snapshot(profile string) Snapshot {
 
 func (m *Manager) ApplyToHeaders(headers http.Header, profile string) {
 	snap := m.Snapshot(profile)
+	if headers.Get("X-Emby-Token") == "" {
+		if token := authTokenFromHeaders(headers); token != "" {
+			headers.Set("X-Emby-Token", token)
+		}
+	}
 	for key, values := range cloneHeader(headers) {
 		if len(values) == 0 {
 			continue
@@ -209,13 +209,10 @@ func RewriteMediaBrowserAuthorization(value string, snap Snapshot) string {
 	if !isEmbyAuthorization(raw) {
 		return value
 	}
-	quoted := mediaBrowserAuthValuesQuoted(snap)
-	out := raw
-	out = setMediaBrowserField(out, "Client", snap.ClientName, quoted)
-	out = setMediaBrowserField(out, "Device", snap.DeviceName, quoted)
-	out = setMediaBrowserField(out, "DeviceId", snap.DeviceID, quoted)
-	out = setMediaBrowserField(out, "Version", snap.ClientVersion, quoted)
-	return out
+	if usesYambyAuthFormat(snap) {
+		return buildYambyAuthorization(raw, snap)
+	}
+	return buildHillsAuthorization(snap)
 }
 
 func isEmbyAuthorization(value string) bool {
@@ -320,11 +317,11 @@ func normalizeDeviceState(profile Profile, saved deviceState) deviceState {
 	if name == "" {
 		name = createHillsWindowsDeviceName()
 	}
-	id := strings.ToLower(strings.TrimSpace(saved.DeviceID))
-	if !validDeviceID(profile, id) {
-		id = randomDeviceID(profile)
+	deviceID := strings.ToLower(strings.TrimSpace(saved.DeviceID))
+	if !validDeviceID(profile, deviceID) {
+		deviceID = randomDeviceID(profile)
 	}
-	return deviceState{DeviceName: name, DeviceID: id}
+	return deviceState{DeviceName: name, DeviceID: deviceID}
 }
 
 func samePersisted(a, b persisted) bool {
@@ -413,17 +410,6 @@ func createHillsWindowsDeviceName() string {
 	return "DESKTOP-" + strings.ToUpper(randomHex(6))
 }
 
-func setMediaBrowserField(auth, key, value string, quoted bool) string {
-	re := mediaBrowserFieldRE[key]
-	if re == nil {
-		re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(key) + `\s*=\s*(?:"[^"]*"|[^,\s]+)`)
-	}
-	if loc := re.FindStringIndex(auth); loc != nil {
-		return auth[:loc[0]] + key + "=" + formatMediaBrowserValue(value, quoted) + auth[loc[1]:]
-	}
-	return strings.TrimRight(auth, " \t\r\n") + `, ` + key + "=" + formatMediaBrowserValue(value, quoted)
-}
-
 func formatMediaBrowserValue(value string, quoted bool) string {
 	if quoted {
 		return `"` + escapeMediaBrowserValue(value) + `"`
@@ -435,12 +421,59 @@ func escapeMediaBrowserValue(value string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`)
 }
 
-func mediaBrowserAuthValuesQuoted(snap Snapshot) bool {
+func usesYambyAuthFormat(snap Snapshot) bool {
 	profile := NormalizeProfile(snap.Profile)
 	if snap.Profile == "" {
 		profile = strings.ToLower(strings.TrimSpace(snap.ClientName))
 	}
-	return strings.HasPrefix(profile, "hills")
+	return profile == DefaultProfile
+}
+
+func buildYambyAuthorization(_ string, snap Snapshot) string {
+	parts := []string{
+		"Client=" + snap.ClientName,
+		"Device=" + snap.DeviceName,
+		"DeviceId=" + snap.DeviceID,
+		"Version=" + snap.ClientVersion,
+	}
+	return "Emby " + strings.Join(parts, ",")
+}
+
+func buildHillsAuthorization(snap Snapshot) string {
+	parts := []string{
+		"Client=" + formatMediaBrowserValue(snap.ClientName, true),
+		"Device=" + formatMediaBrowserValue(snap.DeviceName, true),
+		"DeviceId=" + formatMediaBrowserValue(snap.DeviceID, true),
+		"Version=" + formatMediaBrowserValue(snap.ClientVersion, true),
+	}
+	return "Emby " + strings.Join(parts, ", ")
+}
+
+func authTokenFromValue(auth string) string {
+	matches := mediaBrowserTokenRE.FindStringSubmatch(strings.TrimSpace(auth))
+	if len(matches) < 2 {
+		return ""
+	}
+	return unquoteAuthFieldValue(matches[1])
+}
+
+func authTokenFromHeaders(headers http.Header) string {
+	for _, key := range []string{"X-Emby-Authorization", "X-MediaBrowser-Authorization", "Authorization"} {
+		if token := authTokenFromValue(headers.Get(key)); token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
+func unquoteAuthFieldValue(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		value = value[1 : len(value)-1]
+		value = strings.ReplaceAll(value, `\"`, `"`)
+		value = strings.ReplaceAll(value, `\\`, `\`)
+	}
+	return value
 }
 
 func normalizeHeaderKey(value string) string {
