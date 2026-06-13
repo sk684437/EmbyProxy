@@ -80,15 +80,15 @@ func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter,
 		return false
 	}
 	forwardPath := websocketForwardPath(parsed.Path, base.Path)
-	finalURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
-	applyIdentityToURL(h.ids, finalURL, node)
-	headers := buildWebSocketHeaders(h.ids, r.Header, finalURL, node)
+	targetURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
+	applyIdentityToURL(h.ids, targetURL, node)
+	headers := buildWebSocketHeaders(h.ids, r.Header, targetURL, node)
 	env := h.proxyEnv(ctx)
-	if isEmosNode(node, finalURL, env) {
+	if isEmosNode(node, targetURL, env) {
 		applyEmosHeaders(headers, env)
 	}
-	capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "upgrade-target", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	res, upstreamConn, upstreamReader, err := h.dialWebSocket(ctx, finalURL, headers)
+	capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "upgrade-target", "targetUrl": targetURL.String(), "outboundHeaders": headers})
+	res, upstreamConn, upstreamReader, err := h.dialWebSocket(ctx, targetURL, headers)
 	if err != nil {
 		h.log.Warn("ws", "upstream dial failed", map[string]any{"event": "upstreamDialFailed", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "error": err.Error()})
 		return false
@@ -117,7 +117,7 @@ func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter,
 		return true
 	}
 	h.markTargetHealthy("admin:"+parsed.Name, targets, target, expectedActive)
-	capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "upgraded", "targetUrl": finalURL.String(), "outboundHeaders": headers})
+	capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "upgraded", "targetUrl": targetURL.String(), "outboundHeaders": headers})
 	h.log.Info("ws", "upgrade completed", map[string]any{"event": "upgradeCompleted", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": 101, "upgradeMs": time.Since(started).Milliseconds()})
 	flushBuffered(upstreamConn, clientRW.Reader)
 	flushBuffered(clientConn, upstreamReader)

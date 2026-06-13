@@ -463,19 +463,19 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": parsed.Name, "secret": node.Secret, "stage": "raw-direct", "targetUrl": u.String()})
 		return h.handleRawDirect(ctx, r, raw, env, node, body)
 	}
-	finalURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
-	applyIdentityToURL(h.ids, finalURL, node)
-	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-target", "targetUrl": finalURL.String()})
-	if h.isSTRM(finalURL.Path) && !strmStreamPathRE.MatchString(finalURL.Path) {
-		return h.handleSTRM(ctx, r, node, parsed, finalURL, body, env)
+	targetURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
+	applyIdentityToURL(h.ids, targetURL, node)
+	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-target", "targetUrl": targetURL.String()})
+	if h.isSTRM(targetURL.Path) && !strmStreamPathRE.MatchString(targetURL.Path) {
+		return h.handleSTRM(ctx, r, node, parsed, targetURL, body, env)
 	}
-	p := strings.ToLower(finalURL.Path)
+	p := strings.ToLower(targetURL.Path)
 	isStreaming := streamingRE.MatchString(forwardPath)
 	isStatic := (staticExtRE.MatchString(forwardPath) || embyImagesRE.MatchString(forwardPath)) && r.Method == http.MethodGet
 	isAuthAPI := authAPIRE.MatchString(p)
 	isPlaybackAPI := isPlaybackPath(p)
-	isImageAPI := isImagePath(finalURL.Path)
-	isAdditionalPartsAPI := isAdditionalPartsPath(finalURL.Path)
+	isImageAPI := isImagePath(targetURL.Path)
+	isAdditionalPartsAPI := isAdditionalPartsPath(targetURL.Path)
 	needCompatOrigin := isAuthAPI || isPlaybackAPI
 	headers := cloneHeader(r.Header)
 	stripClientIPHeaders(headers)
@@ -519,60 +519,60 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	if isStatic {
 		headers.Del("Range")
 	}
-	if isEmosNode(node, finalURL, env) {
+	if isEmosNode(node, targetURL, env) {
 		applyEmosHeaders(headers, env)
 	}
-	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-prepared", "targetUrl": finalURL.String(), "outboundHeaders": headers})
+	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-prepared", "targetUrl": targetURL.String(), "outboundHeaders": headers})
 	currentHeaders := headers
 	if strings.HasPrefix(p, "/emby/sessions/playing/progress") && r.Method != http.MethodOptions {
 		deviceID := r.Header.Get("X-Emby-Device-Id")
-		sessionID := finalURL.Query().Get("SessionId")
+		sessionID := targetURL.Query().Get("SessionId")
 		if sessionID == "" {
-			sessionID = finalURL.Query().Get("sessionId")
+			sessionID = targetURL.Query().Get("sessionId")
 		}
 		key := clientIP + "|" + deviceID + "|" + sessionID
 		if _, ok := h.progressThrottle.Get(key); ok {
-			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "progress-throttle", "targetUrl": finalURL.String(), "outboundHeaders": headers})
+			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "progress-throttle", "targetUrl": targetURL.String(), "outboundHeaders": headers})
 			return textResponse(http.StatusNoContent, "", http.Header{"Cache-Control": []string{"no-store"}}), nil
 		}
 		h.progressThrottle.Set(key, 1, time.Duration(h.cfg.Defaults.ProgressThrottleMS)*time.Millisecond)
 	}
 	if isAuthAPI && r.Method == http.MethodPost {
-		if res := h.tryAuthAPI(ctx, r, node, parsed, finalURL, headers, body, env); res != nil {
+		if res := h.tryAuthAPI(ctx, r, node, parsed, targetURL, headers, body, env); res != nil {
 			return res, nil
 		}
 	}
 	shouldProxyMedia := isPlaybackAPI || isImageAPI || isAdditionalPartsAPI
 	if shouldProxyMedia {
-		return h.handleMediaProxy(ctx, r, node, parsed, finalURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
+		return h.handleMediaProxy(ctx, r, node, parsed, targetURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
 	}
-	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-proxy", "targetUrl": finalURL.String(), "outboundHeaders": headers})
-	res, err := h.doFetch(ctx, h.noRedirectClient, finalURL, r.Method, headers, body)
+	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-proxy", "targetUrl": targetURL.String(), "outboundHeaders": headers})
+	res, err := h.doFetch(ctx, h.noRedirectClient, targetURL, r.Method, headers, body)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode == http.StatusForbidden && needCompatOrigin {
 		h2 := cloneHeader(headers)
-		if isEmosNode(node, finalURL, env) {
+		if isEmosNode(node, targetURL, env) {
 			applyEmosHeaders(h2, env)
 		}
 		reqBase := schemeHost(r)
 		h2.Set("Origin", reqBase)
 		h2.Set("Referer", reqBase+"/")
 		currentHeaders = h2
-		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-retry-compat-origin", "targetUrl": finalURL.String(), "outboundHeaders": h2})
-		res, err = h.doFetch(ctx, h.noRedirectClient, finalURL, r.Method, h2, body)
+		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-retry-compat-origin", "targetUrl": targetURL.String(), "outboundHeaders": h2})
+		res, err = h.doFetch(ctx, h.noRedirectClient, targetURL, r.Method, h2, body)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if res.StatusCode == http.StatusForbidden {
-		res, currentHeaders, err = h.retryGeneral403(ctx, r, node, parsed, finalURL, headers, body, env, base)
+		res, currentHeaders, err = h.retryGeneral403(ctx, r, node, parsed, targetURL, headers, body, env, base)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return h.finishGeneralResponse(ctx, r, res, node, parsed, finalURL, base, currentHeaders, env, reqOrigin, isStatic, isImageAPI, isStreaming)
+	return h.finishGeneralResponse(ctx, r, res, node, parsed, targetURL, base, currentHeaders, env, reqOrigin, isStatic, isImageAPI, isStreaming)
 }
 
 func (h *Handler) requestBodyForReplay(w http.ResponseWriter, r *http.Request) ([]byte, error) {

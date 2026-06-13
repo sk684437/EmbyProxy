@@ -963,7 +963,7 @@ func TestHandleMediaProxyChoosesUpstreamClient(t *testing.T) {
 	tests := []struct {
 		name        string
 		requestURI  string
-		finalURL    string
+		targetURL   string
 		routePath   string
 		node        storage.Node
 		isPlayback  bool
@@ -975,7 +975,7 @@ func TestHandleMediaProxyChoosesUpstreamClient(t *testing.T) {
 		{
 			name:       "stream playback",
 			requestURI: "https://proxy.example/node/emby/Videos/1/stream.mp4",
-			finalURL:   "https://upstream.example/emby/Videos/1/stream.mp4",
+			targetURL:  "https://upstream.example/emby/Videos/1/stream.mp4",
 			routePath:  "/emby/Videos/1/stream.mp4",
 			node:       storage.Node{Name: "node", Target: "https://upstream.example"},
 			isPlayback: true,
@@ -992,7 +992,7 @@ func TestHandleMediaProxyChoosesUpstreamClient(t *testing.T) {
 		{
 			name:       "direct external non-stream playback action",
 			requestURI: "https://proxy.example/node/emby/Sessions/Playing",
-			finalURL:   "https://upstream.example/emby/Sessions/Playing",
+			targetURL:  "https://upstream.example/emby/Sessions/Playing",
 			routePath:  "/emby/Sessions/Playing",
 			node:       storage.Node{Name: "node", Target: "https://upstream.example", DirectExternal: true},
 			isPlayback: true,
@@ -1007,7 +1007,7 @@ func TestHandleMediaProxyChoosesUpstreamClient(t *testing.T) {
 		{
 			name:       "image",
 			requestURI: "https://proxy.example/node/emby/Items/1/Images/Primary",
-			finalURL:   "https://upstream.example/emby/Items/1/Images/Primary",
+			targetURL:  "https://upstream.example/emby/Items/1/Images/Primary",
 			routePath:  "/emby/Items/1/Images/Primary",
 			node:       storage.Node{Name: "node", Target: "https://upstream.example"},
 			isImage:    true,
@@ -1022,7 +1022,7 @@ func TestHandleMediaProxyChoosesUpstreamClient(t *testing.T) {
 		{
 			name:       "direct external image path that looks streaming",
 			requestURI: "https://proxy.example/node/emby/Items/1/Images/Primary.mp4",
-			finalURL:   "https://upstream.example/emby/Items/1/Images/Primary.mp4",
+			targetURL:  "https://upstream.example/emby/Items/1/Images/Primary.mp4",
 			routePath:  "/emby/Items/1/Images/Primary.mp4",
 			node:       storage.Node{Name: "node", Target: "https://upstream.example", DirectExternal: true},
 			isPlayback: true,
@@ -1066,12 +1066,12 @@ func TestHandleMediaProxyChoosesUpstreamClient(t *testing.T) {
 				t.Fatalf("unsupported expected client %q", tt.wantClient)
 			}
 			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil).WithContext(ctx)
-			finalURL, err := url.Parse(tt.finalURL)
+			targetURL, err := url.Parse(tt.targetURL)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			res, err := h.handleMediaProxy(ctx, req, tt.node, parsedRoute{Name: tt.node.Name, Path: tt.routePath}, finalURL, nil, config.ProxyEnv{}, tt.isPlayback, tt.isImage, false, "", "127.0.0.1")
+			res, err := h.handleMediaProxy(ctx, req, tt.node, parsedRoute{Name: tt.node.Name, Path: tt.routePath}, targetURL, nil, config.ProxyEnv{}, tt.isPlayback, tt.isImage, false, "", "127.0.0.1")
 			if err != nil {
 				t.Fatalf("handleMediaProxy() error = %v", err)
 			}
@@ -1149,11 +1149,11 @@ func TestIsPlaybackStreamRequestClassifiesPlaybackTraffic(t *testing.T) {
 			if tt.range_ != "" {
 				req.Header.Set("Range", tt.range_)
 			}
-			finalURL, err := url.Parse("https://upstream.example" + tt.path)
+			targetURL, err := url.Parse("https://upstream.example" + tt.path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := isPlaybackStreamRequest(req, finalURL); got != tt.want {
+			if got := isPlaybackStreamRequest(req, targetURL); got != tt.want {
 				t.Fatalf("isPlaybackStreamRequest() = %v, want %v", got, tt.want)
 			}
 		})
@@ -1178,12 +1178,12 @@ func TestHandleMediaProxyUsesImageClientForImageRetries(t *testing.T) {
 		})},
 	}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary", nil).WithContext(ctx)
-	finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary")
+	targetURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, targetURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("handleMediaProxy() error = %v", err)
 	}
@@ -1350,12 +1350,12 @@ func TestHandleMediaProxyStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 			})}
 			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil).WithContext(ctx)
 			req.Header.Set("Range", "bytes=1024-")
-			finalURL, err := url.Parse(tt.targetURL)
+			targetURL, err := url.Parse(tt.targetURL)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: finalURL.Path}, finalURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
+			res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: targetURL.Path}, targetURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
 			if err != nil {
 				t.Fatalf("handleMediaProxy() error = %v", err)
 			}
@@ -1382,12 +1382,12 @@ func TestHandleMediaProxySkipsRangeFieldsForProgressAccessLog(t *testing.T) {
 	h.playbackStreamClient = failRoundTripClient(t, "playback stream client should not handle progress requests")
 	req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/emby/Sessions/Playing/Progress", nil).WithContext(ctx)
 	req.Header.Set("Range", "bytes=0-")
-	finalURL, err := url.Parse("https://upstream.example/emby/Sessions/Playing/Progress")
+	targetURL, err := url.Parse("https://upstream.example/emby/Sessions/Playing/Progress")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Sessions/Playing/Progress"}, finalURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
+	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Sessions/Playing/Progress"}, targetURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("handleMediaProxy() error = %v", err)
 	}
@@ -1462,12 +1462,12 @@ func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/movie.strm", nil)
 	setClientIPHeaders(req)
-	finalURL, err := url.Parse("https://upstream.example/movie.strm")
+	sourceURL, err := url.Parse("https://upstream.example/movie.strm")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := h.handleSTRM(context.Background(), req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/movie.strm"}, finalURL, nil, config.ProxyEnv{})
+	res, err := h.handleSTRM(context.Background(), req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/movie.strm"}, sourceURL, nil, config.ProxyEnv{})
 	if err != nil {
 		t.Fatalf("handleSTRM() error = %v", err)
 	}
@@ -1490,12 +1490,12 @@ func TestHandleSTRMBlocksPrivateDirectTarget(t *testing.T) {
 		return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 	})}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/movie.strm", nil)
-	finalURL, err := url.Parse("https://upstream.example/movie.strm")
+	sourceURL, err := url.Parse("https://upstream.example/movie.strm")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := h.handleSTRM(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/movie.strm"}, finalURL, nil, config.ProxyEnv{ExternalAllowAny: true})
+	res, err := h.handleSTRM(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/movie.strm"}, sourceURL, nil, config.ProxyEnv{ExternalAllowAny: true})
 	if err != nil {
 		t.Fatalf("handleSTRM() error = %v", err)
 	}
@@ -1625,7 +1625,7 @@ func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	finalURL, err := url.Parse("https://upstream.example/emby/System/Info/Public")
+	targetURL, err := url.Parse("https://upstream.example/emby/System/Info/Public")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1634,7 +1634,7 @@ func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 		"Content-Length": []string{"128"},
 	})
 
-	out, err := h.finishGeneralResponse(context.Background(), req, res, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/System/Info/Public"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+	out, err := h.finishGeneralResponse(context.Background(), req, res, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/System/Info/Public"}, targetURL, targetURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
 	if err != nil {
 		t.Fatalf("finishGeneralResponse() error = %v", err)
 	}
@@ -1665,7 +1665,7 @@ func TestFinishGeneralResponseRewritesSystemInfoAddresses(t *testing.T) {
 func TestFinishGeneralResponseDoesNotRewritePartialSystemInfo(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
-	finalURL, err := url.Parse("https://upstream.example/emby/System/Info/Public")
+	targetURL, err := url.Parse("https://upstream.example/emby/System/Info/Public")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1676,7 +1676,7 @@ func TestFinishGeneralResponseDoesNotRewritePartialSystemInfo(t *testing.T) {
 		"Content-Length": []string{fmt.Sprintf("%d", len(raw))},
 	})
 
-	out, err := h.finishGeneralResponse(context.Background(), req, res, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/System/Info/Public"}, finalURL, finalURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+	out, err := h.finishGeneralResponse(context.Background(), req, res, storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/System/Info/Public"}, targetURL, targetURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
 	if err != nil {
 		t.Fatalf("finishGeneralResponse() error = %v", err)
 	}
@@ -1728,13 +1728,13 @@ func TestFinishGeneralResponseBlocksUnsafeCrossHostLocations(t *testing.T) {
 				return bytesResponse(http.StatusOK, []byte("unexpected"), http.Header{"Content-Type": []string{"text/plain"}}), nil
 			})}
 			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil)
-			finalURL, err := url.Parse("https://upstream.example" + tt.route.Path)
+			targetURL, err := url.Parse("https://upstream.example" + tt.route.Path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			res := textResponse(http.StatusFound, "", http.Header{"Location": []string{tt.location}})
 
-			out, err := h.finishGeneralResponse(context.Background(), req, res, tt.node, tt.route, finalURL, finalURL, http.Header{}, tt.env, "", false, false, false)
+			out, err := h.finishGeneralResponse(context.Background(), req, res, tt.node, tt.route, targetURL, targetURL, http.Header{}, tt.env, "", false, false, false)
 			if err != nil {
 				t.Fatalf("finishGeneralResponse() error = %v", err)
 			}
@@ -2046,12 +2046,12 @@ func TestHandleMediaProxyDoesNotCacheImageErrors(t *testing.T) {
 		}), nil
 	})}
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary", nil)
-	finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary")
+	targetURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, targetURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("handleMediaProxy() error = %v", err)
 	}
@@ -2075,11 +2075,11 @@ func TestHandleMediaProxySkipsImageCacheWhenDisabled(t *testing.T) {
 		reqCtx := WithAccessLogFields(context.Background())
 		lastCtx = reqCtx
 		req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary?tag=disabled", nil).WithContext(reqCtx)
-		finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=disabled")
+		targetURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=disabled")
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, err := h.handleMediaProxy(reqCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+		res, err := h.handleMediaProxy(reqCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, targetURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
 		if err != nil {
 			t.Fatalf("handleMediaProxy() error = %v", err)
 		}
@@ -2119,11 +2119,11 @@ func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 	})}
 
 	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary?tag=a", nil)
-	finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=a")
+	targetURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, targetURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("handleMediaProxy() first error = %v", err)
 	}
@@ -2148,11 +2148,11 @@ func TestHandleMediaProxyServesImageCacheHitBeforeLimiter(t *testing.T) {
 	hitCtx, cancel := context.WithTimeout(hitBaseCtx, 25*time.Millisecond)
 	defer cancel()
 	req = httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary?tag=a", nil).WithContext(hitCtx)
-	finalURL, err = url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=a")
+	targetURL, err = url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err = h.handleMediaProxy(hitCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+	res, err = h.handleMediaProxy(hitCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, targetURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("handleMediaProxy() cache hit error = %v", err)
 	}
@@ -2205,12 +2205,12 @@ func TestHandleMediaProxyCoalescesConcurrentImageCacheMisses(t *testing.T) {
 			reqCtx, cancel := context.WithTimeout(WithAccessLogFields(context.Background()), 2*time.Second)
 			defer cancel()
 			req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items/1/Images/Primary?tag=coalesced", nil).WithContext(reqCtx)
-			finalURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=coalesced")
+			targetURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=coalesced")
 			if err != nil {
 				errs <- err
 				return
 			}
-			res, err := h.handleMediaProxy(reqCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, finalURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
+			res, err := h.handleMediaProxy(reqCtx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Items/1/Images/Primary"}, targetURL, nil, config.ProxyEnv{}, false, true, false, "", "127.0.0.1")
 			if err != nil {
 				errs <- err
 				return
