@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
 	"embyproxy/internal/config"
@@ -69,34 +68,6 @@ func TestOutboundHeaderBuildersMapClientIdentityHeaders(t *testing.T) {
 	} {
 		t.Run(tt.name+" without identity headers", func(t *testing.T) {
 			assertNoIdentityHeaders(t, tt.build(http.Header{"User-Agent": {"Client/1.0"}}))
-		})
-	}
-
-	for _, tt := range []struct {
-		name      string
-		raw       http.Header
-		wantKey   string
-		wantValue string
-	}{
-		{
-			name:      "authorization",
-			raw:       http.Header{"Authorization": {`Emby Client="Original", Device="Original", DeviceId="original", Version="1.0"`}},
-			wantKey:   "Authorization",
-			wantValue: `Client=Yamby`,
-		},
-		{
-			name:      "x emby client",
-			raw:       http.Header{"X-Emby-Client": {"Original"}},
-			wantKey:   "X-Emby-Client",
-			wantValue: "Yamby",
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			headers := buildDirect(tt.raw)
-			if got := headers.Get(tt.wantKey); !strings.Contains(got, tt.wantValue) {
-				t.Fatalf("%s = %q, want to contain %q", tt.wantKey, got, tt.wantValue)
-			}
-			assertNoIdentityHeaders(t, headers, tt.wantKey)
 		})
 	}
 

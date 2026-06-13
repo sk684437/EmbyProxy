@@ -157,6 +157,15 @@ func TestApplyToHeadersRewritesEmbyAuthorization(t *testing.T) {
 	headers.Set("Authorization", testSourceEmbyAuth)
 	headers.Set("X-Emby-Authorization", testSourceEmbyAuth)
 	headers.Set("X-Application", "Original/1.0")
+	headers.Set("X-Emby-Token", "kept-token")
+	headers.Set("X-Emby-Client", "Original")
+	headers.Set("X-Emby-Client-Version", "1.0")
+	headers.Set("X-Emby-Device-Id", "original-device")
+	headers.Set("X-Emby-Device-Name", "Original Device")
+	headers.Set("X-MediaBrowser-Client", "Original")
+	headers.Set("X-MediaBrowser-Client-Version", "1.0")
+	headers.Set("X-MediaBrowser-Device-Id", "original-device")
+	headers.Set("X-MediaBrowser-Device-Name", "Original Device")
 
 	manager.ApplyToHeaders(headers, "yamby")
 
@@ -168,6 +177,17 @@ func TestApplyToHeadersRewritesEmbyAuthorization(t *testing.T) {
 	}
 	if got := headers.Get("X-Application"); got != "Yamby/2.0.4.3" {
 		t.Fatalf("X-Application = %q, want %q", got, "Yamby/2.0.4.3")
+	}
+	for _, key := range []string{
+		"X-Emby-Client", "X-Emby-Client-Version", "X-Emby-Device-Id", "X-Emby-Device-Name",
+		"X-MediaBrowser-Client", "X-MediaBrowser-Client-Version", "X-MediaBrowser-Device-Id", "X-MediaBrowser-Device-Name",
+	} {
+		if got := headers.Get(key); got != "" {
+			t.Fatalf("%s = %q, want dropped for yamby impersonation", key, got)
+		}
+	}
+	if got := headers.Get("X-Emby-Token"); got != "kept-token" {
+		t.Fatalf("X-Emby-Token = %q, want retained", got)
 	}
 }
 
@@ -181,6 +201,19 @@ func TestApplyToHeadersDoesNotAddMissingEmbyHeaders(t *testing.T) {
 		if got := headers.Get(key); got != "" {
 			t.Fatalf("%s = %q, want empty", key, got)
 		}
+	}
+}
+
+func TestApplyToHeadersKeepsIdentityHeadersForHillsWindows(t *testing.T) {
+	manager := NewManager(nil)
+	headers := http.Header{}
+	headers.Set("X-Emby-Client", "Original")
+	headers.Set("X-Emby-Device-Id", "original-device")
+
+	manager.ApplyToHeaders(headers, "hills_windows")
+
+	if got := headers.Get("X-Emby-Client"); got != "Hills Windows" {
+		t.Fatalf("X-Emby-Client = %q, want rewritten identity (not dropped)", got)
 	}
 }
 

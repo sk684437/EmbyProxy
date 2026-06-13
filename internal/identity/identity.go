@@ -142,6 +142,7 @@ func (m *Manager) ApplyToHeaders(headers http.Header, profile string) {
 			headers.Set("X-Emby-Token", token)
 		}
 	}
+	dropIdentityHeaders := usesYambyAuthFormat(snap)
 	for key, values := range cloneHeader(headers) {
 		if len(values) == 0 {
 			continue
@@ -149,13 +150,13 @@ func (m *Manager) ApplyToHeaders(headers http.Header, profile string) {
 		value := values[0]
 		switch normalizeHeaderKey(key) {
 		case "xembyclient", "xmediabrowserclient":
-			headers.Set(key, snap.ClientName)
+			setOrDropIdentityHeader(headers, key, snap.ClientName, dropIdentityHeaders)
 		case "xembyclientversion", "xmediabrowserclientversion":
-			headers.Set(key, snap.ClientVersion)
+			setOrDropIdentityHeader(headers, key, snap.ClientVersion, dropIdentityHeaders)
 		case "xembydevicename", "xmediabrowserdevicename":
-			headers.Set(key, snap.DeviceName)
+			setOrDropIdentityHeader(headers, key, snap.DeviceName, dropIdentityHeaders)
 		case "xembydeviceid", "xmediabrowserdeviceid":
-			headers.Set(key, snap.DeviceID)
+			setOrDropIdentityHeader(headers, key, snap.DeviceID, dropIdentityHeaders)
 		case "xembyauthorization", "xmediabrowserauthorization", "xauthorization":
 			headers.Set(key, RewriteMediaBrowserAuthorization(value, snap))
 		case "xapplication":
@@ -168,6 +169,18 @@ func (m *Manager) ApplyToHeaders(headers http.Header, profile string) {
 			headers.Set(key, RewriteMediaBrowserAuthorization(value, snap))
 		}
 	}
+}
+
+// setOrDropIdentityHeader rewrites a standalone client/device identity header,
+// or drops it when drop is set. For yamby upstreams these headers are redundant
+// (the values already live in the Emby authorization string) and are dropped
+// instead of forwarded.
+func setOrDropIdentityHeader(headers http.Header, key, value string, drop bool) {
+	if drop {
+		headers.Del(key)
+		return
+	}
+	headers.Set(key, value)
 }
 
 func (m *Manager) ApplyToURL(u *url.URL, headers http.Header, profile string) {
