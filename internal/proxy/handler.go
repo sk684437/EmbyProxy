@@ -356,6 +356,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 	expectedActive, ordered := h.targetOrder(nodeKey, targets)
 	var lastRes *http.Response
 	var lastErr error
+	var lastAttemptMS int64
 	tried := 0
 	for _, target := range ordered {
 		banKey := nodeKey + "|" + target
@@ -366,11 +367,15 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 		started := time.Now()
 		nodeTry := node
 		nodeTry.Target = target
+		capture.ClearErrorMeta(r)
 		res, err := h.handleOneTarget(ctx, r, nodeTry, parsed, body, env)
 		if err != nil {
 			h.lineBan.Set(banKey, 1, time.Minute)
-			h.log.Warn("proxy", "target failed", withAccessLogFields(ctx, map[string]any{"event": "targetFailed", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": time.Since(started).Milliseconds(), "error": err.Error()}))
+			attemptMS := time.Since(started).Milliseconds()
+			capture.AppendErrorAttempt(r, "target-attempt", err, map[string]any{"target": logging.RedactURL(target), "targetAttemptMs": attemptMS})
+			h.log.Warn("proxy", "target failed", withAccessLogFields(ctx, map[string]any{"event": "targetFailed", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "targetAttemptMs": attemptMS, "error": err.Error()}))
 			lastErr = err
+			lastAttemptMS = attemptMS
 			h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Bad Gateway", nil))
 			continue
 		}
@@ -378,6 +383,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 		if status < 500 && status != http.StatusForbidden && status != http.StatusNotFound && status != http.StatusRequestedRangeNotSatisfiable {
 			h.closeBody(lastRes)
 			lastRes = nil
+			capture.ClearErrorMeta(r)
 			h.markTargetHealthy(nodeKey, targets, target, expectedActive)
 			responseReadyMs := time.Since(started).Milliseconds()
 			SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
@@ -388,16 +394,25 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			return res, nil
 		}
 		h.lineBan.Set(banKey, 1, time.Minute)
-		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, withAccessLogFields(ctx, map[string]any{"event": "upstreamRetryableStatus", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "targetAttemptMs": time.Since(started).Milliseconds()})))
+		attemptMS := time.Since(started).Milliseconds()
+		capture.AppendRetryableStatusAttempt(r, "target-attempt", status, attemptMS, logging.RedactURL(target))
+		h.log.Warn("proxy", "target returned retryable status", retryableStatusLogFields(res, withAccessLogFields(ctx, map[string]any{"event": "upstreamRetryableStatus", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "targetAttemptMs": attemptMS})))
+		lastErr = nil
+		lastAttemptMS = attemptMS
 		h.setLastResponse(&lastRes, res)
 	}
 	if tried == 0 {
 		for _, target := range ordered {
+			started := time.Now()
 			nodeTry := node
 			nodeTry.Target = target
+			capture.ClearErrorMeta(r)
 			res, err := h.handleOneTarget(ctx, r, nodeTry, parsed, body, env)
 			if err != nil {
+				attemptMS := time.Since(started).Milliseconds()
 				lastErr = err
+				lastAttemptMS = attemptMS
+				capture.AppendErrorAttempt(r, "target-attempt", err, map[string]any{"target": logging.RedactURL(target), "targetAttemptMs": attemptMS})
 				h.setLastResponse(&lastRes, textResponse(http.StatusBadGateway, "Bad Gateway", nil))
 				continue
 			}
@@ -405,16 +420,27 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			if status < 500 && status != http.StatusForbidden && status != http.StatusNotFound && status != http.StatusRequestedRangeNotSatisfiable {
 				h.closeBody(lastRes)
 				lastRes = nil
+				capture.ClearErrorMeta(r)
 				h.markTargetHealthy(nodeKey, targets, target, expectedActive)
 				return res, nil
 			}
+			attemptMS := time.Since(started).Milliseconds()
+			lastErr = nil
+			lastAttemptMS = attemptMS
+			capture.AppendRetryableStatusAttempt(r, "target-attempt", status, attemptMS, logging.RedactURL(target))
 			h.setLastResponse(&lastRes, res)
 		}
 	}
 	if lastRes != nil {
+		if lastErr != nil {
+			capture.SetErrorMeta(r, "target-attempt", lastErr, map[string]any{"meta": map[string]any{"targetAttemptMs": lastAttemptMS}})
+		} else if status := lastRes.StatusCode; status >= 500 || status == http.StatusForbidden || status == http.StatusNotFound || status == http.StatusRequestedRangeNotSatisfiable {
+			capture.SetRetryableStatusMeta(r, "target-attempt", status, lastAttemptMS)
+		}
 		return lastRes, nil
 	}
 	if lastErr != nil {
+		capture.SetErrorMeta(r, "target-attempt", lastErr, map[string]any{"meta": map[string]any{"targetAttemptMs": lastAttemptMS}})
 		return nil, lastErr
 	}
 	return textResponse(http.StatusBadGateway, "Bad Gateway", nil), nil

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 
+	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
 	"embyproxy/internal/identity"
 	"embyproxy/internal/logging"
@@ -1313,6 +1315,274 @@ func TestHandleNodeStoresTargetDurationForAccessLog(t *testing.T) {
 	}
 }
 
+func TestTrafficCaptureKeepsTargetAttemptsOffSuccessfulErrorMeta(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://bad.example/emby\nhttps://upstream.example/emby",
+	}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "bad.example" {
+			return nil, errors.New("connect: connection refused")
+		}
+		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Ping", nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	meta, ok := records[0].Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", records[0].Meta)
+	}
+	if _, ok := meta["errorClass"]; ok {
+		t.Fatalf("successful record should not have final errorClass: %#v", meta)
+	}
+	attempts, ok := meta["attempts"].([]any)
+	if !ok || len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one failed attempt", meta["attempts"])
+	}
+	attempt, ok := attempts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("attempt = %T, want map", attempts[0])
+	}
+	if got := attempt["errorClass"]; got != "connection-refused" {
+		t.Fatalf("attempt errorClass = %v, want connection-refused", got)
+	}
+	if got := attempt["target"]; got != "https://bad.example/emby" {
+		t.Fatalf("attempt target = %v, want https://bad.example/emby", got)
+	}
+	if _, ok := attempt["targetAttemptMs"]; !ok {
+		t.Fatal("attempt targetAttemptMs missing")
+	}
+}
+
+func TestTrafficCaptureRecordsRetryableStatusAttemptTarget(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://same.example/emby\nhttps://same.example/jellyfin",
+	}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(req.URL.Path, "/emby/") {
+			return bytesResponse(http.StatusInternalServerError, []byte("fail"), nil), nil
+		}
+		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Ping", nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	meta, ok := records[0].Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", records[0].Meta)
+	}
+	if _, ok := meta["errorClass"]; ok {
+		t.Fatalf("successful record should not have final errorClass: %#v", meta)
+	}
+	attempts, ok := meta["attempts"].([]any)
+	if !ok || len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one retryable attempt", meta["attempts"])
+	}
+	attempt, ok := attempts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("attempt = %T, want map", attempts[0])
+	}
+	if got := attempt["errorClass"]; got != "retryable-upstream-status" {
+		t.Fatalf("attempt errorClass = %v, want retryable-upstream-status", got)
+	}
+	if got := attempt["upstreamStatus"]; got != float64(http.StatusInternalServerError) {
+		t.Fatalf("attempt upstreamStatus = %v, want %d", got, http.StatusInternalServerError)
+	}
+	if got := attempt["target"]; got != "https://same.example/emby" {
+		t.Fatalf("attempt target = %v, want https://same.example/emby", got)
+	}
+}
+
+func TestTrafficCaptureClearsImageAttemptErrorMetaOnSuccessfulTarget(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://bad.example/images\nhttps://upstream.example/images",
+	}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "bad.example" {
+			return nil, errors.New("connect: connection refused")
+		}
+		return bytesResponse(http.StatusOK, []byte("image"), http.Header{"Content-Type": []string{"image/jpeg"}}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/Items/1/Images/Primary?tag=ok", nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	meta, ok := records[0].Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", records[0].Meta)
+	}
+	if _, ok := meta["errorClass"]; ok {
+		t.Fatalf("successful image record should not have final errorClass: %#v", meta)
+	}
+	attempts, ok := meta["attempts"].([]any)
+	if !ok || len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one failed attempt", meta["attempts"])
+	}
+	attempt, ok := attempts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("attempt = %T, want map", attempts[0])
+	}
+	if got := attempt["errorClass"]; got != "connection-refused" {
+		t.Fatalf("attempt errorClass = %v, want connection-refused", got)
+	}
+	if got := attempt["target"]; got != "https://bad.example/images" {
+		t.Fatalf("attempt target = %v, want https://bad.example/images", got)
+	}
+}
+
+func TestTrafficCaptureKeepsLastImageAttemptErrorMetaWhenAllTargetsFail(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://bad.example/images\nhttps://upstream.example/images",
+	}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "bad.example" {
+			return nil, errors.New("connect: connection refused")
+		}
+		return nil, errors.New("remote error: tls: handshake failure")
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/Items/1/Images/Primary?tag=fail", nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadGateway)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	meta, ok := records[0].Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", records[0].Meta)
+	}
+	if got := meta["errorClass"]; got != "tls" {
+		t.Fatalf("final errorClass = %v, want tls: %#v", got, meta)
+	}
+	attempts, ok := meta["attempts"].([]any)
+	if !ok || len(attempts) != 2 {
+		t.Fatalf("attempts = %#v, want two failed attempts", meta["attempts"])
+	}
+	first, ok := attempts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first attempt = %T, want map", attempts[0])
+	}
+	if got := first["errorClass"]; got != "connection-refused" {
+		t.Fatalf("first attempt errorClass = %v, want connection-refused", got)
+	}
+	if got := first["target"]; got != "https://bad.example/images" {
+		t.Fatalf("first attempt target = %v, want https://bad.example/images", got)
+	}
+	second, ok := attempts[1].(map[string]any)
+	if !ok {
+		t.Fatalf("second attempt = %T, want map", attempts[1])
+	}
+	if got := second["errorClass"]; got != "tls" {
+		t.Fatalf("second attempt errorClass = %v, want tls", got)
+	}
+	if got := second["target"]; got != "https://upstream.example/images" {
+		t.Fatalf("second attempt target = %v, want https://upstream.example/images", got)
+	}
+}
+
 func TestHandleMediaProxyStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -2132,6 +2402,76 @@ func TestHandleMediaProxySkipsImageCacheWhenDisabled(t *testing.T) {
 	}
 	if got := AccessLogFields(lastCtx)["imageCache"]; got != "disabled" {
 		t.Fatalf("imageCache log field = %v, want disabled", got)
+	}
+}
+
+func TestTrafficCaptureRecordsImageCacheWaitFailureTarget(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	sys.ImageCacheEnabled = true
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.imageFollowClient = failRoundTripClient(t, "upstream should not be called while an image fill is in progress")
+
+	targetURL, err := url.Parse("https://upstream.example/emby/Items/1/Images/Primary?tag=wait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageCache := h.ensureImageCache(context.Background())
+	fill, leader := imageCache.beginFill(imageCacheKey("node", targetURL))
+	if !leader {
+		t.Fatal("test image fill should be the leader")
+	}
+	defer imageCache.finishFill(fill)
+
+	reqCtx, cancel := context.WithCancel(WithAccessLogFields(context.Background()))
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Items/1/Images/Primary?tag=wait", nil).WithContext(reqCtx)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadGateway)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.Stage != "image-cache-wait" {
+		t.Fatalf("stage = %q, want image-cache-wait", record.Stage)
+	}
+	if record.TargetURL != targetURL.String() {
+		t.Fatalf("targetUrl = %q, want %q", record.TargetURL, targetURL.String())
+	}
+	meta, ok := record.Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", record.Meta)
+	}
+	if got := meta["errorClass"]; got != "context-canceled" {
+		t.Fatalf("errorClass = %v, want context-canceled", got)
+	}
+	if got := meta["errorStage"]; got != "image-cache-wait" {
+		t.Fatalf("errorStage = %v, want image-cache-wait", got)
+	}
+	if _, ok := meta["targetAttemptMs"]; !ok {
+		t.Fatal("targetAttemptMs missing from meta")
 	}
 }
 

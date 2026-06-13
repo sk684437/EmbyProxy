@@ -5,7 +5,10 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
+	"errors"
+	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -151,6 +154,18 @@ func TestSummarizeResponseBufferLimitsDecodedResponse(t *testing.T) {
 	}
 	if got.Text != "" {
 		t.Fatalf("Text = %q, want empty for oversized decoded response", got.Text)
+	}
+}
+
+func TestClassifyErrorKeepsSpecificConnectionFailures(t *testing.T) {
+	err := &url.Error{
+		Op:  "Get",
+		URL: "https://upstream.example/image.jpg",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")},
+	}
+
+	if got := classifyError(err); got != "connection-refused" {
+		t.Fatalf("classifyError() = %q, want connection-refused", got)
 	}
 }
 

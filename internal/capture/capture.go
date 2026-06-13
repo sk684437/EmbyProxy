@@ -10,10 +10,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -140,6 +142,161 @@ func SetMeta(req *http.Request, meta map[string]any) {
 	for key, value := range meta {
 		st.Meta[key] = value
 	}
+}
+
+func SetErrorMeta(req *http.Request, stage string, err error, fields map[string]any) {
+	if err == nil {
+		return
+	}
+	update := map[string]any{}
+	for key, value := range fields {
+		if key == "meta" {
+			continue
+		}
+		update[key] = value
+	}
+	meta := existingMeta(req)
+	if _, ok := meta["errorClass"]; !ok {
+		meta["errorClass"] = classifyError(err)
+	}
+	if stage != "" {
+		if _, ok := meta["errorStage"]; !ok {
+			meta["errorStage"] = stage
+		}
+	}
+	if extraMeta, ok := fields["meta"].(map[string]any); ok {
+		for key, value := range extraMeta {
+			meta[key] = value
+		}
+	}
+	update["meta"] = meta
+	SetMeta(req, update)
+}
+
+func SetRetryableStatusMeta(req *http.Request, stage string, status int, attemptMS int64) {
+	meta := existingMeta(req)
+	meta["errorClass"] = "retryable-upstream-status"
+	meta["upstreamStatus"] = status
+	meta["targetAttemptMs"] = attemptMS
+	if stage != "" {
+		meta["errorStage"] = stage
+	}
+	SetMeta(req, map[string]any{"meta": meta})
+}
+
+func ClearErrorMeta(req *http.Request) {
+	st := State(req)
+	if st == nil || st.Meta == nil {
+		return
+	}
+	current, ok := st.Meta["meta"].(map[string]any)
+	if !ok {
+		return
+	}
+	meta := cloneAnyMap(current)
+	for _, key := range []string{"errorClass", "errorStage", "upstreamStatus", "targetAttemptMs"} {
+		delete(meta, key)
+	}
+	SetMeta(req, map[string]any{"meta": meta})
+}
+
+func AppendErrorAttempt(req *http.Request, stage string, err error, fields map[string]any) {
+	if err == nil {
+		return
+	}
+	attempt := map[string]any{"errorClass": classifyError(err)}
+	if stage != "" {
+		attempt["stage"] = stage
+	}
+	for key, value := range fields {
+		attempt[key] = value
+	}
+	appendAttempt(req, attempt)
+}
+
+func AppendRetryableStatusAttempt(req *http.Request, stage string, status int, attemptMS int64, target string) {
+	attempt := map[string]any{
+		"errorClass":      "retryable-upstream-status",
+		"upstreamStatus":  status,
+		"targetAttemptMs": attemptMS,
+	}
+	if target != "" {
+		attempt["target"] = target
+	}
+	if stage != "" {
+		attempt["stage"] = stage
+	}
+	appendAttempt(req, attempt)
+}
+
+func appendAttempt(req *http.Request, attempt map[string]any) {
+	meta := existingMeta(req)
+	attempts := []any{}
+	if current, ok := meta["attempts"].([]any); ok {
+		attempts = append(attempts, current...)
+	}
+	meta["attempts"] = append(attempts, attempt)
+	SetMeta(req, map[string]any{"meta": meta})
+}
+
+func existingMeta(req *http.Request) map[string]any {
+	meta := map[string]any{}
+	st := State(req)
+	if st == nil || st.Meta == nil {
+		return meta
+	}
+	current, ok := st.Meta["meta"].(map[string]any)
+	if !ok {
+		return meta
+	}
+	return cloneAnyMap(current)
+}
+
+func cloneAnyMap(current map[string]any) map[string]any {
+	meta := map[string]any{}
+	for key, value := range current {
+		meta[key] = value
+	}
+	return meta
+}
+
+func classifyError(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.Canceled):
+		return "context-canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "dns"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return classifyError(urlErr.Err)
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "connectex"):
+		return "connection-refused"
+	case strings.Contains(msg, "connection reset") || strings.Contains(msg, "reset by peer"):
+		return "connection-reset"
+	case strings.Contains(msg, "no such host"):
+		return "dns"
+	case strings.Contains(msg, "tls") || strings.Contains(msg, "certificate"):
+		return "tls"
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return "network"
+	}
+	return "upstream-error"
 }
 
 func RememberRequestBody(req *http.Request, body []byte) {

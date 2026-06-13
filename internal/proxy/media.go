@@ -157,6 +157,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	var imageCacheFill *imageCacheFill
 	finishImageCacheFill := func() {}
 	if isImageAPI {
+		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-preflight", "targetUrl": targetURL.String()})
 		imageCache = h.ensureImageCache(ctx)
 		cacheKey = imageCacheKey(parsed.Name, targetURL)
 		if imageCache == nil {
@@ -175,7 +176,10 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			fill, leader := imageCache.beginFill(cacheKey)
 			if !leader {
 				SetAccessLogField(ctx, "imageCache", "wait")
+				capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-cache-wait", "targetUrl": targetURL.String()})
+				waitStarted := time.Now()
 				if err := imageCache.waitFill(ctx, fill); err != nil {
+					capture.SetErrorMeta(r, "image-cache-wait", err, map[string]any{"meta": map[string]any{"targetAttemptMs": time.Since(waitStarted).Milliseconds()}})
 					return nil, err
 				}
 				if cached, ok := imageCache.get(r, cacheKey, reqOrigin, env); ok {
@@ -194,9 +198,12 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 				SetAccessLogField(ctx, "imageCache", "miss")
 			}
 		}
+		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-limit-wait", "targetUrl": targetURL.String()})
+		limitStarted := time.Now()
 		release, err := h.acquireImageRequestSlot(ctx, parsed.Name)
 		if err != nil {
 			finishImageCacheFill()
+			capture.SetErrorMeta(r, "image-limit-wait", err, map[string]any{"outboundHeaders": hClean, "meta": map[string]any{"targetAttemptMs": time.Since(limitStarted).Milliseconds()}})
 			return nil, err
 		}
 		defer release()
@@ -215,9 +222,11 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	default:
 		client = h.defaultFollowClient
 	}
+	fetchStarted := time.Now()
 	res, err := h.doFetch(ctx, client, targetURL, r.Method, hClean, body)
 	if err != nil {
 		finishImageCacheFill()
+		capture.SetErrorMeta(r, stage, err, map[string]any{"meta": map[string]any{"targetAttemptMs": time.Since(fetchStarted).Milliseconds()}})
 		return nil, err
 	}
 	if probeDirectExternalRedirect && isRedirectStatus(res.StatusCode) && res.Header.Get("Location") != "" {
@@ -251,9 +260,11 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		hImg.Set("Accept", "image/avif,image/webp,image/apng,image*;q=0.8")
 		applyIdentity(h.ids, hImg, node)
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-clean", "targetUrl": targetURL.String(), "outboundHeaders": hImg})
+		retryStarted := time.Now()
 		res, err = h.doFetch(ctx, h.imageFollowClient, targetURL, r.Method, hImg, nil)
 		if err != nil {
 			finishImageCacheFill()
+			capture.SetErrorMeta(r, "image-retry-clean", err, map[string]any{"meta": map[string]any{"targetAttemptMs": time.Since(retryStarted).Milliseconds()}})
 			return nil, err
 		}
 		if res.StatusCode == http.StatusForbidden {
@@ -262,9 +273,11 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			hImg2.Set("Referer", originOf(targetURL)+"/")
 			hImg2.Set("Origin", originOf(targetURL))
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "image-retry-origin", "targetUrl": targetURL.String(), "outboundHeaders": hImg2})
+			retryStarted := time.Now()
 			res, err = h.doFetch(ctx, h.imageFollowClient, targetURL, r.Method, hImg2, nil)
 			if err != nil {
 				finishImageCacheFill()
+				capture.SetErrorMeta(r, "image-retry-origin", err, map[string]any{"meta": map[string]any{"targetAttemptMs": time.Since(retryStarted).Milliseconds()}})
 				return nil, err
 			}
 		}
