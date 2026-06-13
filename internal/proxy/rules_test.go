@@ -125,6 +125,77 @@ func TestResolveTargetURLMergesBaseQueryAndKeepsRepeatedRequestValues(t *testing
 	}
 }
 
+func TestIsPlaybackPathSupportsOptionalEmbyPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "emby video stream", path: "/emby/Videos/1/stream.mp4", want: true},
+		{name: "bare video stream", path: "/Videos/1/stream.mp4", want: true},
+		{name: "bare original video", path: "/Videos/1/original.mkv", want: true},
+		{name: "emby audio", path: "/emby/Audio/1/universal", want: true},
+		{name: "bare audio", path: "/Audio/1/universal", want: true},
+		{name: "bare item download", path: "/Items/1/Download", want: true},
+		{name: "bare item stream", path: "/Items/1/Stream", want: true},
+		{name: "bare item file", path: "/Items/1/File", want: true},
+		{name: "bare playback info", path: "/Items/1/PlaybackInfo", want: true},
+		{name: "bare progress", path: "/Sessions/Playing/Progress", want: true},
+		{name: "bare hls", path: "/Videos/1/hls1/main/0.ts", want: true},
+		{name: "bare dash", path: "/Dash/manifest.mpd", want: true},
+		{name: "bare smartstrm", path: "/smartstrm", want: true},
+		{name: "system info", path: "/System/Info"},
+		{name: "item image", path: "/Items/1/Images/Primary"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPlaybackPath(tt.path); got != tt.want {
+				t.Fatalf("isPlaybackPath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdditionalPartsPathSupportsOptionalEmbyPrefix(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "/emby/Videos/1/AdditionalParts", want: true},
+		{path: "/Videos/1/AdditionalParts", want: true},
+		{path: "/Items/1/AdditionalParts"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := isAdditionalPartsPath(tt.path); got != tt.want {
+				t.Fatalf("isAdditionalPartsPath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSTRMStreamPathSupportsOptionalEmbyPrefix(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "/emby/Videos/1/stream.strm", want: true},
+		{path: "/Videos/1/stream.strm", want: true},
+		{path: "/emby/Videos/1/source.strm"},
+		{path: "/Movies/1/stream.strm"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := strmStreamPathRE.MatchString(tt.path); got != tt.want {
+				t.Fatalf("strmStreamPathRE.MatchString(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRawHostAllowedClassifiesDestinations(t *testing.T) {
 	h := &Handler{}
 	node := storage.Node{Target: "https://example.test"}

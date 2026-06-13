@@ -19,7 +19,7 @@ var (
 	embyPathRE             = regexp.MustCompile(`(?i)^/emby(/|$)`)
 	embyPrefixRE           = regexp.MustCompile(`(?i)^/emby`)
 	embySlashPrefixRE      = regexp.MustCompile(`(?i)^/emby/`)
-	strmStreamPathRE       = regexp.MustCompile(`(?i)/emby/videos/[^/]+/stream\.strm$`)
+	strmStreamPathRE       = regexp.MustCompile(`(?i)(?:^|/)(?:emby/)?videos/[^/]+/stream\.strm$`)
 	authAPIRE              = regexp.MustCompile(`(?i)/users/authenticate(byname)?`)
 	bearerOrTokenRE        = regexp.MustCompile(`(?i)^(Bearer|Token)\s+`)
 	strmExtRE              = regexp.MustCompile(`(?i)\.strm$`)
@@ -34,7 +34,7 @@ var (
 	bodyURLRE              = regexp.MustCompile(`https?://[^\s"'<>\\]+`)
 	playbackMediaExtRE     = regexp.MustCompile(`(?i)\.(m3u8|mpd|mkv|mp4|ts|m4s)$`)
 	embyItemImagesRE       = regexp.MustCompile(`(?i)/emby/items/.+/images/`)
-	additionalPartsPathRE  = regexp.MustCompile(`(?i)/emby/videos/.+/additionalparts`)
+	additionalPartsPathRE  = regexp.MustCompile(`(?i)(?:^|/)(?:emby/)?videos/.+/additionalparts(?:/|$)`)
 	setCookieDomainRE      = regexp.MustCompile(`(?i);\s*domain=[^;]+`)
 	setCookiePathPresentRE = regexp.MustCompile(`(?i);\s*path=`)
 	setCookiePathRE        = regexp.MustCompile(`(?i);\s*path=[^;]+`)
@@ -165,11 +165,30 @@ type mapHeader interface {
 }
 
 func isPlaybackPath(path string) bool {
-	p := strings.ToLower(path)
-	return strings.Contains(p, "/emby/") && (strings.Contains(p, "/smartstrm") || strings.Contains(p, "/videos/") || strings.Contains(p, "/playback/") || strings.Contains(p, "/sessions/playing") ||
+	p := normalizedEmbyAPIPath(path)
+	return strings.Contains(p, "/smartstrm") || strings.Contains(p, "/videos/") || strings.Contains(p, "/playback/") || strings.Contains(p, "/playbackinfo") || strings.Contains(p, "/sessions/playing") ||
 		(strings.Contains(p, "/items/") && (strings.Contains(p, "/download") || strings.Contains(p, "/stream") || strings.Contains(p, "/file"))) ||
-		strings.Contains(p, "/audio/") || strings.Contains(p, "/hls/") || strings.Contains(p, "/dash/") ||
-		playbackMediaExtRE.MatchString(p))
+		strings.Contains(p, "/audio/") || strings.Contains(p, "/hls/") || strings.Contains(p, "/hls1/") || strings.Contains(p, "/dash/") ||
+		streamingRE.MatchString(p) || playbackMediaExtRE.MatchString(p)
+}
+
+func normalizedEmbyAPIPath(path string) string {
+	return strings.ToLower(stripOptionalEmbyPrefix(path))
+}
+
+func stripOptionalEmbyPrefix(path string) string {
+	p := ensureLeadingSlash(path)
+	if strings.EqualFold(p, "/emby") {
+		return "/"
+	}
+	if len(p) >= len("/emby/") && strings.EqualFold(p[:len("/emby/")], "/emby/") {
+		return p[len("/emby"):]
+	}
+	return p
+}
+
+func isSessionsPlayingProgressPath(path string) bool {
+	return strings.Contains(normalizedEmbyAPIPath(path), "/sessions/playing/progress")
 }
 
 func isImagePath(path string) bool {

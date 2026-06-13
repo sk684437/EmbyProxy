@@ -139,7 +139,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	} else if isAdditionalPartsAPI {
 		stage = "additionalparts-proxy"
 	}
-	if strings.HasPrefix(strings.ToLower(targetURL.Path), "/emby/sessions/playing/progress") && r.Method != http.MethodOptions && h.progressThrottle != nil {
+	if isSessionsPlayingProgressPath(targetURL.Path) && r.Method != http.MethodOptions && h.progressThrottle != nil {
 		deviceID := r.Header.Get("X-Emby-Device-Id")
 		sessionID := targetURL.Query().Get("SessionId")
 		if sessionID == "" {
@@ -324,7 +324,7 @@ func isPlaybackStreamRequest(r *http.Request, targetURL *url.URL) bool {
 	if r == nil || targetURL == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 		return false
 	}
-	path := strings.ToLower(targetURL.Path)
+	path := normalizedEmbyAPIPath(targetURL.Path)
 	if strings.Contains(path, "/sessions/playing") || strings.Contains(path, "/playbackinfo") || strings.Contains(path, "/additionalparts") {
 		return false
 	}

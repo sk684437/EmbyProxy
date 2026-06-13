@@ -1137,13 +1137,19 @@ func TestIsPlaybackStreamRequestClassifiesPlaybackTraffic(t *testing.T) {
 	}{
 		{name: "progress", method: http.MethodPost, path: "/emby/Sessions/Playing/Progress"},
 		{name: "playback info", method: http.MethodGet, path: "/emby/Items/1/PlaybackInfo"},
+		{name: "bare playback info", method: http.MethodGet, path: "/Items/1/PlaybackInfo"},
 		{name: "additional parts", method: http.MethodGet, path: "/emby/Videos/1/AdditionalParts"},
+		{name: "bare additional parts", method: http.MethodGet, path: "/Videos/1/AdditionalParts"},
 		{name: "original media", method: http.MethodGet, path: "/emby/Videos/1/original.mkv", want: true},
+		{name: "bare original media", method: http.MethodGet, path: "/Videos/1/original.mkv", want: true},
 		{name: "stream endpoint", method: http.MethodGet, path: "/emby/Videos/1/stream", want: true},
+		{name: "bare stream endpoint", method: http.MethodGet, path: "/Videos/1/stream", want: true},
 		{name: "dynamic hls", method: http.MethodGet, path: "/emby/Videos/1/hls1/main/0.ts", want: true},
 		{name: "universal audio", method: http.MethodGet, path: "/emby/Audio/1/universal", want: true},
 		{name: "ranged video path", method: http.MethodGet, path: "/emby/Videos/1/file", range_: "bytes=0-", want: true},
 		{name: "item download", method: http.MethodGet, path: "/emby/Items/1/Download", want: true},
+		{name: "bare smartstrm", method: http.MethodGet, path: "/smartstrm", want: true},
+		{name: "bare strm stream special", method: http.MethodGet, path: "/Videos/1/stream.strm", want: true},
 		{name: "media post", method: http.MethodPost, path: "/emby/Videos/1/original.mkv"},
 	}
 	for _, tt := range tests {
@@ -1673,6 +1679,41 @@ func TestHandleMediaProxySkipsRangeFieldsForProgressAccessLog(t *testing.T) {
 	}
 	if _, ok := fields["contentRange"]; ok {
 		t.Fatalf("contentRange access log field should be absent for progress requests: %v", fields["contentRange"])
+	}
+}
+
+func TestHandleMediaProxyThrottlesProgressWithOptionalEmbyPrefix(t *testing.T) {
+	for _, path := range []string{"/emby/Sessions/Playing/Progress", "/Sessions/Playing/Progress"} {
+		t.Run(path, func(t *testing.T) {
+			store := newProxyTestStore(t)
+			h := New(config.Config{Defaults: config.Defaults{ProgressThrottleMS: 1200}}, store, nil, logging.New("silent", false))
+			actionCalls := 0
+			h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				actionCalls++
+				return textResponse(http.StatusNoContent, "", nil), nil
+			})}
+			h.playbackStreamClient = failRoundTripClient(t, "playback stream client should not handle progress requests")
+
+			targetURL, err := url.Parse("https://upstream.example" + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node"+path, nil)
+				req.Header.Set("X-Emby-Device-Id", "device-1")
+				res, err := h.handleMediaProxy(context.Background(), req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: path}, cloneURL(targetURL), nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
+				if err != nil {
+					t.Fatalf("handleMediaProxy() error = %v", err)
+				}
+				_ = res.Body.Close()
+				if res.StatusCode != http.StatusNoContent {
+					t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusNoContent)
+				}
+			}
+			if actionCalls != 1 {
+				t.Fatalf("playback action upstream calls = %d, want 1", actionCalls)
+			}
+		})
 	}
 }
 
@@ -2243,47 +2284,73 @@ func TestSmartSTRMUsesPlaybackProxyWithoutWhitelist(t *testing.T) {
 }
 
 func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
-	h := newProxyTestHandler(t, storage.Node{})
-	h.playbackStreamClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
-			"Accept-Ranges":  []string{"bytes"},
-			"Content-Length": []string{"4096"},
-			"Content-Range":  []string{"bytes 0-4095/8192"},
-			"Content-Type":   []string{"video/mp4"},
-		}), nil
-	})}
-
-	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Videos/1/stream.mp4?Static=true", nil)
-	req.Header.Set("User-Agent", "actual-client")
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusPartialContent {
-		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusPartialContent, rr.Body.String())
-	}
-	if rr.Body.String() != "video" {
-		t.Fatalf("body = %q, want video", rr.Body.String())
+	tests := []struct {
+		name            string
+		requestURI      string
+		wantUpstreamURL string
+	}{
+		{
+			name:            "emby stream",
+			requestURI:      "https://proxy.example/node/secret/emby/Videos/1/stream.mp4?Static=true",
+			wantUpstreamURL: "https://upstream.example/emby/Videos/1/stream.mp4?Static=true",
+		},
+		{
+			name:            "bare original stream",
+			requestURI:      "https://proxy.example/node/secret/Videos/1/original.mkv?Static=true",
+			wantUpstreamURL: "https://upstream.example/Videos/1/original.mkv?Static=true",
+		},
 	}
 
-	ctx := context.Background()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		stats, err := h.store.GetTodayStats(ctx)
-		if err != nil {
-			t.Fatalf("GetTodayStats() error = %v", err)
-		}
-		for _, row := range stats.Today {
-			if row.Node == "node" && row.Client == "actual-client" {
-				if row.Bytes != 10 || row.InboundBytes != 5 || row.OutboundBytes != 5 {
-					t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 10, 5, 5", row.Bytes, row.InboundBytes, row.OutboundBytes)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newProxyTestHandler(t, storage.Node{})
+			h.noRedirectClient = failRoundTripClient(t, "general no-redirect client should not handle playback streams")
+			h.defaultFollowClient = failRoundTripClient(t, "default follow client should not handle playback streams")
+			h.playbackStreamClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.String() != tt.wantUpstreamURL {
+					t.Fatalf("upstream request URL = %q, want %q", req.URL.String(), tt.wantUpstreamURL)
 				}
-				return
+				return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
+					"Accept-Ranges":  []string{"bytes"},
+					"Content-Length": []string{"4096"},
+					"Content-Range":  []string{"bytes 0-4095/8192"},
+					"Content-Type":   []string{"video/mp4"},
+				}), nil
+			})}
+
+			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil)
+			req.Header.Set("User-Agent", "actual-client")
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusPartialContent {
+				t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusPartialContent, rr.Body.String())
 			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("playback stat was not written")
-		}
-		time.Sleep(10 * time.Millisecond)
+			if rr.Body.String() != "video" {
+				t.Fatalf("body = %q, want video", rr.Body.String())
+			}
+
+			ctx := context.Background()
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				stats, err := h.store.GetTodayStats(ctx)
+				if err != nil {
+					t.Fatalf("GetTodayStats() error = %v", err)
+				}
+				for _, row := range stats.Today {
+					if row.Node == "node" && row.Client == "actual-client" {
+						if row.Bytes != 10 || row.InboundBytes != 5 || row.OutboundBytes != 5 {
+							t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 10, 5, 5", row.Bytes, row.InboundBytes, row.OutboundBytes)
+						}
+						return
+					}
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("playback stat was not written")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
 	}
 }
 
