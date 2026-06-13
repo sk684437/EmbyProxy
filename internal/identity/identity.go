@@ -170,11 +170,19 @@ func (m *Manager) ApplyToHeaders(headers http.Header, profile string) {
 	}
 }
 
-func (m *Manager) ApplyToURL(u *url.URL, profile string) {
+func (m *Manager) ApplyToURL(u *url.URL, headers http.Header, profile string) {
 	if u == nil {
 		return
 	}
 	snap := m.Snapshot(profile)
+	if usesYambyAuthFormat(snap) {
+		applyYambyQueryAuthToHeaders(u, headers)
+		return
+	}
+	applyProfileIdentityToURL(u, snap)
+}
+
+func applyProfileIdentityToURL(u *url.URL, snap Snapshot) {
 	q := u.Query()
 	changed := false
 	for key, values := range q {
@@ -202,6 +210,79 @@ func (m *Manager) ApplyToURL(u *url.URL, profile string) {
 	if changed {
 		u.RawQuery = q.Encode()
 	}
+}
+
+var yambyQueryAuthHeaders = map[string]string{
+	"authorization":              "Authorization",
+	"xauthorization":             "X-Authorization",
+	"xembyauthorization":         "X-Emby-Authorization",
+	"xembytoken":                 "X-Emby-Token",
+	"xmediabrowserauthorization": "X-MediaBrowser-Authorization",
+	"xmediabrowsertoken":         "X-MediaBrowser-Token",
+}
+
+func applyYambyQueryAuthToHeaders(u *url.URL, headers http.Header) {
+	q := u.Query()
+	changed := false
+
+	for rawQuery := u.RawQuery; rawQuery != ""; {
+		var part string
+		part, rawQuery, _ = strings.Cut(rawQuery, "&")
+		if part == "" {
+			continue
+		}
+		rawKey, rawValue, _ := strings.Cut(part, "=")
+		key, err := url.QueryUnescape(rawKey)
+		if err != nil {
+			key = rawKey
+		}
+		normalizedKey := normalizeHeaderKey(key)
+		if canonical, ok := yambyQueryAuthHeaders[normalizedKey]; ok {
+			if headers != nil && !headersHaveNonEmptyValue(headers, canonical) {
+				value, err := url.QueryUnescape(rawValue)
+				if err != nil {
+					value = rawValue
+				}
+				headers.Set(canonical, value)
+			}
+			q.Del(key)
+			changed = true
+			continue
+		}
+		if isYambyQueryIdentityKey(normalizedKey) {
+			q.Del(key)
+			changed = true
+		}
+	}
+
+	if changed {
+		u.RawQuery = q.Encode()
+	}
+}
+
+func isYambyQueryIdentityKey(normalizedKey string) bool {
+	if strings.HasPrefix(normalizedKey, "xemby") || strings.HasPrefix(normalizedKey, "xmediabrowser") {
+		return true
+	}
+	switch normalizedKey {
+	case "deviceid", "devicename":
+		return true
+	default:
+		return false
+	}
+}
+
+func headersHaveNonEmptyValue(headers http.Header, canonical string) bool {
+	for key := range headers {
+		if strings.EqualFold(key, canonical) {
+			for _, value := range headers[key] {
+				if strings.TrimSpace(value) != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func RewriteMediaBrowserAuthorization(value string, snap Snapshot) string {

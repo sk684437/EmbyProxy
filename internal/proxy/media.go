@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
@@ -29,6 +30,7 @@ var errProxyRewriteBodyTooLarge = errors.New("rewritable upstream response body 
 
 func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, sourceURL *url.URL, body []byte, env config.ProxyEnv) (*http.Response, error) {
 	headers := cloneHeader(r.Header)
+	applyIdentityToURL(h.ids, sourceURL, headers, node)
 	stripClientIPHeaders(headers)
 	headers.Del("Range")
 	headers.Del("If-Range")
@@ -119,9 +121,11 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 }
 
 func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, targetURL *url.URL, body []byte, env config.ProxyEnv, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI bool, reqOrigin, clientIP string) (*http.Response, error) {
+	outboundHeaders := cloneHeader(r.Header)
+	applyIdentityToURL(h.ids, targetURL, outboundHeaders, node)
 	isStreamingMedia := isPlaybackStreamRequest(r, targetURL)
 	probeDirectExternalRedirect := node.DirectExternal && isPlaybackAPI && !isImageAPI && isStreamingMedia
-	hClean := buildCleanProxyHeaders(h.ids, r.Header, targetURL, node, env, isStreamingMedia)
+	hClean := buildCleanProxyHeaders(h.ids, outboundHeaders, targetURL, node, env, isStreamingMedia)
 	if targetURL.Query().Get("api_key") == "" {
 		if apiKey := r.URL.Query().Get("api_key"); apiKey != "" {
 			q := targetURL.Query()
@@ -134,6 +138,19 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		stage = "image-proxy"
 	} else if isAdditionalPartsAPI {
 		stage = "additionalparts-proxy"
+	}
+	if strings.HasPrefix(strings.ToLower(targetURL.Path), "/emby/sessions/playing/progress") && r.Method != http.MethodOptions && h.progressThrottle != nil {
+		deviceID := r.Header.Get("X-Emby-Device-Id")
+		sessionID := targetURL.Query().Get("SessionId")
+		if sessionID == "" {
+			sessionID = targetURL.Query().Get("sessionId")
+		}
+		key := clientIP + "|" + deviceID + "|" + sessionID
+		if _, ok := h.progressThrottle.Get(key); ok {
+			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "progress-throttle", "targetUrl": targetURL.String(), "outboundHeaders": hClean})
+			return textResponse(http.StatusNoContent, "", http.Header{"Cache-Control": []string{"no-store"}}), nil
+		}
+		h.progressThrottle.Set(key, 1, time.Duration(h.cfg.Defaults.ProgressThrottleMS)*time.Millisecond)
 	}
 	cacheKey := ""
 	var imageCache *imageDiskCache

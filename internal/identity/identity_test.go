@@ -184,72 +184,161 @@ func TestApplyToHeadersDoesNotAddMissingEmbyHeaders(t *testing.T) {
 	}
 }
 
-func TestApplyToURLMatchesProfileQueryIdentityBehavior(t *testing.T) {
+func TestApplyToURLMigratesYambyAllowedQueryAuth(t *testing.T) {
 	manager := NewManager(nil)
-	yamby := manager.Snapshot("yamby")
-	hillsWindows := manager.Snapshot("hills_windows")
 	tests := []struct {
-		name      string
-		profile   string
-		want      []string
-		wantQuery map[string]string
-		reject    []string
+		queryKey string
+		header   string
 	}{
-		{
-			name:    "yamby rewrites existing query identity",
-			profile: "yamby",
-			want:    []string{"X-Emby-Authorization=", "Client%3DYamby", "Device%3DAndroid", "X-Emby-Client=Yamby"},
-			wantQuery: map[string]string{
-				"X-Emby-Token":          "token",
-				"X-Emby-Client":         "Yamby",
-				"X-Emby-Client-Version": "2.0.4.3",
-				"X-Emby-Device-Name":    "Android",
-				"X-Emby-Device-Id":      yamby.DeviceID,
-			},
-			reject: []string{"Synthetic+Client", "SYNTHETIC-PC"},
-		},
-		{
-			name:    "hills windows rewrites query identity",
-			profile: "hills_windows",
-			want:    []string{"X-Emby-Authorization=", "Client%3D%22Hills+Windows%22", "X-Emby-Client=Hills+Windows"},
-			wantQuery: map[string]string{
-				"X-Emby-Device-Name": hillsWindows.DeviceName,
-				"X-Emby-Device-Id":   hillsWindows.DeviceID,
-			},
-			reject: []string{"Synthetic+Client", "SYNTHETIC-PC"},
-		},
+		{queryKey: "authorization", header: "Authorization"},
+		{queryKey: "x-authorization", header: "X-Authorization"},
+		{queryKey: "x-emby-authorization", header: "X-Emby-Authorization"},
+		{queryKey: "x-emby-token", header: "X-Emby-Token"},
+		{queryKey: "x-mediabrowser-authorization", header: "X-MediaBrowser-Authorization"},
+		{queryKey: "x-mediabrowser-token", header: "X-MediaBrowser-Token"},
+		{queryKey: "X_eMbY_ToKeN", header: "X-Emby-Token"},
 	}
+
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			u, err := url.Parse(`https://example.test/emby/Users/1?X-Emby-Authorization=Emby+Client%3D%22Synthetic+Client%22%2C+Device%3D%22SYNTHETIC-PC%22%2C+DeviceId%3D%22synthetic-source-device-id%22%2C+Version%3D%221.2.0%22&X-Emby-Client=Synthetic+Client&X-Emby-Client-Version=1.2.0&X-Emby-Device-Name=SYNTHETIC-PC&X-Emby-Device-Id=synthetic-source-device-id&X-Emby-Token=token&tag=v1`)
-			if err != nil {
-				t.Fatal(err)
-			}
+		t.Run(tt.queryKey, func(t *testing.T) {
+			headers := http.Header{}
+			u := parseIdentityURL(t, tt.queryKey+"=query-value&tag=v1")
 
-			manager.ApplyToURL(u, tt.profile)
+			manager.ApplyToURL(u, headers, "yamby")
 
-			got := u.RawQuery
-			for _, want := range tt.want {
-				if !strings.Contains(got, want) {
-					t.Fatalf("RawQuery = %q, want to contain %q", got, want)
-				}
-			}
-			for _, reject := range tt.reject {
-				if strings.Contains(got, reject) {
-					t.Fatalf("RawQuery = %q, want to reject %q", got, reject)
-				}
-			}
 			query := u.Query()
-			for key, want := range tt.wantQuery {
-				if got := query.Get(key); got != want {
-					t.Fatalf("%s = %q, want %q", key, got, want)
-				}
+			if headers.Get(tt.header) != "query-value" {
+				t.Fatalf("%s header behavior did not match expectation", tt.header)
 			}
-			if !strings.Contains(got, "tag=v1") {
-				t.Fatalf("RawQuery = %q, want to preserve non-identity query", got)
+			if query.Has(tt.queryKey) {
+				t.Fatalf("%s query was not removed", tt.queryKey)
+			}
+			if got := query.Get("tag"); got != "v1" {
+				t.Fatal("ordinary query parameter was not preserved")
 			}
 		})
 	}
+}
+
+func TestApplyToURLUsesFirstYambyQueryAuthValue(t *testing.T) {
+	manager := NewManager(nil)
+	headers := http.Header{}
+	u := parseIdentityURL(t, "x-emby-token=first-value&x-emby-token=second-value")
+
+	manager.ApplyToURL(u, headers, "yamby")
+
+	if headers.Get("X-Emby-Token") != "first-value" {
+		t.Fatal("X-Emby-Token header behavior did not match expectation")
+	}
+	if u.Query().Has("x-emby-token") {
+		t.Fatal("x-emby-token query was not removed")
+	}
+}
+
+func TestApplyToURLKeepsExistingYambyHeader(t *testing.T) {
+	manager := NewManager(nil)
+	headers := http.Header{"X-Emby-Token": {"header-value"}}
+	u := parseIdentityURL(t, "x-emby-token=query-value")
+
+	manager.ApplyToURL(u, headers, "yamby")
+
+	if headers.Get("X-Emby-Token") != "header-value" {
+		t.Fatal("existing X-Emby-Token header was overwritten")
+	}
+	if u.Query().Has("x-emby-token") {
+		t.Fatal("x-emby-token query was not removed")
+	}
+}
+
+func TestApplyToURLFillsEmptyExistingYambyHeader(t *testing.T) {
+	manager := NewManager(nil)
+	headers := http.Header{"X-Emby-Token": {""}}
+	u := parseIdentityURL(t, "x-emby-token=query-value")
+
+	manager.ApplyToURL(u, headers, "yamby")
+
+	if headers.Get("X-Emby-Token") != "query-value" {
+		t.Fatal("empty X-Emby-Token header was not filled from query")
+	}
+	if u.Query().Has("x-emby-token") {
+		t.Fatal("x-emby-token query was not removed")
+	}
+}
+
+func TestApplyToURLStripsOtherYambyIdentityQueryAndKeepsOrdinaryQuery(t *testing.T) {
+	manager := NewManager(nil)
+	headers := http.Header{}
+	u := parseIdentityURL(t, "x-emby-client=Client&x-emby-device-id=device&x-mediabrowser-client=MediaBrowser&x-mediabrowser-device-id=media-device&X_MediaBrowser_Client_Version=1.2.3&DeviceId=source-device&DeviceName=source-name&quality=90&tag=v1&fields=Overview&maxwidth=600&api_key=api-value&playsessionid=session-value")
+
+	manager.ApplyToURL(u, headers, "yamby")
+
+	query := u.Query()
+	for _, key := range []string{"x-emby-client", "x-emby-device-id", "x-mediabrowser-client", "x-mediabrowser-device-id", "X_MediaBrowser_Client_Version", "DeviceId", "DeviceName"} {
+		if query.Has(key) {
+			t.Fatalf("%s query was not removed", key)
+		}
+	}
+	for _, key := range []string{"X-Emby-Client", "X-Emby-Device-Id", "X-MediaBrowser-Client", "X-MediaBrowser-Device-Id", "X-MediaBrowser-Client-Version"} {
+		if headers.Get(key) != "" {
+			t.Fatalf("%s header should not be set", key)
+		}
+	}
+	for key, want := range map[string]string{
+		"quality":       "90",
+		"tag":           "v1",
+		"fields":        "Overview",
+		"maxwidth":      "600",
+		"api_key":       "api-value",
+		"playsessionid": "session-value",
+	} {
+		if query.Get(key) != want {
+			t.Fatalf("%s query behavior did not match expectation", key)
+		}
+	}
+}
+
+func TestApplyToURLKeepsHillsQueryIdentityBehavior(t *testing.T) {
+	manager := NewManager(nil)
+	hillsWindows := manager.Snapshot("hills_windows")
+	u, err := url.Parse(`https://example.test/emby/Users/1?X-Emby-Authorization=Emby+Client%3D%22Synthetic+Client%22%2C+Device%3D%22SYNTHETIC-PC%22%2C+DeviceId%3D%22synthetic-source-device-id%22%2C+Version%3D%221.2.0%22&X-Emby-Client=Synthetic+Client&X-Emby-Device-Name=SYNTHETIC-PC&X-Emby-Device-Id=synthetic-source-device-id&tag=v1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manager.ApplyToURL(u, http.Header{}, "hills_windows")
+
+	got := u.RawQuery
+	for _, want := range []string{"X-Emby-Authorization=", "Client%3D%22Hills+Windows%22", "X-Emby-Client=Hills+Windows"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RawQuery = %q, want to contain %q", got, want)
+		}
+	}
+	for _, reject := range []string{"Synthetic+Client", "SYNTHETIC-PC"} {
+		if strings.Contains(got, reject) {
+			t.Fatalf("RawQuery = %q, want to reject %q", got, reject)
+		}
+	}
+	query := u.Query()
+	for key, want := range map[string]string{
+		"X-Emby-Device-Name": hillsWindows.DeviceName,
+		"X-Emby-Device-Id":   hillsWindows.DeviceID,
+	} {
+		if got := query.Get(key); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if !strings.Contains(got, "tag=v1") {
+		t.Fatalf("RawQuery = %q, want to preserve non-identity query", got)
+	}
+}
+
+func parseIdentityURL(t *testing.T, rawQuery string) *url.URL {
+	t.Helper()
+	u, err := url.Parse("https://example.test/emby/Users/1?" + rawQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 func TestProfileDeviceIdentityDefaults(t *testing.T) {

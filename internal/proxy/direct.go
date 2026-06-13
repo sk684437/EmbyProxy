@@ -89,14 +89,15 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 			lastErr = err
 			continue
 		}
-		applyIdentityToURL(h.ids, u, node)
+		outboundHeaders := cloneHeader(r.Header)
+		applyIdentityToURL(h.ids, u, outboundHeaders, node)
 		targetURL := u.String()
 		if protectDirect && !h.directURLAllowed(ctx, node, u, env) {
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-forbidden", "targetUrl": targetURL, "outboundHeaders": http.Header{}})
 			lastErr = errForbiddenDirectHost
 			continue
 		}
-		headers := buildDirectOutboundHeaders(h.ids, r.Header, u, env, node, "normal")
+		headers := buildDirectOutboundHeaders(h.ids, outboundHeaders, u, env, node, "normal")
 		currentHeaders := headers
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-normal", "targetUrl": targetURL, "outboundHeaders": headers})
 		res, err := h.doFetch(ctx, client, u, method, headers, body)
@@ -126,7 +127,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		}
 		if res.StatusCode == http.StatusForbidden && int64(len(body)) <= h.cfg.Defaults.MaxRetryBodyBytes {
 			_ = res.Body.Close()
-			h2 := buildDirectOutboundHeaders(h.ids, r.Header, u, env, node, "retry-no-origin")
+			h2 := buildDirectOutboundHeaders(h.ids, outboundHeaders, u, env, node, "retry-no-origin")
 			currentHeaders = h2
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-no-origin", "targetUrl": targetURL, "outboundHeaders": h2})
 			res, err = h.doFetch(ctx, client, u, method, h2, body)
@@ -137,7 +138,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		}
 		if res.StatusCode == http.StatusForbidden && int64(len(body)) <= h.cfg.Defaults.MaxRetryBodyBytes {
 			_ = res.Body.Close()
-			h3 := buildDirectOutboundHeaders(h.ids, r.Header, u, env, node, "retry-browserish")
+			h3 := buildDirectOutboundHeaders(h.ids, outboundHeaders, u, env, node, "retry-browserish")
 			currentHeaders = h3
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-retry-browserish", "targetUrl": targetURL, "outboundHeaders": h3})
 			res, err = h.doFetch(ctx, client, u, method, h3, body)

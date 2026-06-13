@@ -21,6 +21,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"embyproxy/internal/config"
+	"embyproxy/internal/identity"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
@@ -1534,6 +1535,46 @@ func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
 	}
 	if rawCalls != 1 {
 		t.Fatalf("raw direct calls = %d, want 1", rawCalls)
+	}
+}
+
+func TestHandleDirectMigratesYambyQueryAuthWithoutMutatingInboundHeaders(t *testing.T) {
+	ctx := context.Background()
+	rawCalls := 0
+	h := &Handler{
+		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
+		ids: identity.NewManager(nil),
+		log: logging.New("silent", false),
+		rawDirectClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			rawCalls++
+			if req.Header.Get("X-Emby-Token") == "" {
+				t.Fatal("upstream X-Emby-Token header was not set")
+			}
+			if req.URL.Query().Has("x-emby-token") {
+				t.Fatal("upstream x-emby-token query was not removed")
+			}
+			if got := req.URL.Query().Get("tag"); got != "v1" {
+				t.Fatal("ordinary upstream query parameter was not preserved")
+			}
+			return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+		})},
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items", nil)
+	node := storage.Node{Name: "node", Target: "https://upstream.example", Impersonate: true, ImpersonateProfile: identity.DefaultProfile}
+
+	res, err := h.handleDirect(ctx, req, "http://8.8.8.8/video.mkv?x-emby-token=query-value&tag=v1", config.ProxyEnv{ExternalAllowAny: true}, node, nil)
+	if err != nil {
+		t.Fatalf("handleDirect() error = %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+	}
+	if rawCalls != 1 {
+		t.Fatalf("raw direct calls = %d, want 1", rawCalls)
+	}
+	if req.Header.Get("X-Emby-Token") != "" {
+		t.Fatal("inbound request header was mutated")
 	}
 }
 

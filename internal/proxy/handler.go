@@ -464,8 +464,6 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		return h.handleRawDirect(ctx, r, raw, env, node, body)
 	}
 	targetURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
-	applyIdentityToURL(h.ids, targetURL, node)
-	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-target", "targetUrl": targetURL.String()})
 	if h.isSTRM(targetURL.Path) && !strmStreamPathRE.MatchString(targetURL.Path) {
 		return h.handleSTRM(ctx, r, node, parsed, targetURL, body, env)
 	}
@@ -477,7 +475,14 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	isImageAPI := isImagePath(targetURL.Path)
 	isAdditionalPartsAPI := isAdditionalPartsPath(targetURL.Path)
 	needCompatOrigin := isAuthAPI || isPlaybackAPI
-	headers := cloneHeader(r.Header)
+	shouldProxyMedia := isPlaybackAPI || isImageAPI || isAdditionalPartsAPI
+	if shouldProxyMedia {
+		return h.handleMediaProxy(ctx, r, node, parsed, targetURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
+	}
+	outboundHeaders := cloneHeader(r.Header)
+	applyIdentityToURL(h.ids, targetURL, outboundHeaders, node)
+	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-target", "targetUrl": targetURL.String()})
+	headers := cloneHeader(outboundHeaders)
 	stripClientIPHeaders(headers)
 	deleteHeaders(headers, "Content-Length")
 	if isCapy && isAuthAPI {
@@ -524,27 +529,10 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-prepared", "targetUrl": targetURL.String(), "outboundHeaders": headers})
 	currentHeaders := headers
-	if strings.HasPrefix(p, "/emby/sessions/playing/progress") && r.Method != http.MethodOptions {
-		deviceID := r.Header.Get("X-Emby-Device-Id")
-		sessionID := targetURL.Query().Get("SessionId")
-		if sessionID == "" {
-			sessionID = targetURL.Query().Get("sessionId")
-		}
-		key := clientIP + "|" + deviceID + "|" + sessionID
-		if _, ok := h.progressThrottle.Get(key); ok {
-			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "progress-throttle", "targetUrl": targetURL.String(), "outboundHeaders": headers})
-			return textResponse(http.StatusNoContent, "", http.Header{"Cache-Control": []string{"no-store"}}), nil
-		}
-		h.progressThrottle.Set(key, 1, time.Duration(h.cfg.Defaults.ProgressThrottleMS)*time.Millisecond)
-	}
 	if isAuthAPI && r.Method == http.MethodPost {
 		if res := h.tryAuthAPI(ctx, r, node, parsed, targetURL, headers, body, env); res != nil {
 			return res, nil
 		}
-	}
-	shouldProxyMedia := isPlaybackAPI || isImageAPI || isAdditionalPartsAPI
-	if shouldProxyMedia {
-		return h.handleMediaProxy(ctx, r, node, parsed, targetURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-proxy", "targetUrl": targetURL.String(), "outboundHeaders": headers})
 	res, err := h.doFetch(ctx, h.noRedirectClient, targetURL, r.Method, headers, body)

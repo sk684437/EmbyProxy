@@ -114,9 +114,9 @@ func applyIdentity(ids *identity.Manager, h http.Header, node storage.Node) {
 	}
 }
 
-func applyIdentityToURL(ids *identity.Manager, u *url.URL, node storage.Node) {
+func applyIdentityToURL(ids *identity.Manager, u *url.URL, headers http.Header, node storage.Node) {
 	if node.Impersonate {
-		ids.ApplyToURL(u, node.ImpersonateProfile)
+		ids.ApplyToURL(u, headers, node.ImpersonateProfile)
 	}
 }
 

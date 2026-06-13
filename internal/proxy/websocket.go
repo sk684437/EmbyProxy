@@ -81,8 +81,9 @@ func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter,
 	}
 	forwardPath := websocketForwardPath(parsed.Path, base.Path)
 	targetURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
-	applyIdentityToURL(h.ids, targetURL, node)
-	headers := buildWebSocketHeaders(h.ids, r.Header, targetURL, node)
+	outboundHeaders := cloneHeader(r.Header)
+	applyIdentityToURL(h.ids, targetURL, outboundHeaders, node)
+	headers := buildWebSocketHeaders(h.ids, outboundHeaders, targetURL, node)
 	env := h.proxyEnv(ctx)
 	if isEmosNode(node, targetURL, env) {
 		applyEmosHeaders(headers, env)
