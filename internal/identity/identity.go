@@ -91,8 +91,8 @@ var Profiles = map[string]Profile{
 var ProfileOrder = []string{DefaultProfile, "hills_android", "hills_windows"}
 
 var (
-	embyAuthorizationRE = regexp.MustCompile(`(?i)^(?:MediaBrowser|Emby)(?:\s|$)`)
-	mediaBrowserTokenRE = regexp.MustCompile(`(?i)^MediaBrowser(?:\s|$).*?\bToken\s*=\s*("[^"]*"|[^,\s]+)`)
+	embyAuthorizationRE      = regexp.MustCompile(`(?i)^(?:MediaBrowser|Emby)(?:\s|$)`)
+	embyAuthorizationTokenRE = regexp.MustCompile(`(?i)^(?:MediaBrowser|Emby)(?:\s|$).*?\bToken\s*=\s*("[^"]*"|[^,\s]+)`)
 )
 
 func NewManager(store *storage.Store) *Manager {
@@ -137,11 +137,7 @@ func (m *Manager) Snapshot(profile string) Snapshot {
 
 func (m *Manager) ApplyToHeaders(headers http.Header, profile string) {
 	snap := m.Snapshot(profile)
-	if headers.Get("X-Emby-Token") == "" {
-		if token := authTokenFromHeaders(headers); token != "" {
-			headers.Set("X-Emby-Token", token)
-		}
-	}
+	applyAuthorizationTokenToHeaders(headers)
 	dropIdentityHeaders := usesYambyAuthFormat(snap)
 	for key, values := range cloneHeader(headers) {
 		if len(values) == 0 {
@@ -190,9 +186,39 @@ func (m *Manager) ApplyToURL(u *url.URL, headers http.Header, profile string) {
 	snap := m.Snapshot(profile)
 	if usesYambyAuthFormat(snap) {
 		applyYambyQueryAuthToHeaders(u, headers)
+		applyAuthorizationTokenToHeaders(headers)
 		return
 	}
+	applyQueryAuthorizationTokenToHeaders(u, headers)
 	applyProfileIdentityToURL(u, snap)
+}
+
+func applyQueryAuthorizationTokenToHeaders(u *url.URL, headers http.Header) {
+	if u == nil || headers == nil || headersHaveNonEmptyValue(headers, "X-Emby-Token") {
+		return
+	}
+	for key, values := range u.Query() {
+		switch normalizeHeaderKey(key) {
+		case "authorization", "xauthorization", "xembyauthorization", "xmediabrowserauthorization":
+		default:
+			continue
+		}
+		for _, value := range values {
+			if token := authTokenFromValue(value); token != "" {
+				headers.Set("X-Emby-Token", token)
+				return
+			}
+		}
+	}
+}
+
+func applyAuthorizationTokenToHeaders(headers http.Header) {
+	if headers == nil || headersHaveNonEmptyValue(headers, "X-Emby-Token") {
+		return
+	}
+	if token := authTokenFromHeaders(headers); token != "" {
+		headers.Set("X-Emby-Token", token)
+	}
 }
 
 func applyProfileIdentityToURL(u *url.URL, snap Snapshot) {
@@ -544,7 +570,7 @@ func buildHillsAuthorization(snap Snapshot) string {
 }
 
 func authTokenFromValue(auth string) string {
-	matches := mediaBrowserTokenRE.FindStringSubmatch(strings.TrimSpace(auth))
+	matches := embyAuthorizationTokenRE.FindStringSubmatch(strings.TrimSpace(auth))
 	if len(matches) < 2 {
 		return ""
 	}
@@ -552,7 +578,7 @@ func authTokenFromValue(auth string) string {
 }
 
 func authTokenFromHeaders(headers http.Header) string {
-	for _, key := range []string{"X-Emby-Authorization", "X-MediaBrowser-Authorization", "Authorization"} {
+	for _, key := range []string{"X-Emby-Authorization", "X-MediaBrowser-Authorization", "Authorization", "X-Authorization"} {
 		if token := authTokenFromValue(headers.Get(key)); token != "" {
 			return token
 		}

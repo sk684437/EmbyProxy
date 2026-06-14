@@ -8,11 +8,12 @@ import (
 )
 
 const (
-	testYambyDeviceID  = "00000000-0000-4000-8000-000000000001"
-	testHillsWindowsID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testHillsAndroidID = "bbbbbbbbbbbbbbbb"
-	testSourceAuth     = `MediaBrowser Token="source-token", Client="Source Client", Device="Source Device", DeviceId="source-device-id", Version="0.0.0-test"`
-	testSourceEmbyAuth = `Emby UserId="source-user", Client="Source Client", Device="Source Device", DeviceId="source-device-id", Version="0.0.0-test"`
+	testYambyDeviceID          = "00000000-0000-4000-8000-000000000001"
+	testHillsWindowsID         = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testHillsAndroidID         = "bbbbbbbbbbbbbbbb"
+	testSourceMediaBrowserAuth = `MediaBrowser Token="source-token", Client="Source Client", Device="Source Device", DeviceId="source-device-id", Version="0.0.0-test"`
+	testSourceEmbyTokenAuth    = `Emby Token="source-token", Client="Source Client", Device="Source Device", DeviceId="source-device-id", Version="0.0.0-test"`
+	testSourceEmbyAuth         = `Emby UserId="source-user", Client="Source Client", Device="Source Device", DeviceId="source-device-id", Version="0.0.0-test"`
 )
 
 func TestRewriteMediaBrowserAuthorization(t *testing.T) {
@@ -51,7 +52,7 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 		},
 		{
 			name: "yamby rewrites media browser auth without token field",
-			raw:  testSourceAuth,
+			raw:  testSourceMediaBrowserAuth,
 			snap: yamby,
 			want: `Emby Client=Yamby,Device=Android,DeviceId=` + testYambyDeviceID + `,Version=2.0.4.3`,
 		},
@@ -75,7 +76,7 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 		},
 		{
 			name: "hills android rewrites media browser auth without token field",
-			raw:  testSourceAuth,
+			raw:  testSourceMediaBrowserAuth,
 			snap: hillsAndroid,
 			want: `Emby Client="Hills", Device="diting", DeviceId="` + testHillsAndroidID + `", Version="1.7.1"`,
 		},
@@ -90,27 +91,43 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 	}
 }
 
-func TestApplyToHeadersMovesMediaBrowserToken(t *testing.T) {
+func TestApplyToHeadersMovesAuthorizationToken(t *testing.T) {
 	tests := []struct {
-		name              string
-		headers           http.Header
-		wantToken         string
-		wantAuthRewritten bool
-		wantAuthorization string
+		name                 string
+		headers              http.Header
+		wantToken            string
+		wantRewrittenAuthKey string
+		wantAuthorization    string
 	}{
 		{
-			name:              "moves media browser token when token header is missing",
-			wantAuthRewritten: true,
+			name:                 "moves MediaBrowser token when token header is missing",
+			wantRewrittenAuthKey: "X-Emby-Authorization",
 			headers: http.Header{
-				"X-Emby-Authorization": {testSourceAuth},
+				"X-Emby-Authorization": {testSourceMediaBrowserAuth},
 			},
 			wantToken: "source-token",
 		},
 		{
-			name:              "preserves existing token header",
-			wantAuthRewritten: true,
+			name:                 "moves Emby token when token header is missing",
+			wantRewrittenAuthKey: "X-Emby-Authorization",
 			headers: http.Header{
-				"X-Emby-Authorization": {testSourceAuth},
+				"X-Emby-Authorization": {testSourceEmbyTokenAuth},
+			},
+			wantToken: "source-token",
+		},
+		{
+			name:                 "moves X-Authorization token when token header is missing",
+			wantRewrittenAuthKey: "X-Authorization",
+			headers: http.Header{
+				"X-Authorization": {testSourceEmbyTokenAuth},
+			},
+			wantToken: "source-token",
+		},
+		{
+			name:                 "preserves existing token header",
+			wantRewrittenAuthKey: "X-Emby-Authorization",
+			headers: http.Header{
+				"X-Emby-Authorization": {testSourceMediaBrowserAuth},
 				"X-Emby-Token":         {"existing-token"},
 			},
 			wantToken: "existing-token",
@@ -136,13 +153,14 @@ func TestApplyToHeadersMovesMediaBrowserToken(t *testing.T) {
 			if got := tt.headers.Get("X-Emby-Token"); got != tt.wantToken {
 				t.Fatalf("X-Emby-Token = %q, want %q", got, tt.wantToken)
 			}
-			if got := tt.headers.Get("X-Emby-Authorization"); tt.wantAuthRewritten && got != wantAuth {
-				t.Fatalf("X-Emby-Authorization = %q, want %q", got, wantAuth)
-			} else if !tt.wantAuthRewritten && got != "" {
-				t.Fatalf("X-Emby-Authorization = %q, want empty", got)
-			}
-			if strings.Contains(strings.ToLower(tt.headers.Get("X-Emby-Authorization")), "token=") {
-				t.Fatalf("X-Emby-Authorization still contains token: %q", tt.headers.Get("X-Emby-Authorization"))
+			if tt.wantRewrittenAuthKey != "" {
+				value := tt.headers.Get(tt.wantRewrittenAuthKey)
+				if value != wantAuth {
+					t.Fatalf("%s = %q, want %q", tt.wantRewrittenAuthKey, value, wantAuth)
+				}
+				if strings.Contains(strings.ToLower(value), "token=") {
+					t.Fatalf("%s still contains token: %q", tt.wantRewrittenAuthKey, value)
+				}
 			}
 			if got := tt.headers.Get("Authorization"); tt.wantAuthorization != "" && got != tt.wantAuthorization {
 				t.Fatalf("Authorization = %q, want %q", got, tt.wantAuthorization)
@@ -295,6 +313,53 @@ func TestApplyToURLFillsEmptyExistingYambyHeader(t *testing.T) {
 	}
 	if u.Query().Has("x-emby-token") {
 		t.Fatal("x-emby-token query was not removed")
+	}
+}
+
+func TestApplyToURLMovesQueryAuthorizationToken(t *testing.T) {
+	manager := NewManager(nil)
+	encodedAuth := url.QueryEscape(testSourceEmbyTokenAuth)
+	tests := []struct {
+		name              string
+		profile           string
+		rawQuery          string
+		headers           http.Header
+		wantToken         string
+		wantRemovedQuery  []string
+		wantNoQueryToken  bool
+		wantOrdinaryQuery bool
+	}{
+		{name: "yamby", profile: "yamby", rawQuery: "X-Emby-Authorization=" + encodedAuth + "&tag=v1", headers: http.Header{}, wantToken: "source-token", wantRemovedQuery: []string{"X-Emby-Authorization"}, wantOrdinaryQuery: true},
+		{name: "yamby x authorization alias", profile: "yamby", rawQuery: "x-authorization=" + encodedAuth + "&tag=v1", headers: http.Header{}, wantToken: "source-token", wantRemovedQuery: []string{"x-authorization"}, wantOrdinaryQuery: true},
+		{name: "hills android", profile: "hills_android", rawQuery: "X-Emby-Authorization=" + encodedAuth + "&tag=v1", headers: http.Header{}, wantToken: "source-token", wantNoQueryToken: true, wantOrdinaryQuery: true},
+		{name: "hills windows", profile: "hills_windows", rawQuery: "X-Emby-Authorization=" + encodedAuth + "&tag=v1", headers: http.Header{}, wantToken: "source-token", wantNoQueryToken: true, wantOrdinaryQuery: true},
+		{name: "existing header token wins", profile: "hills_windows", rawQuery: "X-Emby-Authorization=" + encodedAuth, headers: http.Header{"X-Emby-Token": {"existing-token"}}, wantToken: "existing-token", wantNoQueryToken: true},
+		{name: "yamby query token wins", profile: "yamby", rawQuery: "x-emby-token=query-token&X-Emby-Authorization=" + encodedAuth, headers: http.Header{}, wantToken: "query-token", wantRemovedQuery: []string{"x-emby-token", "X-Emby-Authorization"}},
+		{name: "bare token ignored", profile: "hills_windows", rawQuery: "X-Emby-Authorization=" + url.QueryEscape(`Token="source-token"`), headers: http.Header{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := parseIdentityURL(t, tt.rawQuery)
+
+			manager.ApplyToURL(u, tt.headers, tt.profile)
+
+			if got := tt.headers.Get("X-Emby-Token"); got != tt.wantToken {
+				t.Fatalf("X-Emby-Token = %q, want %q", got, tt.wantToken)
+			}
+			query := u.Query()
+			for _, key := range tt.wantRemovedQuery {
+				if query.Has(key) {
+					t.Fatalf("%s query was not removed: %s", key, u.RawQuery)
+				}
+			}
+			if tt.wantNoQueryToken && strings.Contains(strings.ToLower(query.Get("X-Emby-Authorization")), "token=") {
+				t.Fatalf("query X-Emby-Authorization still contains token: %q", query.Get("X-Emby-Authorization"))
+			}
+			if tt.wantOrdinaryQuery && query.Get("tag") != "v1" {
+				t.Fatalf("tag = %q, want v1", query.Get("tag"))
+			}
+		})
 	}
 }
 
