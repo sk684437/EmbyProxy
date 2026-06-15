@@ -395,6 +395,59 @@ func TestApplyToURLStripsOtherYambyIdentityQueryAndKeepsOrdinaryQuery(t *testing
 	}
 }
 
+func TestApplyToURLStripsControlBytesFromPromotedHeaderValues(t *testing.T) {
+	manager := NewManager(nil)
+
+	t.Run("yamby query auth header value", func(t *testing.T) {
+		headers := http.Header{}
+		// Authorization value decoded contains CR/LF and a NUL byte.
+		u := parseIdentityURL(t, "Authorization="+url.QueryEscape("Emby\r\nX-Injected: 1\r\nClient=Yamby\x00"))
+
+		manager.ApplyToURL(u, headers, "yamby")
+
+		got := headers.Get("Authorization")
+		if strings.ContainsAny(got, "\r\n\x00") {
+			t.Fatalf("promoted Authorization still carries control bytes: %q", got)
+		}
+		if !strings.Contains(got, "Client=Yamby") {
+			t.Fatalf("promoted Authorization dropped valid content: %q", got)
+		}
+	})
+
+	t.Run("yamby query token header value", func(t *testing.T) {
+		headers := http.Header{}
+		// The token field's quoted value contains an embedded CR/LF.
+		auth := `Emby Token="evil` + "\r\n" + `tail"`
+		u := parseIdentityURL(t, "X-Emby-Authorization="+url.QueryEscape(auth))
+
+		manager.ApplyToURL(u, headers, "yamby")
+
+		got := headers.Get("X-Emby-Token")
+		if strings.ContainsAny(got, "\r\n") {
+			t.Fatalf("promoted X-Emby-Token still carries control bytes: %q", got)
+		}
+		if got == "" {
+			t.Fatalf("X-Emby-Token was not promoted")
+		}
+	})
+
+	t.Run("hills query token header value", func(t *testing.T) {
+		headers := http.Header{}
+		auth := `Emby Token="evil` + "\r\n" + `tail"`
+		u := parseIdentityURL(t, "X-Emby-Authorization="+url.QueryEscape(auth))
+
+		manager.ApplyToURL(u, headers, "hills_windows")
+
+		got := headers.Get("X-Emby-Token")
+		if strings.ContainsAny(got, "\r\n") {
+			t.Fatalf("promoted X-Emby-Token still carries control bytes: %q", got)
+		}
+		if got == "" {
+			t.Fatalf("X-Emby-Token was not promoted")
+		}
+	})
+}
+
 func TestApplyToURLKeepsHillsQueryIdentityBehavior(t *testing.T) {
 	manager := NewManager(nil)
 	hillsWindows := manager.Snapshot("hills_windows")

@@ -1589,6 +1589,150 @@ func TestTrafficCaptureKeepsLastImageAttemptErrorMetaWhenAllTargetsFail(t *testi
 	}
 }
 
+func TestTrafficCaptureRecordsResponseRewriteFailure(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := []byte(`{"WanAddress":"https://upstream.example"}`)
+		return bytesResponse(http.StatusOK, body, http.Header{
+			"Content-Encoding": []string{"gzip"},
+			"Content-Length":   []string{fmt.Sprintf("%d", len(body))},
+			"Content-Type":     []string{"application/json"},
+		}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadGateway)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.Stage != "systeminfo-rewrite" {
+		t.Fatalf("stage = %q, want systeminfo-rewrite", record.Stage)
+	}
+	if record.TargetURL != "https://upstream.example/emby/System/Info/Public" {
+		t.Fatalf("targetUrl = %q, want upstream system info URL", record.TargetURL)
+	}
+	meta, ok := record.Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", record.Meta)
+	}
+	if got := meta["errorClass"]; got != "response-rewrite" {
+		t.Fatalf("errorClass = %v, want response-rewrite: %#v", got, meta)
+	}
+	if got := meta["errorStage"]; got != "systeminfo-rewrite" {
+		t.Fatalf("errorStage = %v, want systeminfo-rewrite", got)
+	}
+	if got := meta["contentEncoding"]; got != "gzip" {
+		t.Fatalf("contentEncoding = %v, want gzip", got)
+	}
+	if got := meta["contentType"]; got != "application/json" {
+		t.Fatalf("contentType = %v, want application/json", got)
+	}
+	if got := meta["upstreamStatus"]; got != float64(http.StatusOK) {
+		t.Fatalf("upstreamStatus = %v, want %d", got, http.StatusOK)
+	}
+	errText, ok := meta["error"].(string)
+	if !ok || !strings.Contains(strings.ToLower(errText), "gzip") {
+		t.Fatalf("error = %#v, want gzip decode error", meta["error"])
+	}
+}
+
+func TestTrafficCaptureClearsResponseRewriteErrorMetaOnSuccessfulTarget(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://bad.example\nhttps://upstream.example",
+	}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := []byte(`{"WanAddress":"https://upstream.example"}`)
+		headers := http.Header{
+			"Content-Length": []string{fmt.Sprintf("%d", len(body))},
+			"Content-Type":   []string{"application/json"},
+		}
+		if req.URL.Host == "bad.example" {
+			headers.Set("Content-Encoding", "gzip")
+		}
+		return bytesResponse(http.StatusOK, body, headers), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Info/Public", nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.Stage != "systeminfo-rewrite" {
+		t.Fatalf("stage = %q, want systeminfo-rewrite", record.Stage)
+	}
+	if record.TargetURL != "https://upstream.example/emby/System/Info/Public" {
+		t.Fatalf("targetUrl = %q, want successful upstream system info URL", record.TargetURL)
+	}
+	meta, ok := record.Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", record.Meta)
+	}
+	for _, key := range []string{"error", "errorClass", "errorStage", "upstreamStatus", "targetAttemptMs", "contentEncoding", "contentType", "contentLength"} {
+		if _, ok := meta[key]; ok {
+			t.Fatalf("successful record should not have final %s: %#v", key, meta)
+		}
+	}
+	attempts, ok := meta["attempts"].([]any)
+	if !ok || len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one failed rewrite attempt", meta["attempts"])
+	}
+	attempt, ok := attempts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("attempt = %T, want map", attempts[0])
+	}
+	if got := attempt["target"]; got != "https://bad.example/" {
+		t.Fatalf("attempt target = %v, want https://bad.example/", got)
+	}
+}
+
 func TestHandleMediaProxyStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -2332,6 +2476,8 @@ func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
 
 			ctx := context.Background()
 			deadline := time.Now().Add(2 * time.Second)
+			var seen bool
+			var last storage.PlayStat
 			for {
 				stats, err := h.store.GetTodayStats(ctx)
 				if err != nil {
@@ -2340,12 +2486,17 @@ func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
 				for _, row := range stats.Today {
 					if row.Node == "node" && row.Client == "actual-client" {
 						if row.Bytes != 10 || row.InboundBytes != 5 || row.OutboundBytes != 5 {
-							t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 10, 5, 5", row.Bytes, row.InboundBytes, row.OutboundBytes)
+							seen = true
+							last = row
+							break
 						}
 						return
 					}
 				}
 				if time.Now().After(deadline) {
+					if seen {
+						t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 10, 5, 5", last.Bytes, last.InboundBytes, last.OutboundBytes)
+					}
 					t.Fatalf("playback stat was not written")
 				}
 				time.Sleep(10 * time.Millisecond)

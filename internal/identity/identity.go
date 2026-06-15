@@ -205,7 +205,7 @@ func applyQueryAuthorizationTokenToHeaders(u *url.URL, headers http.Header) {
 		}
 		for _, value := range values {
 			if token := authTokenFromValue(value); token != "" {
-				headers.Set("X-Emby-Token", token)
+				headers.Set("X-Emby-Token", sanitizeHeaderValue(token))
 				return
 			}
 		}
@@ -282,7 +282,7 @@ func applyYambyQueryAuthToHeaders(u *url.URL, headers http.Header) {
 				if err != nil {
 					value = rawValue
 				}
-				headers.Set(canonical, value)
+				headers.Set(canonical, sanitizeHeaderValue(value))
 			}
 			q.Del(key)
 			changed = true
@@ -319,6 +319,41 @@ func headersHaveNonEmptyValue(headers http.Header, canonical string) bool {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+// sanitizeHeaderValue strips control characters (CR/LF and other bytes below
+// space, plus the lone DEL) that net/http rejects when sending a request.
+// Values promoted from URL query parameters are untrusted input, so removing
+// them here keeps the request sendable instead of letting the transport fail
+// with "invalid header field value".
+func sanitizeHeaderValue(value string) string {
+	if !strings.ContainsAny(value, "\r\n") && !containsHeaderValueControlByte(value) {
+		return value
+	}
+	var b strings.Builder
+	b.Grow(len(value))
+	for _, r := range value {
+		if r == '\r' || r == '\n' || r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// containsHeaderValueControlByte reports whether value contains an ASCII
+// control byte (0x00-0x1F) or DEL (0x7F) outside of the allowed HT (0x09).
+func containsHeaderValueControlByte(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == '\t' {
+			continue
+		}
+		if c < 0x20 || c == 0x7f {
+			return true
 		}
 	}
 	return false

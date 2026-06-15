@@ -440,7 +440,19 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 	ct := strings.ToLower(headers.Get("Content-Type"))
 	rewriteWithStage := func(stage string, rewrite func([]byte) []byte) (*http.Response, error) {
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": targetURL.String(), "outboundHeaders": currentHeaders})
-		return rewriteProxyResponseBody(res, headers, rewrite)
+		out, err := rewriteProxyResponseBody(res, headers, rewrite)
+		if err != nil {
+			capture.SetErrorMeta(r, stage, err, map[string]any{"meta": map[string]any{
+				"error":           err.Error(),
+				"errorClass":      "response-rewrite",
+				"upstreamStatus":  res.StatusCode,
+				"contentEncoding": strings.TrimSpace(headers.Get("Content-Encoding")),
+				"contentType":     strings.TrimSpace(headers.Get("Content-Type")),
+				"contentLength":   strings.TrimSpace(headers.Get("Content-Length")),
+			}})
+			return nil, err
+		}
+		return out, nil
 	}
 	if res.StatusCode == http.StatusOK && (strings.Contains(ct, "application/vnd.apple.mpegurl") || strings.Contains(ct, "application/x-mpegurl") || strings.Contains(ct, "application/dash+xml")) {
 		return rewriteWithStage("manifest-rewrite", func(raw []byte) []byte {

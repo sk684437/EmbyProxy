@@ -194,7 +194,7 @@ func ClearErrorMeta(req *http.Request) {
 		return
 	}
 	meta := cloneAnyMap(current)
-	for _, key := range []string{"errorClass", "errorStage", "upstreamStatus", "targetAttemptMs"} {
+	for _, key := range []string{"error", "errorClass", "errorStage", "upstreamStatus", "targetAttemptMs", "contentEncoding", "contentType", "contentLength"} {
 		delete(meta, key)
 	}
 	SetMeta(req, map[string]any{"meta": meta})
