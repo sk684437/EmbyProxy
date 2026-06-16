@@ -46,7 +46,7 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 		return res, nil
 	}
 	defer res.Body.Close()
-	raw, err := readProxyRewriteBody(res.Body)
+	raw, _, err := readProxyRewriteResponseBody(res)
 	if err != nil {
 		capture.SetErrorMeta(r, "strm-parse-error", err, map[string]any{
 			"mode":      "proxy",
@@ -55,11 +55,12 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 			"stage":     "strm-parse-error",
 			"targetUrl": sourceURL.String(),
 			"meta": map[string]any{
-				"error":                   err.Error(),
-				"strmReadError":           err.Error(),
-				"strmSourceStatus":        res.StatusCode,
-				"strmSourceContentType":   strings.TrimSpace(res.Header.Get("Content-Type")),
-				"strmSourceContentLength": strings.TrimSpace(res.Header.Get("Content-Length")),
+				"error":                     err.Error(),
+				"strmReadError":             err.Error(),
+				"strmSourceStatus":          res.StatusCode,
+				"strmSourceContentEncoding": strings.TrimSpace(res.Header.Get("Content-Encoding")),
+				"strmSourceContentType":     strings.TrimSpace(res.Header.Get("Content-Type")),
+				"strmSourceContentLength":   strings.TrimSpace(res.Header.Get("Content-Length")),
 			},
 		})
 		return textResponse(http.StatusBadGateway, "Bad Gateway", nil), nil

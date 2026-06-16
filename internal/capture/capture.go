@@ -201,7 +201,7 @@ func ClearErrorMeta(req *http.Request) {
 	for _, key := range []string{
 		"error", "errorClass", "errorStage", "upstreamStatus", "targetAttemptMs",
 		"contentEncoding", "contentType", "contentLength",
-		"strmReadError", "strmSourceStatus", "strmSourceContentType", "strmSourceContentLength",
+		"strmReadError", "strmSourceStatus", "strmSourceContentEncoding", "strmSourceContentType", "strmSourceContentLength",
 	} {
 		delete(meta, key)
 	}
@@ -252,7 +252,7 @@ func copyAttemptDiagnostics(meta, attempt map[string]any) {
 	for _, key := range []string{
 		"error", "errorStage", "upstreamStatus",
 		"contentEncoding", "contentType", "contentLength",
-		"strmReadError", "strmSourceStatus", "strmSourceContentType", "strmSourceContentLength",
+		"strmReadError", "strmSourceStatus", "strmSourceContentEncoding", "strmSourceContentType", "strmSourceContentLength",
 	} {
 		if _, exists := attempt[key]; exists {
 			continue

@@ -1963,6 +1963,48 @@ func TestHandleSTRMImpersonatesSourceRequestUserAgent(t *testing.T) {
 	}
 }
 
+func TestHandleSTRMDecodesEncodedSourceResponse(t *testing.T) {
+	var sourceAcceptEncoding string
+	var directURL string
+	h := newProxyTestHandler(t, storage.Node{})
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		sourceAcceptEncoding = req.Header.Get("Accept-Encoding")
+		body := gzipTestBody(t, "https://8.8.8.8/video.mp4")
+		return bytesResponse(http.StatusOK, body, http.Header{
+			"Content-Encoding": []string{"gzip"},
+			"Content-Length":   []string{fmt.Sprintf("%d", len(body))},
+			"Content-Type":     []string{"text/plain"},
+		}), nil
+	})}
+	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		directURL = req.URL.String()
+		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"video/mp4"}}), nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/movie.strm", nil)
+	req.Header.Set("Accept-Encoding", "gzip, br")
+	sourceURL, err := url.Parse("https://upstream.example/movie.strm")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.handleSTRM(context.Background(), req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/movie.strm"}, sourceURL, nil, config.ProxyEnv{ExternalAllowAny: true})
+	if err != nil {
+		t.Fatalf("handleSTRM() error = %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+	}
+	if sourceAcceptEncoding != "gzip, br" {
+		t.Fatalf("source Accept-Encoding = %q, want gzip, br", sourceAcceptEncoding)
+	}
+	if directURL != "https://8.8.8.8/video.mp4" {
+		t.Fatalf("direct URL = %q, want decoded STRM target", directURL)
+	}
+}
+
 func TestTrafficCaptureRecordsSTRMSourceReadError(t *testing.T) {
 	cwd := t.TempDir()
 	store := newProxyTestStore(t)
@@ -1982,8 +2024,9 @@ func TestTrafficCaptureRecordsSTRMSourceReadError(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
 			Header: http.Header{
-				"Content-Length": []string{"42"},
-				"Content-Type":   []string{"text/plain"},
+				"Content-Encoding": []string{"gzip"},
+				"Content-Length":   []string{"42"},
+				"Content-Type":     []string{"text/plain"},
 			},
 			Body: failingReadBody{err: errors.New("unexpected EOF")},
 		}, nil
@@ -2024,6 +2067,9 @@ func TestTrafficCaptureRecordsSTRMSourceReadError(t *testing.T) {
 	if got := meta["strmSourceStatus"]; got != float64(http.StatusOK) {
 		t.Fatalf("strmSourceStatus = %v, want %d", got, http.StatusOK)
 	}
+	if got := meta["strmSourceContentEncoding"]; got != "gzip" {
+		t.Fatalf("strmSourceContentEncoding = %v, want gzip", got)
+	}
 	if got := meta["strmSourceContentType"]; got != "text/plain" {
 		t.Fatalf("strmSourceContentType = %v, want text/plain", got)
 	}
@@ -2056,8 +2102,9 @@ func TestTrafficCaptureKeepsSTRMSourceReadErrorOnSuccessfulFailover(t *testing.T
 				StatusCode: http.StatusOK,
 				Status:     "200 OK",
 				Header: http.Header{
-					"Content-Length": []string{"42"},
-					"Content-Type":   []string{"text/plain"},
+					"Content-Encoding": []string{"gzip"},
+					"Content-Length":   []string{"42"},
+					"Content-Type":     []string{"text/plain"},
 				},
 				Body: failingReadBody{err: errors.New("unexpected EOF")},
 			}, nil
@@ -2106,6 +2153,9 @@ func TestTrafficCaptureKeepsSTRMSourceReadErrorOnSuccessfulFailover(t *testing.T
 	}
 	if got := attempt["strmSourceStatus"]; got != float64(http.StatusOK) {
 		t.Fatalf("attempt strmSourceStatus = %v, want %d", got, http.StatusOK)
+	}
+	if got := attempt["strmSourceContentEncoding"]; got != "gzip" {
+		t.Fatalf("attempt strmSourceContentEncoding = %v, want gzip", got)
 	}
 	if got := attempt["strmSourceContentType"]; got != "text/plain" {
 		t.Fatalf("attempt strmSourceContentType = %v, want text/plain", got)

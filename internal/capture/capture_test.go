@@ -173,11 +173,12 @@ func TestClassifyErrorKeepsSpecificConnectionFailures(t *testing.T) {
 func TestSetRetryableStatusMetaPreservesExistingFinalError(t *testing.T) {
 	req, st := newCaptureStateRequest()
 	SetErrorMeta(req, "strm-parse-error", errors.New("unexpected EOF"), map[string]any{"meta": map[string]any{
-		"error":                   "unexpected EOF",
-		"strmReadError":           "unexpected EOF",
-		"strmSourceStatus":        http.StatusOK,
-		"strmSourceContentType":   "text/plain",
-		"strmSourceContentLength": "42",
+		"error":                     "unexpected EOF",
+		"strmReadError":             "unexpected EOF",
+		"strmSourceStatus":          http.StatusOK,
+		"strmSourceContentEncoding": "gzip",
+		"strmSourceContentType":     "text/plain",
+		"strmSourceContentLength":   "42",
 	}})
 
 	SetRetryableStatusMeta(req, "target-attempt", http.StatusBadGateway, 123)
@@ -199,11 +200,12 @@ func TestSetRetryableStatusMetaPreservesExistingFinalError(t *testing.T) {
 func TestAppendRetryableStatusAttemptCopiesFinalDiagnostics(t *testing.T) {
 	req, st := newCaptureStateRequest()
 	SetErrorMeta(req, "strm-parse-error", errors.New("unexpected EOF"), map[string]any{"meta": map[string]any{
-		"error":                   "unexpected EOF",
-		"strmReadError":           "unexpected EOF",
-		"strmSourceStatus":        http.StatusOK,
-		"strmSourceContentType":   "text/plain",
-		"strmSourceContentLength": "42",
+		"error":                     "unexpected EOF",
+		"strmReadError":             "unexpected EOF",
+		"strmSourceStatus":          http.StatusOK,
+		"strmSourceContentEncoding": "gzip",
+		"strmSourceContentType":     "text/plain",
+		"strmSourceContentLength":   "42",
 	}})
 
 	AppendRetryableStatusAttempt(req, "target-attempt", http.StatusBadGateway, 123, "https://upstream.example")
@@ -226,6 +228,9 @@ func TestAppendRetryableStatusAttemptCopiesFinalDiagnostics(t *testing.T) {
 	if got := attempt["strmSourceStatus"]; got != http.StatusOK {
 		t.Fatalf("strmSourceStatus = %v, want %d", got, http.StatusOK)
 	}
+	if got := attempt["strmSourceContentEncoding"]; got != "gzip" {
+		t.Fatalf("strmSourceContentEncoding = %v, want gzip", got)
+	}
 	if got := attempt["errorStage"]; got != "strm-parse-error" {
 		t.Fatalf("errorStage = %v, want strm-parse-error", got)
 	}
@@ -234,11 +239,12 @@ func TestAppendRetryableStatusAttemptCopiesFinalDiagnostics(t *testing.T) {
 func TestClearErrorMetaDropsSTRMDiagnostics(t *testing.T) {
 	req, st := newCaptureStateRequest()
 	SetErrorMeta(req, "strm-parse-error", errors.New("unexpected EOF"), map[string]any{"meta": map[string]any{
-		"error":                   "unexpected EOF",
-		"strmReadError":           "unexpected EOF",
-		"strmSourceStatus":        http.StatusOK,
-		"strmSourceContentType":   "text/plain",
-		"strmSourceContentLength": "42",
+		"error":                     "unexpected EOF",
+		"strmReadError":             "unexpected EOF",
+		"strmSourceStatus":          http.StatusOK,
+		"strmSourceContentEncoding": "gzip",
+		"strmSourceContentType":     "text/plain",
+		"strmSourceContentLength":   "42",
 	}})
 
 	ClearErrorMeta(req)
@@ -246,7 +252,7 @@ func TestClearErrorMetaDropsSTRMDiagnostics(t *testing.T) {
 	meta := captureMeta(t, st)
 	for _, key := range []string{
 		"error", "errorClass", "errorStage",
-		"strmReadError", "strmSourceStatus", "strmSourceContentType", "strmSourceContentLength",
+		"strmReadError", "strmSourceStatus", "strmSourceContentEncoding", "strmSourceContentType", "strmSourceContentLength",
 	} {
 		if _, ok := meta[key]; ok {
 			t.Fatalf("%s was not cleared: %#v", key, meta)
