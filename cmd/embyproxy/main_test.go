@@ -174,12 +174,13 @@ func TestRequestMiddlewareSuppressesMarkedAccessLog(t *testing.T) {
 	}
 }
 
-func TestRequestMiddlewareUsesRedactedRequestURI(t *testing.T) {
+func TestRequestMiddlewareUsesQuerylessRequestURI(t *testing.T) {
 	log := logging.New("info", true)
 	historyPath := filepath.Join(t.TempDir(), "console-logs.jsonl")
 	if err := log.EnableHistory(historyPath, logging.DefaultHistoryEntriesFile, 1); err != nil {
 		t.Fatalf("EnableHistory() error = %v", err)
 	}
+	t.Cleanup(func() { _ = log.Close() })
 	handler := requestMiddleware(log, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestlog.SetRequestURI(r.Context(), "/node/<secret>/emby/Items?X-Emby-Token=<redacted>")
 		_, _ = w.Write([]byte("ok"))
@@ -192,11 +193,13 @@ func TestRequestMiddlewareUsesRedactedRequestURI(t *testing.T) {
 		t.Fatalf("entries len = %d, want 2", len(entries))
 	}
 	for _, entry := range entries {
-		if strings.Contains(entry.Line, "raw-secret") || strings.Contains(entry.Line, "token") {
-			t.Fatalf("access log leaked sensitive data: %q", entry.Line)
+		for _, blocked := range []string{"raw-secret", "token", "?"} {
+			if strings.Contains(entry.Line, blocked) {
+				t.Fatalf("access log kept query or sensitive data %q: %q", blocked, entry.Line)
+			}
 		}
-		if !strings.Contains(entry.Line, "/node/<secret>/emby/Items?X-Emby-Token=<redacted>") {
-			t.Fatalf("access log line = %q, want redacted URI", entry.Line)
+		if !strings.Contains(entry.Line, "/node/<secret>/emby/Items") {
+			t.Fatalf("access log line = %q, want queryless URI", entry.Line)
 		}
 	}
 	if err := log.Close(); err != nil {
@@ -206,8 +209,10 @@ func TestRequestMiddlewareUsesRedactedRequestURI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if strings.Contains(string(history), "raw-secret") || strings.Contains(string(history), "token") {
-		t.Fatalf("history log leaked sensitive data: %q", string(history))
+	for _, blocked := range []string{"raw-secret", "token", "?"} {
+		if strings.Contains(string(history), blocked) {
+			t.Fatalf("history log kept query or sensitive data %q: %q", blocked, string(history))
+		}
 	}
 }
 

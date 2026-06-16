@@ -36,7 +36,6 @@ var levels = map[string]int{
 }
 
 var (
-	sensitiveQueryRE  = regexp.MustCompile(`(?i)(token|api[_-]?key|access[_-]?token|auth|authorization|password|secret|session|user[_-]?id|^(sign|signature)$)`)
 	httpURLRE         = regexp.MustCompile(`(?i)^https?://`)
 	embeddedHTTPURLRE = regexp.MustCompile(`(?i)https?://[^\s"'<>\\]+`)
 	safeLogValueRE    = regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`)
@@ -651,7 +650,6 @@ func RedactURL(raw string) string {
 			if out == "" {
 				out = "/"
 			}
-			out += redactQuery(u.RawQuery)
 			if hasOrigin {
 				return u.Scheme + "://" + u.Host + out
 			}
@@ -666,7 +664,7 @@ func RedactURL(raw string) string {
 	if q < 0 {
 		return value
 	}
-	return value[:q] + redactQuery(value[q+1:])
+	return value[:q]
 }
 
 func RedactText(raw string) string {
@@ -700,36 +698,6 @@ func FormatTarget(target string) string {
 		return u.Scheme + "://" + u.Host
 	}
 	return RedactURL(target)
-}
-
-func redactQuery(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	parts := strings.Split(raw, "&")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		key := part
-		if idx := strings.IndexByte(part, '='); idx >= 0 {
-			key = part[:idx]
-		}
-		decoded, err := url.QueryUnescape(key)
-		if err != nil {
-			decoded = key
-		}
-		if sensitiveQueryRE.MatchString(decoded) {
-			out = append(out, key+"=<redacted>")
-		} else {
-			out = append(out, part)
-		}
-	}
-	if len(out) == 0 {
-		return ""
-	}
-	return "?" + strings.Join(out, "&")
 }
 
 func ensureLeadingSlash(value string) string {

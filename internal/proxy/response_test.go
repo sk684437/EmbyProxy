@@ -836,7 +836,7 @@ func TestServeHTTPMarksAccessLogURIWithRedactedSecret(t *testing.T) {
 	if strings.Contains(got, "raw-secret") || strings.Contains(got, "token") {
 		t.Fatalf("redacted URI leaked sensitive data: %q", got)
 	}
-	if got != "/node/<secret>/emby/System/Info?api_key=<redacted>" {
+	if got != "/node/<secret>/emby/System/Info" {
 		t.Fatalf("redacted URI = %q", got)
 	}
 }

@@ -7,82 +7,75 @@ import (
 	"testing"
 )
 
-func TestRedactTextRedactsEmbeddedURLQuerySecrets(t *testing.T) {
+func TestRedactTextStripsEmbeddedURLQueries(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
-		leaks []string
-		wants []string
+		want  string
 	}{
 		{
 			name:  "regular URL",
 			input: `Get "https://emby.example/emby/Items/1?X-Emby-Token=secret-token&fields=ShareLevel&api_key=secret-key": context canceled`,
-			leaks: []string{"secret-token", "secret-key"},
-			wants: []string{"X-Emby-Token=<redacted>", "api_key=<redacted>", "fields=ShareLevel"},
+			want:  `Get "https://emby.example/emby/Items/1": context canceled`,
 		},
 		{
 			name:  "parentheses in path",
 			input: `Get "https://cdn.example/video/Devote%20100%20Days%20(2025)%5Btmdb=306641%5D/S01E03.mkv?auth_key=secret-auth-key": net/http: TLS handshake timeout`,
-			leaks: []string{"secret-auth-key"},
-			wants: []string{"auth_key=<redacted>"},
+			want:  `Get "https://cdn.example/video/Devote%20100%20Days%20(2025)%5Btmdb=306641%5D/S01E03.mkv": net/http: TLS handshake timeout`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := RedactText(tt.input)
-			for _, leak := range tt.leaks {
-				if strings.Contains(got, leak) {
-					t.Fatalf("RedactText() leaked %q in %q", leak, got)
-				}
-			}
-			for _, want := range tt.wants {
-				if !strings.Contains(got, want) {
-					t.Fatalf("RedactText() = %q, want to contain %q", got, want)
-				}
+			if got != tt.want {
+				t.Fatalf("RedactText() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestRedactURLRedactsSignedURLQuery(t *testing.T) {
-	got := RedactURL("https://cdn.example/video.mkv?sign=secret-sign&signature=secret-signature&design=poster")
-
-	if strings.Contains(got, "secret-sign") || strings.Contains(got, "secret-signature") {
-		t.Fatalf("RedactURL() leaked signed URL query values: %q", got)
+func TestRedactURLStripsQueries(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "absolute signed URL",
+			input: "https://cdn.example/video.mkv?sign=secret-sign&signature=secret-signature&design=poster",
+			want:  "https://cdn.example/video.mkv",
+		},
+		{
+			name:  "relative Emby URL",
+			input: "/node/secret/emby/Sessions/Playing/Progress?UserId=user-secret&X-Emby-Token=token&reqformat=json",
+			want:  "/node/secret/emby/Sessions/Playing/Progress",
+		},
 	}
-	for _, want := range []string{"sign=<redacted>", "signature=<redacted>", "design=poster"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("RedactURL() = %q, want to contain %q", got, want)
-		}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RedactURL(tt.input); got != tt.want {
+				t.Fatalf("RedactURL() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestRedactURLRedactsUserIDQuery(t *testing.T) {
-	got := RedactURL("/node/secret/emby/Sessions/Playing/Progress?UserId=user-secret&X-Emby-Token=token&reqformat=json")
-
-	if strings.Contains(got, "user-secret") || strings.Contains(got, "token") {
-		t.Fatalf("RedactURL() leaked sensitive query values: %q", got)
-	}
-	for _, want := range []string{"UserId=<redacted>", "X-Emby-Token=<redacted>", "reqformat=json"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("RedactURL() = %q, want to contain %q", got, want)
-		}
-	}
-}
-
-func TestFormatValueRedactsEmbeddedURLInErrorMeta(t *testing.T) {
+func TestFormatValueStripsEmbeddedURLQueryInErrorMeta(t *testing.T) {
 	got := formatValue(`Get "https://emby.example/emby/Items/1?X-Emby-Token=secret-token&fields=ShareLevel": context canceled`)
 
-	if strings.Contains(got, "secret-token") {
-		t.Fatalf("formatValue() leaked sensitive query values: %q", got)
+	for _, blocked := range []string{"?", "secret-token", "X-Emby-Token", "fields=ShareLevel"} {
+		if strings.Contains(got, blocked) {
+			t.Fatalf("formatValue() kept query content %q in %q", blocked, got)
+		}
 	}
-	if !strings.Contains(got, "X-Emby-Token=<redacted>") {
-		t.Fatalf("formatValue() = %q, want redacted token", got)
+	if !strings.Contains(got, "https://emby.example/emby/Items/1") {
+		t.Fatalf("formatValue() = %q, want URL path", got)
 	}
 }
 
-func TestLoggerEntriesReturnsRedactedConsoleLines(t *testing.T) {
+func TestLoggerEntriesReturnQuerylessConsoleLines(t *testing.T) {
 	log := New("debug", true)
 	log.Info("proxy", "target headers received", map[string]any{
 		"target": "https://emby.example/Items?api_key=secret-key&Fields=Name",
@@ -97,10 +90,12 @@ func TestLoggerEntriesReturnsRedactedConsoleLines(t *testing.T) {
 	if got.ID != 1 || got.Level != "info" || got.Scope != "proxy" {
 		t.Fatalf("entry metadata = %+v", got)
 	}
-	if strings.Contains(got.Line, "secret-key") {
-		t.Fatalf("entry line leaked sensitive query value: %q", got.Line)
+	for _, blocked := range []string{"?", "secret-key", "api_key", "Fields=Name"} {
+		if strings.Contains(got.Line, blocked) {
+			t.Fatalf("entry line kept query content %q: %q", blocked, got.Line)
+		}
 	}
-	for _, want := range []string{"INFO", "[200]", "[proxy]", "api_key=<redacted>", "Fields=Name"} {
+	for _, want := range []string{"INFO", "[200]", "[proxy]", "target=https://emby.example/Items"} {
 		if !strings.Contains(got.Line, want) {
 			t.Fatalf("entry line = %q, want to contain %q", got.Line, want)
 		}

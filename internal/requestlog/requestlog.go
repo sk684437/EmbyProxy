@@ -2,6 +2,7 @@ package requestlog
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -48,6 +49,9 @@ func SetRequestURI(ctx context.Context, uri string) {
 	st := state(ctx)
 	if st == nil || uri == "" {
 		return
+	}
+	if path, _, ok := strings.Cut(uri, "?"); ok {
+		uri = path
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
