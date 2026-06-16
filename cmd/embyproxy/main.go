@@ -68,7 +68,7 @@ func main() {
 	tg := telegram.New(store, log)
 	checker := auth.NewChecker(cfg, store)
 	proxyHandler := proxy.New(cfg, store, ids, log)
-	adminHandler := admin.New(cfg, store, checker, tg, log, proxyHandler.ResetNodeRoutingState)
+	adminHandler := admin.New(cfg, store, checker, tg, log, proxyHandler.ResetNodeRoutingState, proxyHandler)
 
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 

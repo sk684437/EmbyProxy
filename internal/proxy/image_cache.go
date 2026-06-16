@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,6 +57,14 @@ type imageDiskCache struct {
 	fills       map[string]*imageCacheFill
 	metaMu      sync.RWMutex
 	metaCache   map[string]imageMetaCacheEntry
+}
+
+type ImageCacheStats struct {
+	Enabled bool   `json:"enabled"`
+	Dir     string `json:"dir"`
+	Bytes   int64  `json:"bytes"`
+	Files   int    `json:"files"`
+	Entries int    `json:"entries"`
 }
 
 type imageCacheMeta struct {
@@ -286,6 +295,112 @@ func (c *imageDiskCache) CleanupExpired() {
 	})
 }
 
+func (h *Handler) ImageCacheStats(ctx context.Context) (ImageCacheStats, error) {
+	cache, enabled, dir := h.imageCacheForOps(ctx)
+	if cache == nil {
+		return ImageCacheStats{Enabled: enabled, Dir: dir}, nil
+	}
+	stats, err := cache.Stats(enabled)
+	if stats.Dir == "" {
+		stats.Dir = dir
+	}
+	return stats, err
+}
+
+func (h *Handler) ClearImageCache(ctx context.Context) (ImageCacheStats, error) {
+	cache, enabled, dir := h.imageCacheForOps(ctx)
+	if cache == nil {
+		return ImageCacheStats{Enabled: enabled, Dir: dir}, nil
+	}
+	clearErr := cache.Clear()
+	stats, statErr := cache.Stats(enabled)
+	if stats.Dir == "" {
+		stats.Dir = dir
+	}
+	if clearErr != nil {
+		return stats, clearErr
+	}
+	return stats, statErr
+}
+
+func (h *Handler) imageCacheForOps(ctx context.Context) (*imageDiskCache, bool, string) {
+	if h == nil {
+		return nil, false, ""
+	}
+	sys := h.systemConfig(ctx)
+	dir := imageCacheDir(h.cfg)
+	ttl := imageCacheTTL(sys)
+	if sys.ImageCacheEnabled {
+		return h.ensureImageCache(ctx), true, dir
+	}
+	h.imageCacheMu.Lock()
+	cache := h.imageCache
+	h.imageCache = nil
+	h.imageCacheMu.Unlock()
+	if cache != nil {
+		cache.clearCachedMeta()
+	}
+	return newImageDiskCache(dir, ttl), false, dir
+}
+
+func (c *imageDiskCache) Stats(enabled bool) (ImageCacheStats, error) {
+	stats := ImageCacheStats{Enabled: enabled}
+	if c == nil {
+		return stats, nil
+	}
+	stats.Dir = c.dir
+	c.cleanupMu.Lock()
+	defer c.cleanupMu.Unlock()
+	err := filepath.WalkDir(c.dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d == nil || d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		stats.Files++
+		stats.Bytes += info.Size()
+		if strings.HasSuffix(d.Name(), ".body") {
+			stats.Entries++
+		}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return stats, nil
+	}
+	return stats, err
+}
+
+func (c *imageDiskCache) Clear() error {
+	if c == nil {
+		return nil
+	}
+	c.cleanupMu.Lock()
+	defer c.cleanupMu.Unlock()
+	entries, err := os.ReadDir(c.dir)
+	if errors.Is(err, os.ErrNotExist) {
+		c.clearCachedMeta()
+		c.lastCleanup = time.Time{}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, entry := range entries {
+		if removeErr := os.RemoveAll(filepath.Join(c.dir, entry.Name())); removeErr != nil && firstErr == nil {
+			firstErr = removeErr
+		}
+	}
+	c.clearCachedMeta()
+	c.lastCleanup = time.Time{}
+	return firstErr
+}
+
 func (c *imageDiskCache) readMeta(paths imageCachePaths, key string) (imageCacheMeta, bool) {
 	now := c.now()
 	if meta, ok := c.cachedMeta(paths.hash, now); ok {
@@ -439,6 +554,15 @@ func (c *imageDiskCache) deleteCachedMeta(hash string) {
 	}
 	c.metaMu.Lock()
 	delete(c.metaCache, hash)
+	c.metaMu.Unlock()
+}
+
+func (c *imageDiskCache) clearCachedMeta() {
+	if c == nil {
+		return
+	}
+	c.metaMu.Lock()
+	c.metaCache = nil
 	c.metaMu.Unlock()
 }
 

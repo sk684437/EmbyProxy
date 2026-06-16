@@ -266,6 +266,13 @@ tr:last-child td{border-bottom:0}
 .config-group > .tg-row .form-group{gap:6px}
 .config-fields{display:grid;gap:12px}
 .config-field-card{border:1px solid var(--line);border-radius:20px;background:rgba(247,243,234,.72);padding:14px;display:grid;gap:12px}
+.config-field-card .tg-row{display:grid;gap:15px}
+.cache-ops{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:stretch}
+.cache-metric{min-height:78px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:12px;display:flex;flex-direction:column;justify-content:space-between;gap:6px;min-width:0}
+.cache-metric span{font-size:11px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.cache-metric b{max-width:100%;font-size:22px;line-height:1;color:var(--ink);letter-spacing:0;overflow-wrap:anywhere;word-break:break-word}
+.cache-actions{display:grid;grid-template-columns:1fr;gap:8px;min-width:0}
+.cache-actions .btn{width:100%}
 .config-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .config-card-head h4{font-size:15px;line-height:1.15;color:var(--ink);letter-spacing:-.035em}
 .config-card-head span{border:1px solid rgba(36,89,77,.16);background:var(--pine-wash);color:var(--pine);border-radius:999px;padding:3px 8px;font-size:10px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
@@ -344,6 +351,7 @@ tr:last-child td{border-bottom:0}
   .config-panel{max-height:none;overflow:visible;padding-right:0}
   .config-group-head{grid-template-columns:minmax(0,1fr) auto}
   .config-group > .tg-row{grid-template-columns:1fr}
+  .cache-ops{grid-template-columns:1fr}
   .config-index{min-width:32px;height:22px}
   .config-sheet .form-actions{padding:18px}
   .logs-meter{display:grid;grid-template-columns:1fr;width:100%}
@@ -756,6 +764,20 @@ tr:last-child td{border-bottom:0}
                 <label for="cfg-imageCacheTtlDays">缓存保留时长（天）</label>
                 <input type="number" id="cfg-imageCacheTtlDays" min="1" max="365" step="1"/>
                 <div class="form-hint">关闭时不读写磁盘缓存；开启后图片最多保留该天数，默认 30 天</div>
+              </div>
+              <div class="cache-ops">
+                <div class="cache-metric">
+                  <span>缓存大小</span>
+                  <b id="imageCacheBytes">--</b>
+                </div>
+                <div class="cache-metric">
+                  <span>缓存条目</span>
+                  <b id="imageCacheEntries">--</b>
+                </div>
+                <div class="cache-actions">
+                  <button type="button" class="btn" onclick="refreshImageCacheStats()">刷新状态</button>
+                  <button type="button" class="btn btn-danger" id="imageCacheClearBtn" onclick="clearImageCache()">清理缓存</button>
+                </div>
               </div>
             </div>
           </div>
@@ -1565,6 +1587,7 @@ function safeLogLevel(value) {
 }
 
 async function openConfigModal() {
+  renderImageCacheStats(null);
   const r = await api('config.get');
   if (r.ok && r.config) {
     const c = r.config;
@@ -1591,6 +1614,7 @@ async function openConfigModal() {
   const panel = document.querySelector('#configForm .config-panel');
   if (panel) panel.scrollTop = 0;
   document.querySelectorAll('#configForm .config-nav-button').forEach((btn, index) => btn.classList.toggle('active', index === 0));
+  refreshImageCacheStats(false);
 }
 
 function closeConfigModal() { hideModal('configModal'); }
@@ -1601,6 +1625,48 @@ function scrollConfigGroup(id, btn) {
   document.querySelectorAll('#configForm .config-nav-button').forEach(x => x.classList.remove('active'));
   if (btn) btn.classList.add('active');
   group.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderImageCacheStats(cache) {
+  const bytesEl = document.getElementById('imageCacheBytes');
+  const entriesEl = document.getElementById('imageCacheEntries');
+  if (!bytesEl || !entriesEl) return;
+  if (!cache) {
+    bytesEl.textContent = '--';
+    entriesEl.textContent = '--';
+    return;
+  }
+  bytesEl.textContent = formatBytes(cache.bytes);
+  entriesEl.textContent = `${formatCacheNumber(cache.entries)} 项`;
+}
+
+function formatCacheNumber(value) {
+  return Math.max(0, Number(value || 0)).toLocaleString('zh-CN');
+}
+
+async function refreshImageCacheStats(showToast = true) {
+  const r = await api('imageCache.stats');
+  if (!r.ok) {
+    renderImageCacheStats(null);
+    if (showToast) toast('刷新图片缓存状态失败: ' + (r.error || ''), 'err');
+    return;
+  }
+  renderImageCacheStats(r.cache);
+  if (showToast) toast('图片缓存状态已刷新', 'ok');
+}
+
+async function clearImageCache() {
+  if (!confirm('确定清理图片缓存？')) return;
+  const btn = document.getElementById('imageCacheClearBtn');
+  if (btn) btn.disabled = true;
+  const r = await api('imageCache.clear');
+  if (btn) btn.disabled = false;
+  if (!r.ok) {
+    toast('清理图片缓存失败: ' + (r.error || ''), 'err');
+    return;
+  }
+  renderImageCacheStats(r.cache);
+  toast('图片缓存已清理', 'ok');
 }
 
 async function saveConfig() {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,73 @@ func TestImageDiskCacheMetadataDoesNotStoreRawKey(t *testing.T) {
 	}
 	if !strings.Contains(text, `"keyHash"`) {
 		t.Fatalf("metadata missing keyHash: %s", text)
+	}
+}
+
+func TestImageDiskCacheStatsCountsFilesAndEntries(t *testing.T) {
+	dir := t.TempDir()
+	cache := newImageDiskCache(dir, time.Hour)
+	subdir := filepath.Join(dir, "ab")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		filepath.Join(subdir, "ab.body"):     "image-body",
+		filepath.Join(subdir, "ab.json"):     "{}",
+		filepath.Join(subdir, "ab.123.tmp"):  "tmp",
+		filepath.Join(subdir, "readme.data"): "sidecar",
+	}
+	var wantBytes int64
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		wantBytes += int64(len(body))
+	}
+
+	stats, err := cache.Stats(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stats.Enabled || stats.Dir != dir {
+		t.Fatalf("stats enabled/dir = %+v, want enabled dir %q", stats, dir)
+	}
+	if stats.Files != len(files) || stats.Entries != 1 || stats.Bytes != wantBytes {
+		t.Fatalf("stats = %+v, want files=%d entries=1 bytes=%d", stats, len(files), wantBytes)
+	}
+}
+
+func TestImageDiskCacheClearRemovesFilesAndMemoryMetadata(t *testing.T) {
+	dir := t.TempDir()
+	cache := newImageDiskCache(dir, time.Hour)
+	subdir := filepath.Join(dir, "ab")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "ab.body"), []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cache.setCachedMeta("ab", imageCacheMeta{KeyHash: "ab", Status: http.StatusOK}, time.Now())
+
+	if err := cache.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := cache.Stats(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Enabled || stats.Files != 0 || stats.Bytes != 0 || stats.Entries != 0 {
+		t.Fatalf("stats after clear = %+v, want empty disabled stats", stats)
+	}
+	if _, ok := cache.cachedMeta("ab", time.Now()); ok {
+		t.Fatal("memory metadata survived cache clear")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cache dir entries after clear = %d, want 0", len(entries))
 	}
 }
 

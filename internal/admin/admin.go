@@ -19,6 +19,7 @@ import (
 	"embyproxy/internal/config"
 	"embyproxy/internal/localtime"
 	"embyproxy/internal/logging"
+	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
@@ -30,6 +31,11 @@ var indexHTML string
 
 type ResetFunc func(uid, name string)
 
+type ImageCacheManager interface {
+	ImageCacheStats(ctx context.Context) (proxy.ImageCacheStats, error)
+	ClearImageCache(ctx context.Context) (proxy.ImageCacheStats, error)
+}
+
 type Handler struct {
 	cfg        config.Config
 	store      *storage.Store
@@ -37,9 +43,14 @@ type Handler struct {
 	telegram   *telegram.Service
 	log        *logging.Logger
 	resetRoute ResetFunc
+	imageCache ImageCacheManager
 }
 
-func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *telegram.Service, log *logging.Logger, reset ResetFunc) *Handler {
+func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *telegram.Service, log *logging.Logger, reset ResetFunc, imageCaches ...ImageCacheManager) *Handler {
+	var imageCache ImageCacheManager
+	if len(imageCaches) > 0 {
+		imageCache = imageCaches[0]
+	}
 	return &Handler{
 		cfg:        cfg,
 		store:      store,
@@ -47,6 +58,7 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 		telegram:   tg,
 		log:        log,
 		resetRoute: reset,
+		imageCache: imageCache,
 	}
 }
 
@@ -254,9 +266,35 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return h.listLogs(body), http.StatusOK
 	case "logs.clear":
 		return h.clearLogs(), http.StatusOK
+	case "imageCache.stats":
+		return h.imageCacheStats(ctx), http.StatusOK
+	case "imageCache.clear":
+		return h.clearImageCache(ctx), http.StatusOK
 	default:
 		return fail("未知 action: " + action), http.StatusOK
 	}
+}
+
+func (h *Handler) imageCacheStats(ctx context.Context) map[string]any {
+	if h.imageCache == nil {
+		return fail("图片缓存管理器未初始化")
+	}
+	stats, err := h.imageCache.ImageCacheStats(ctx)
+	if err != nil {
+		return fail(err.Error())
+	}
+	return map[string]any{"ok": true, "cache": stats}
+}
+
+func (h *Handler) clearImageCache(ctx context.Context) map[string]any {
+	if h.imageCache == nil {
+		return fail("图片缓存管理器未初始化")
+	}
+	stats, err := h.imageCache.ClearImageCache(ctx)
+	if err != nil {
+		return fail(err.Error())
+	}
+	return map[string]any{"ok": true, "cache": stats}
 }
 
 func (h *Handler) clearLogs() map[string]any {

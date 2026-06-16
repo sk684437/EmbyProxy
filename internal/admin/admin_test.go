@@ -15,6 +15,7 @@ import (
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
+	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
@@ -125,6 +126,34 @@ func TestDispatchLogsClearRemovesBufferedLogs(t *testing.T) {
 	logs = res["logs"].([]logging.LogEntry)
 	if len(logs) != 1 || !strings.Contains(logs[0].Line, "after clear") {
 		t.Fatalf("logs after new write = %+v", logs)
+	}
+}
+
+func TestDispatchImageCacheActions(t *testing.T) {
+	ctx := context.Background()
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
+	cache := &fakeImageCacheManager{
+		stats: proxy.ImageCacheStats{Enabled: true, Dir: "data/image-cache", Bytes: 2048, Files: 3, Entries: 1},
+	}
+	handler.imageCache = cache
+
+	res, status := handler.dispatch(ctx, "admin", "imageCache.stats", map[string]any{})
+	if status != http.StatusOK || res["ok"] != true {
+		t.Fatalf("dispatch imageCache.stats status=%d res=%+v", status, res)
+	}
+	stats, ok := res["cache"].(proxy.ImageCacheStats)
+	if !ok {
+		t.Fatalf("cache stats type = %T, want proxy.ImageCacheStats", res["cache"])
+	}
+	if stats.Bytes != 2048 || stats.Files != 3 || stats.Entries != 1 {
+		t.Fatalf("cache stats = %+v", stats)
+	}
+
+	cache.clearStats = proxy.ImageCacheStats{Enabled: true, Dir: "data/image-cache"}
+	res, status = handler.dispatch(ctx, "admin", "imageCache.clear", map[string]any{})
+	if status != http.StatusOK || res["ok"] != true || !cache.clearCalled {
+		t.Fatalf("dispatch imageCache.clear status=%d called=%v res=%+v", status, cache.clearCalled, res)
 	}
 }
 
@@ -299,4 +328,21 @@ func newConfigTestHandler(t *testing.T) (*Handler, func()) {
 	}
 	handler := New(config.Config{}, store, nil, nil, logging.New("silent", false), nil)
 	return handler, func() { _ = store.Close() }
+}
+
+type fakeImageCacheManager struct {
+	stats       proxy.ImageCacheStats
+	clearStats  proxy.ImageCacheStats
+	statsErr    error
+	clearErr    error
+	clearCalled bool
+}
+
+func (f *fakeImageCacheManager) ImageCacheStats(ctx context.Context) (proxy.ImageCacheStats, error) {
+	return f.stats, f.statsErr
+}
+
+func (f *fakeImageCacheManager) ClearImageCache(ctx context.Context) (proxy.ImageCacheStats, error) {
+	f.clearCalled = true
+	return f.clearStats, f.clearErr
 }
