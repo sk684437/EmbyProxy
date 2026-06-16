@@ -19,7 +19,7 @@ var (
 	embyPathRE             = regexp.MustCompile(`(?i)^/emby(/|$)`)
 	embyPrefixRE           = regexp.MustCompile(`(?i)^/emby`)
 	embySlashPrefixRE      = regexp.MustCompile(`(?i)^/emby/`)
-	strmStreamPathRE       = regexp.MustCompile(`(?i)(?:^|/)(?:emby/)?videos/[^/]+/stream\.strm$`)
+	strmStreamPathRE       = regexp.MustCompile(`(?i)(?:^|/)(?:emby/)?videos/[^/]+/(?:stream|original)\.strm$`)
 	authAPIRE              = regexp.MustCompile(`(?i)/users/authenticate(byname)?`)
 	bearerOrTokenRE        = regexp.MustCompile(`(?i)^(Bearer|Token)\s+`)
 	strmExtRE              = regexp.MustCompile(`(?i)\.strm$`)

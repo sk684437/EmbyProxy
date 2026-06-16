@@ -2662,6 +2662,41 @@ func TestSmartSTRMUsesPlaybackProxyWithoutWhitelist(t *testing.T) {
 	}
 }
 
+func TestOriginalSTRMPathUsesPlaybackStreamProxy(t *testing.T) {
+	h := newProxyTestHandler(t, storage.Node{})
+	h.playbackActionClient = failRoundTripClient(t, "original.strm should not be parsed as STRM source")
+	h.noRedirectClient = failRoundTripClient(t, "general proxy should not handle original.strm playback")
+	h.defaultFollowClient = failRoundTripClient(t, "default proxy should not handle original.strm playback")
+	var upstreamRange string
+	h.playbackStreamClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://upstream.example/emby/Videos/1/original.strm?MediaSourceId=ms1" {
+			t.Fatalf("upstream request URL = %q", req.URL.String())
+		}
+		upstreamRange = req.Header.Get("Range")
+		return bytesResponse(http.StatusPartialContent, []byte("video"), http.Header{
+			"Accept-Ranges":  []string{"bytes"},
+			"Content-Length": []string{"5"},
+			"Content-Range":  []string{"bytes 0-4/722182583"},
+			"Content-Type":   []string{"video/x-matroska"},
+		}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Videos/1/original.strm?MediaSourceId=ms1", nil)
+	req.Header.Set("Range", "bytes=0-")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusPartialContent, rr.Body.String())
+	}
+	if got := rr.Body.String(); got != "video" {
+		t.Fatalf("body = %q, want video", got)
+	}
+	if upstreamRange != "bytes=0-" {
+		t.Fatalf("upstream Range = %q, want bytes=0-", upstreamRange)
+	}
+}
+
 func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
 	tests := []struct {
 		name            string

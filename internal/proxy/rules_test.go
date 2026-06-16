@@ -183,6 +183,8 @@ func TestSTRMStreamPathSupportsOptionalEmbyPrefix(t *testing.T) {
 	}{
 		{path: "/emby/Videos/1/stream.strm", want: true},
 		{path: "/Videos/1/stream.strm", want: true},
+		{path: "/emby/Videos/1/original.strm", want: true},
+		{path: "/Videos/1/original.strm", want: true},
 		{path: "/emby/Videos/1/source.strm"},
 		{path: "/Movies/1/stream.strm"},
 	}
