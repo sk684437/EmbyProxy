@@ -34,6 +34,7 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 	stripClientIPHeaders(headers)
 	headers.Del("Range")
 	headers.Del("If-Range")
+	setProxyUA(h.ids, headers, node)
 	applyIdentity(h.ids, headers, node)
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-source", "targetUrl": sourceURL.String(), "outboundHeaders": headers})
 	res, err := h.doFetch(ctx, h.playbackActionClient, sourceURL, http.MethodGet, headers, nil)
@@ -47,7 +48,20 @@ func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.
 	defer res.Body.Close()
 	raw, err := readProxyRewriteBody(res.Body)
 	if err != nil {
-		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "strm-parse-error", "targetUrl": sourceURL.String()})
+		capture.SetErrorMeta(r, "strm-parse-error", err, map[string]any{
+			"mode":      "proxy",
+			"node":      parsed.Name,
+			"secret":    node.Secret,
+			"stage":     "strm-parse-error",
+			"targetUrl": sourceURL.String(),
+			"meta": map[string]any{
+				"error":                   err.Error(),
+				"strmReadError":           err.Error(),
+				"strmSourceStatus":        res.StatusCode,
+				"strmSourceContentType":   strings.TrimSpace(res.Header.Get("Content-Type")),
+				"strmSourceContentLength": strings.TrimSpace(res.Header.Get("Content-Length")),
+			},
+		})
 		return textResponse(http.StatusBadGateway, "Bad Gateway", nil), nil
 	}
 	line := ""

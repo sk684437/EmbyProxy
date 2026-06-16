@@ -175,6 +175,10 @@ func SetErrorMeta(req *http.Request, stage string, err error, fields map[string]
 
 func SetRetryableStatusMeta(req *http.Request, stage string, status int, attemptMS int64) {
 	meta := existingMeta(req)
+	if _, ok := meta["errorClass"]; ok {
+		SetMeta(req, map[string]any{"meta": meta})
+		return
+	}
 	meta["errorClass"] = "retryable-upstream-status"
 	meta["upstreamStatus"] = status
 	meta["targetAttemptMs"] = attemptMS
@@ -194,7 +198,11 @@ func ClearErrorMeta(req *http.Request) {
 		return
 	}
 	meta := cloneAnyMap(current)
-	for _, key := range []string{"error", "errorClass", "errorStage", "upstreamStatus", "targetAttemptMs", "contentEncoding", "contentType", "contentLength"} {
+	for _, key := range []string{
+		"error", "errorClass", "errorStage", "upstreamStatus", "targetAttemptMs",
+		"contentEncoding", "contentType", "contentLength",
+		"strmReadError", "strmSourceStatus", "strmSourceContentType", "strmSourceContentLength",
+	} {
 		delete(meta, key)
 	}
 	SetMeta(req, map[string]any{"meta": meta})
@@ -231,12 +239,28 @@ func AppendRetryableStatusAttempt(req *http.Request, stage string, status int, a
 
 func appendAttempt(req *http.Request, attempt map[string]any) {
 	meta := existingMeta(req)
+	copyAttemptDiagnostics(meta, attempt)
 	attempts := []any{}
 	if current, ok := meta["attempts"].([]any); ok {
 		attempts = append(attempts, current...)
 	}
 	meta["attempts"] = append(attempts, attempt)
 	SetMeta(req, map[string]any{"meta": meta})
+}
+
+func copyAttemptDiagnostics(meta, attempt map[string]any) {
+	for _, key := range []string{
+		"error", "errorStage", "upstreamStatus",
+		"contentEncoding", "contentType", "contentLength",
+		"strmReadError", "strmSourceStatus", "strmSourceContentType", "strmSourceContentLength",
+	} {
+		if _, exists := attempt[key]; exists {
+			continue
+		}
+		if value, ok := meta[key]; ok {
+			attempt[key] = value
+		}
+	}
 }
 
 func existingMeta(req *http.Request) map[string]any {

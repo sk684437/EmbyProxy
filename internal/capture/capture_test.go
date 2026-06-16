@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -167,6 +168,105 @@ func TestClassifyErrorKeepsSpecificConnectionFailures(t *testing.T) {
 	if got := classifyError(err); got != "connection-refused" {
 		t.Fatalf("classifyError() = %q, want connection-refused", got)
 	}
+}
+
+func TestSetRetryableStatusMetaPreservesExistingFinalError(t *testing.T) {
+	req, st := newCaptureStateRequest()
+	SetErrorMeta(req, "strm-parse-error", errors.New("unexpected EOF"), map[string]any{"meta": map[string]any{
+		"error":                   "unexpected EOF",
+		"strmReadError":           "unexpected EOF",
+		"strmSourceStatus":        http.StatusOK,
+		"strmSourceContentType":   "text/plain",
+		"strmSourceContentLength": "42",
+	}})
+
+	SetRetryableStatusMeta(req, "target-attempt", http.StatusBadGateway, 123)
+
+	meta := captureMeta(t, st)
+	if got := meta["errorClass"]; got != "upstream-error" {
+		t.Fatalf("errorClass = %v, want upstream-error", got)
+	}
+	if got := meta["errorStage"]; got != "strm-parse-error" {
+		t.Fatalf("errorStage = %v, want strm-parse-error", got)
+	}
+	for _, key := range []string{"upstreamStatus", "targetAttemptMs"} {
+		if _, ok := meta[key]; ok {
+			t.Fatalf("%s should not overwrite existing final error meta: %#v", key, meta)
+		}
+	}
+}
+
+func TestAppendRetryableStatusAttemptCopiesFinalDiagnostics(t *testing.T) {
+	req, st := newCaptureStateRequest()
+	SetErrorMeta(req, "strm-parse-error", errors.New("unexpected EOF"), map[string]any{"meta": map[string]any{
+		"error":                   "unexpected EOF",
+		"strmReadError":           "unexpected EOF",
+		"strmSourceStatus":        http.StatusOK,
+		"strmSourceContentType":   "text/plain",
+		"strmSourceContentLength": "42",
+	}})
+
+	AppendRetryableStatusAttempt(req, "target-attempt", http.StatusBadGateway, 123, "https://upstream.example")
+
+	meta := captureMeta(t, st)
+	attempts, ok := meta["attempts"].([]any)
+	if !ok || len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one attempt", meta["attempts"])
+	}
+	attempt, ok := attempts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("attempt = %T, want map", attempts[0])
+	}
+	if got := attempt["upstreamStatus"]; got != http.StatusBadGateway {
+		t.Fatalf("upstreamStatus = %v, want %d", got, http.StatusBadGateway)
+	}
+	if got := attempt["strmReadError"]; got != "unexpected EOF" {
+		t.Fatalf("strmReadError = %v, want unexpected EOF", got)
+	}
+	if got := attempt["strmSourceStatus"]; got != http.StatusOK {
+		t.Fatalf("strmSourceStatus = %v, want %d", got, http.StatusOK)
+	}
+	if got := attempt["errorStage"]; got != "strm-parse-error" {
+		t.Fatalf("errorStage = %v, want strm-parse-error", got)
+	}
+}
+
+func TestClearErrorMetaDropsSTRMDiagnostics(t *testing.T) {
+	req, st := newCaptureStateRequest()
+	SetErrorMeta(req, "strm-parse-error", errors.New("unexpected EOF"), map[string]any{"meta": map[string]any{
+		"error":                   "unexpected EOF",
+		"strmReadError":           "unexpected EOF",
+		"strmSourceStatus":        http.StatusOK,
+		"strmSourceContentType":   "text/plain",
+		"strmSourceContentLength": "42",
+	}})
+
+	ClearErrorMeta(req)
+
+	meta := captureMeta(t, st)
+	for _, key := range []string{
+		"error", "errorClass", "errorStage",
+		"strmReadError", "strmSourceStatus", "strmSourceContentType", "strmSourceContentLength",
+	} {
+		if _, ok := meta[key]; ok {
+			t.Fatalf("%s was not cleared: %#v", key, meta)
+		}
+	}
+}
+
+func newCaptureStateRequest() (*http.Request, *state) {
+	st := &state{Meta: map[string]any{}}
+	req := (&http.Request{}).WithContext(context.WithValue(context.Background(), contextKey{}, st))
+	return req, st
+}
+
+func captureMeta(t *testing.T, st *state) map[string]any {
+	t.Helper()
+	meta, ok := st.Meta["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", st.Meta["meta"])
+	}
+	return meta
 }
 
 func gzipTestBytes(t *testing.T, body []byte) []byte {

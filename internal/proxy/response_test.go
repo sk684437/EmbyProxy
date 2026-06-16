@@ -1933,6 +1933,191 @@ func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
 	assertHeadersAbsent(t, upstreamHeaders, clientIPHeaderKeys...)
 }
 
+func TestHandleSTRMImpersonatesSourceRequestUserAgent(t *testing.T) {
+	var upstreamHeaders http.Header
+	h := &Handler{
+		ids: identity.NewManager(nil),
+		playbackActionClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			upstreamHeaders = cloneHeader(req.Header)
+			return bytesResponse(http.StatusForbidden, []byte("forbidden"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+		})},
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/movie.strm", nil)
+	sourceUA := "ActualClient/9.9"
+	req.Header.Set("User-Agent", sourceUA)
+	sourceURL, err := url.Parse("https://upstream.example/movie.strm")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.handleSTRM(context.Background(), req, storage.Node{Name: "node", Target: "https://upstream.example", Impersonate: true, ImpersonateProfile: identity.DefaultProfile}, parsedRoute{Name: "node", Path: "/movie.strm"}, sourceURL, nil, config.ProxyEnv{})
+	if err != nil {
+		t.Fatalf("handleSTRM() error = %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	wantUA := identity.GetProfile(identity.DefaultProfile).UserAgent
+	if got := upstreamHeaders.Get("User-Agent"); got != wantUA {
+		t.Fatalf("User-Agent = %q, want impersonated user agent %q", got, wantUA)
+	}
+}
+
+func TestTrafficCaptureRecordsSTRMSourceReadError(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header: http.Header{
+				"Content-Length": []string{"42"},
+				"Content-Type":   []string{"text/plain"},
+			},
+			Body: failingReadBody{err: errors.New("unexpected EOF")},
+		}, nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/movie.strm", nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadGateway)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.Stage != "strm-parse-error" {
+		t.Fatalf("stage = %q, want strm-parse-error", record.Stage)
+	}
+	meta, ok := record.Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", record.Meta)
+	}
+	if got := meta["errorClass"]; got != "upstream-error" {
+		t.Fatalf("errorClass = %v, want upstream-error", got)
+	}
+	if got := meta["errorStage"]; got != "strm-parse-error" {
+		t.Fatalf("errorStage = %v, want strm-parse-error", got)
+	}
+	if got := meta["strmReadError"]; got != "unexpected EOF" {
+		t.Fatalf("strmReadError = %v, want unexpected EOF", got)
+	}
+	if got := meta["strmSourceStatus"]; got != float64(http.StatusOK) {
+		t.Fatalf("strmSourceStatus = %v, want %d", got, http.StatusOK)
+	}
+	if got := meta["strmSourceContentType"]; got != "text/plain" {
+		t.Fatalf("strmSourceContentType = %v, want text/plain", got)
+	}
+	if got := meta["strmSourceContentLength"]; got != "42" {
+		t.Fatalf("strmSourceContentLength = %v, want 42", got)
+	}
+}
+
+func TestTrafficCaptureKeepsSTRMSourceReadErrorOnSuccessfulFailover(t *testing.T) {
+	cwd := t.TempDir()
+	store := newProxyTestStore(t)
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures-test.jsonl"
+	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://8.8.4.4\nhttps://8.8.8.8",
+	}
+	if err := store.SaveNode(context.Background(), "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{CWD: cwd}, store, nil, logging.New("silent", false))
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "8.8.4.4" {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header: http.Header{
+					"Content-Length": []string{"42"},
+					"Content-Type":   []string{"text/plain"},
+				},
+				Body: failingReadBody{err: errors.New("unexpected EOF")},
+			}, nil
+		}
+		return bytesResponse(http.StatusOK, []byte("https://8.8.8.8/video.mp4"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"video/mp4"}}), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/movie.strm", nil)
+	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+	rr := httptest.NewRecorder()
+	recorder.Middleware(h).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	records, err := capture.ReadJSONL(filepath.Join(cwd, sys.TrafficCaptureFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	meta, ok := records[0].Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", records[0].Meta)
+	}
+	if _, ok := meta["strmReadError"]; ok {
+		t.Fatalf("successful record should not have final strmReadError: %#v", meta)
+	}
+	attempts, ok := meta["attempts"].([]any)
+	if !ok || len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one failed STRM attempt", meta["attempts"])
+	}
+	attempt, ok := attempts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("attempt = %T, want map", attempts[0])
+	}
+	if got := attempt["upstreamStatus"]; got != float64(http.StatusBadGateway) {
+		t.Fatalf("attempt upstreamStatus = %v, want %d", got, http.StatusBadGateway)
+	}
+	if got := attempt["strmReadError"]; got != "unexpected EOF" {
+		t.Fatalf("attempt strmReadError = %v, want unexpected EOF", got)
+	}
+	if got := attempt["strmSourceStatus"]; got != float64(http.StatusOK) {
+		t.Fatalf("attempt strmSourceStatus = %v, want %d", got, http.StatusOK)
+	}
+	if got := attempt["strmSourceContentType"]; got != "text/plain" {
+		t.Fatalf("attempt strmSourceContentType = %v, want text/plain", got)
+	}
+	if got := attempt["strmSourceContentLength"]; got != "42" {
+		t.Fatalf("attempt strmSourceContentLength = %v, want 42", got)
+	}
+	if got := attempt["errorStage"]; got != "strm-parse-error" {
+		t.Fatalf("attempt errorStage = %v, want strm-parse-error", got)
+	}
+}
+
 func TestHandleSTRMBlocksPrivateDirectTarget(t *testing.T) {
 	ctx := context.Background()
 	store := newProxyTestStore(t)
