@@ -22,11 +22,11 @@ func (s *Scheduler) Start(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	go func() {
 		defer ticker.Stop()
-		s.log.Info("scheduler", "started", map[string]any{"event": "schedulerStarted"})
+		s.log.Debug("scheduler", "started", map[string]any{"event": "schedulerStarted"})
 		for {
 			select {
 			case <-ctx.Done():
-				s.log.Info("scheduler", "stopped", map[string]any{"event": "schedulerStopped"})
+				s.log.Debug("scheduler", "stopped", map[string]any{"event": "schedulerStopped"})
 				return
 			case <-ticker.C:
 				s.tick(ctx)

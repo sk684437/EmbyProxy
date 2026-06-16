@@ -102,6 +102,18 @@ func TestLoggerEntriesReturnQuerylessConsoleLines(t *testing.T) {
 	}
 }
 
+func TestLoggerStoresEntriesBelowConfiguredLevel(t *testing.T) {
+	log := New("silent", true)
+	log.Debug("test", "debug line", nil)
+	log.Info("test", "info line", nil)
+	log.Warn("test", "warn line", nil)
+	log.Error("test", "error line", nil)
+
+	if got := messages(log.Entries(10)); got != "debug line,info line,warn line,error line" {
+		t.Fatalf("entries = %q, want all levels", got)
+	}
+}
+
 func TestFormatMetaUsesSemanticFieldOrder(t *testing.T) {
 	got := formatMeta(map[string]any{
 		"bodyCopyError":   "broken pipe",
@@ -221,6 +233,40 @@ func TestLoggerHistoryPagination(t *testing.T) {
 			}
 			if messages(oldest.Entries) != tt.wantOldest {
 				t.Fatalf("oldest messages = %q", messages(oldest.Entries))
+			}
+		})
+	}
+}
+
+func TestLoggerHistoryPageNumber(t *testing.T) {
+	log := New("debug", true)
+	if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 3); err != nil {
+		t.Fatalf("EnableHistory() error = %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	for i := 1; i <= 5; i++ {
+		log.Info("test", fmt.Sprintf("line-%d", i), nil)
+	}
+
+	tests := []struct {
+		page      int
+		wantPage  int
+		wantLines string
+		wantOlder bool
+	}{
+		{page: 1, wantPage: 1, wantLines: "line-4,line-5", wantOlder: true},
+		{page: 2, wantPage: 2, wantLines: "line-2,line-3", wantOlder: true},
+		{page: 3, wantPage: 3, wantLines: "line-1"},
+		{page: 99, wantPage: 3, wantLines: "line-1"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("page-%d", tt.page), func(t *testing.T) {
+			page := log.PageNumber(2, tt.page)
+			if page.Page != tt.wantPage || page.TotalPages != 3 || page.TotalEntries != 5 || page.HasOlder != tt.wantOlder {
+				t.Fatalf("page metadata = %+v", page)
+			}
+			if got := messages(page.Entries); got != tt.wantLines {
+				t.Fatalf("page entries = %q, want %q", got, tt.wantLines)
 			}
 		})
 	}

@@ -136,7 +136,7 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 	_ = kv.Put(ctx, cntKey, strconv.FormatInt(cnt+1, 10))
 	_ = kv.Put(ctx, lastKey, strconv.FormatInt(now, 10))
 	_ = kv.Put(ctx, digestKey, digest)
-	s.log.Info("telegram", "daily report sent", map[string]any{"event": "dailyReportSent", "day": day, "count": cnt + 1})
+	s.log.Debug("telegram", "daily report sent", map[string]any{"event": "dailyReportSent", "day": day, "count": cnt + 1})
 	return nil
 }
 
@@ -292,7 +292,7 @@ func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
 		_ = kv.Put(ctx, lastNotifyKey, strconv.FormatInt(now, 10))
 		_ = kv.Put(ctx, digestKey, digest)
 		_ = s.store.UpdateKeepaliveNotify(ctx, "admin", node.Name, day, notifyCount+1, day)
-		s.log.Info("telegram", "keepalive sent", map[string]any{"event": "keepaliveSent", "node": node.Name, "day": day, "count": notifyCount + 1})
+		s.log.Debug("telegram", "keepalive sent", map[string]any{"event": "keepaliveSent", "node": node.Name, "day": day, "count": notifyCount + 1})
 	}
 	return nil
 }

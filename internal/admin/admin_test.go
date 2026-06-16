@@ -98,6 +98,31 @@ func TestDispatchLogsListReturnsBufferedLogs(t *testing.T) {
 	}
 }
 
+func TestDispatchLogsListSupportsPageNumber(t *testing.T) {
+	ctx := context.Background()
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
+
+	for i := 1; i <= 5; i++ {
+		handler.log.Info("admin", fmt.Sprintf("line-%d", i), nil)
+	}
+	res, status := handler.dispatch(ctx, "admin", "logs.list", map[string]any{"limit": 2, "page": 2})
+
+	if status != http.StatusOK || res["ok"] != true {
+		t.Fatalf("dispatch logs.list status=%d res=%+v", status, res)
+	}
+	logs, ok := res["logs"].([]logging.LogEntry)
+	if !ok {
+		t.Fatalf("logs type = %T, want []logging.LogEntry", res["logs"])
+	}
+	if len(logs) != 2 || !strings.Contains(logs[0].Line, "line-2") || !strings.Contains(logs[1].Line, "line-3") {
+		t.Fatalf("logs page = %+v", logs)
+	}
+	if res["page"] != 2 || res["totalPages"] != 3 || res["totalEntries"] != 5 || res["hasOlder"] != true {
+		t.Fatalf("pagination metadata = %+v", res)
+	}
+}
+
 func TestDispatchLogsClearRemovesBufferedLogs(t *testing.T) {
 	ctx := context.Background()
 	handler, closeStore := newConfigTestHandler(t)

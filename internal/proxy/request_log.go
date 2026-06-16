@@ -100,7 +100,7 @@ func LogRequestStarted(ctx context.Context, log *logging.Logger, r *http.Request
 	if rg := strings.TrimSpace(r.Header.Get("Range")); rg != "" {
 		meta["range"] = rg
 	}
-	log.Info("access", "request started", meta)
+	log.Debug("access", "request started", meta)
 }
 
 func withAccessLogFields(ctx context.Context, meta map[string]any) map[string]any {

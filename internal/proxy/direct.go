@@ -208,7 +208,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-completed", "targetUrl": targetURL, "outboundHeaders": currentHeaders})
 		responseReadyMs := time.Since(started).Milliseconds()
 		formattedTarget := logging.FormatTarget(targetURL)
-		h.log.Info("direct", "response ready", withAccessLogFields(ctx, map[string]any{"event": "upstreamReady", "id": requestID, "node": nodeName, "target": formattedTarget, "status": res.StatusCode, "responseReadyMs": responseReadyMs}))
+		h.log.Debug("direct", "response ready", withAccessLogFields(ctx, map[string]any{"event": "upstreamReady", "id": requestID, "node": nodeName, "target": formattedTarget, "status": res.StatusCode, "responseReadyMs": responseReadyMs}))
 		SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
 		MarkAccessLogResponseBodyStart(ctx, time.Now())
 		res.Header = rh

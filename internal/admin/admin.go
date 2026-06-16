@@ -304,15 +304,27 @@ func (h *Handler) clearLogs() map[string]any {
 	if err := h.log.Clear(); err != nil {
 		return fail(err.Error())
 	}
-	return h.listLogs(map[string]any{"limit": h.log.BufferCapacity()})
+	return h.listLogs(map[string]any{"limit": h.log.BufferCapacity(), "page": 1})
 }
 
 func (h *Handler) listLogs(body map[string]any) map[string]any {
 	if h.log == nil {
-		return map[string]any{"ok": true, "logs": []logging.LogEntry{}, "capacity": 0, "hasOlder": false}
+		return map[string]any{"ok": true, "logs": []logging.LogEntry{}, "capacity": 0, "hasOlder": false, "page": 1, "totalPages": 1, "totalEntries": 0}
 	}
 	limit := clamp(intValue(body["limit"], h.log.BufferCapacity()), 1, h.log.BufferCapacity())
-	page := h.log.Page(limit, uint64Value(body["before"]))
+	pageNumber := intValue(body["page"], 0)
+	page := logging.LogPage{}
+	if pageNumber > 0 {
+		page = h.log.PageNumber(limit, pageNumber)
+	} else {
+		page = h.log.Page(limit, uint64Value(body["before"]))
+	}
+	if page.Page <= 0 {
+		page.Page = 1
+	}
+	if page.TotalPages <= 0 {
+		page.TotalPages = 1
+	}
 	oldestID := uint64(0)
 	newestID := uint64(0)
 	if len(page.Entries) > 0 {
@@ -320,13 +332,16 @@ func (h *Handler) listLogs(body map[string]any) map[string]any {
 		newestID = page.Entries[len(page.Entries)-1].ID
 	}
 	return map[string]any{
-		"ok":       true,
-		"logs":     page.Entries,
-		"capacity": h.log.BufferCapacity(),
-		"hasOlder": page.HasOlder,
-		"oldestId": oldestID,
-		"newestId": newestID,
-		"history":  page.History,
+		"ok":           true,
+		"logs":         page.Entries,
+		"capacity":     h.log.BufferCapacity(),
+		"hasOlder":     page.HasOlder,
+		"oldestId":     oldestID,
+		"newestId":     newestID,
+		"history":      page.History,
+		"page":         page.Page,
+		"totalPages":   page.TotalPages,
+		"totalEntries": page.TotalEntries,
 	}
 }
 

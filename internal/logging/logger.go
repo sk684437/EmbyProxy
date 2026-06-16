@@ -22,7 +22,7 @@ import (
 const (
 	DefaultBufferCapacity      = 2000
 	DefaultHistoryEntriesFile  = 2000
-	DefaultHistoryRotatedFiles = 10
+	DefaultHistoryRotatedFiles = 20
 	logHistoryBufferSize       = 64 * 1024
 	logHistoryFlushInterval    = time.Second
 )
@@ -126,9 +126,12 @@ type logBuffer struct {
 }
 
 type LogPage struct {
-	Entries  []LogEntry
-	HasOlder bool
-	History  bool
+	Entries      []LogEntry
+	HasOlder     bool
+	History      bool
+	Page         int
+	TotalPages   int
+	TotalEntries int
 }
 
 type logHistory struct {
@@ -166,7 +169,7 @@ func (l *Logger) NextRequestID(prefix string) string {
 }
 
 func (l *Logger) AccessEnabled() bool {
-	return l.accessLog.Load() && l.Enabled("info")
+	return l.accessLog.Load()
 }
 
 func (l *Logger) Enabled(level string) bool {
@@ -266,6 +269,23 @@ func (l *Logger) Page(limit int, before uint64) LogPage {
 	return LogPage{Entries: entries, HasOlder: hasOlder}
 }
 
+func (l *Logger) PageNumber(limit, page int) LogPage {
+	if l == nil {
+		return LogPage{}
+	}
+	if l.history != nil {
+		entries, totalEntries, totalPages, page, hasOlder, err := l.history.PageNumber(limit, page)
+		if err == nil {
+			return LogPage{Entries: entries, HasOlder: hasOlder, History: true, Page: page, TotalPages: totalPages, TotalEntries: totalEntries}
+		}
+	}
+	if l.buffer == nil {
+		return LogPage{}
+	}
+	entries, totalEntries, totalPages, page, hasOlder := l.buffer.PageNumber(limit, page)
+	return LogPage{Entries: entries, HasOlder: hasOlder, Page: page, TotalPages: totalPages, TotalEntries: totalEntries}
+}
+
 func (l *Logger) Debug(scope, msg string, meta map[string]any) { l.write("debug", scope, msg, meta) }
 func (l *Logger) Info(scope, msg string, meta map[string]any)  { l.write("info", scope, msg, meta) }
 func (l *Logger) Warn(scope, msg string, meta map[string]any)  { l.write("warn", scope, msg, meta) }
@@ -273,9 +293,6 @@ func (l *Logger) Error(scope, msg string, meta map[string]any) { l.write("error"
 
 func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 	level = normalizeLevel(level)
-	if !l.Enabled(level) {
-		return
-	}
 	status := promotedMetaValue(meta, "status")
 	parts := []string{localtime.RFC3339(time.Now()), "[" + strings.ToUpper(level) + "]"}
 	if status != "" {
@@ -298,6 +315,9 @@ func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 		_ = l.history.Append(entry)
 	}
 	l.mu.Unlock()
+	if !l.Enabled(level) {
+		return
+	}
 	if level == "error" || level == "warn" {
 		fmt.Fprintln(os.Stderr, line)
 		return
@@ -362,6 +382,22 @@ func (b *logBuffer) EntriesBefore(limit int, before uint64) ([]LogEntry, bool) {
 		all = all[len(all)-limit:]
 	}
 	return all, hasOlder
+}
+
+func (b *logBuffer) PageNumber(limit, page int) ([]LogEntry, int, int, int, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	total := len(b.entries)
+	limit = normalizePageLimit(limit, b.capacity)
+	totalPages := logPageCount(total, limit)
+	page = clampLogPage(page, totalPages)
+	start, end := logPageBounds(total, limit, page)
+	out := make([]LogEntry, 0, end-start)
+	for i := start; i < end; i++ {
+		idx := (b.start + i) % b.capacity
+		out = append(out, b.entries[idx])
+	}
+	return out, total, totalPages, page, start > 0
 }
 
 func (b *logBuffer) Capacity() int {
@@ -549,6 +585,28 @@ func (h *logHistory) Page(limit int, before uint64) ([]LogEntry, bool, error) {
 	return entries, hasOlder, nil
 }
 
+func (h *logHistory) PageNumber(limit, page int) ([]LogEntry, int, int, int, bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := h.flushWriterLocked(); err != nil {
+		return nil, 0, 1, 1, false, err
+	}
+	limit = normalizePageLimit(limit, h.entriesPerFile)
+	entries := []LogEntry{}
+	for _, path := range h.pathsOldestFirst() {
+		if err := readLogEntries(path, 0, &entries); err != nil {
+			return nil, 0, 1, 1, false, err
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	total := len(entries)
+	totalPages := logPageCount(total, limit)
+	page = clampLogPage(page, totalPages)
+	start, end := logPageBounds(total, limit, page)
+	out := append([]LogEntry(nil), entries[start:end]...)
+	return out, total, totalPages, page, start > 0, nil
+}
+
 func (h *logHistory) rotateLocked() error {
 	if err := h.closeWriterLocked(); err != nil {
 		return err
@@ -632,6 +690,57 @@ func readLogEntries(path string, before uint64, out *[]LogEntry) error {
 		return err
 	}
 	return nil
+}
+
+func normalizePageLimit(limit, fallback int) int {
+	if limit > 0 {
+		return limit
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 1
+}
+
+func logPageCount(total, limit int) int {
+	if total <= 0 {
+		return 1
+	}
+	if limit <= 0 {
+		return 1
+	}
+	return (total + limit - 1) / limit
+}
+
+func clampLogPage(page, totalPages int) int {
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page < 1 {
+		return 1
+	}
+	if page > totalPages {
+		return totalPages
+	}
+	return page
+}
+
+func logPageBounds(total, limit, page int) (int, int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	end := total - (page-1)*limit
+	if end < 0 {
+		end = 0
+	}
+	if end > total {
+		end = total
+	}
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	return start, end
 }
 
 func RedactURL(raw string) string {

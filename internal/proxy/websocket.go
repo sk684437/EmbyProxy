@@ -119,7 +119,7 @@ func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter,
 	}
 	h.markTargetHealthy("admin:"+parsed.Name, targets, target, expectedActive)
 	capture.SetMeta(r, map[string]any{"mode": "ws", "node": parsed.Name, "secret": node.Secret, "stage": "upgraded", "targetUrl": targetURL.String(), "outboundHeaders": headers})
-	h.log.Info("ws", "upgrade completed", map[string]any{"event": "upgradeCompleted", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": 101, "upgradeMs": time.Since(started).Milliseconds()})
+	h.log.Debug("ws", "upgrade completed", map[string]any{"event": "upgradeCompleted", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": 101, "upgradeMs": time.Since(started).Milliseconds()})
 	flushBuffered(upstreamConn, clientRW.Reader)
 	flushBuffered(clientConn, upstreamReader)
 	go copyAndClose(upstreamConn, clientConn)

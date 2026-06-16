@@ -389,7 +389,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
 			MarkAccessLogResponseBodyStart(ctx, time.Now())
 			logFields := responseReadyLogFields(ctx, res, map[string]any{"event": "upstreamReady", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "responseReadyMs": responseReadyMs})
-			h.log.Info("proxy", "response ready", logFields)
+			h.log.Debug("proxy", "response ready", logFields)
 			setAccessLogTargetFields(ctx, logFields)
 			return res, nil
 		}

@@ -134,7 +134,7 @@ func shouldPrintVersion(args []string) bool {
 func logIdentityProfiles(log *logging.Logger, ids *identity.Manager) {
 	for _, profile := range identity.ProfileKeys() {
 		snap := ids.Snapshot(profile)
-		log.Info("startup", "upstream identity profile", map[string]any{
+		log.Debug("startup", "upstream identity profile", map[string]any{
 			"event":     "identityProfileLoaded",
 			"profile":   snap.Profile,
 			"label":     snap.Label,

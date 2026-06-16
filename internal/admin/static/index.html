@@ -189,13 +189,28 @@ tr:last-child td{border-bottom:0}
 .log-pill{min-height:42px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 14px;display:inline-flex;align-items:center;color:var(--ink-3);font-size:12px;font-weight:900;white-space:nowrap}
 .log-switch{min-height:42px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 14px;display:inline-flex;align-items:center;gap:9px;color:var(--ink-2);font-size:13px;font-weight:900;cursor:pointer;white-space:nowrap}
 .log-switch input{width:18px;height:18px;accent-color:var(--pine);cursor:pointer}
+.log-level-filter{height:42px;min-width:116px;border-radius:16px;font-size:12px;font-weight:900;color:var(--ink-3)}
+.log-page-jump{display:inline-flex;align-items:center;gap:6px;min-height:44px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 8px}
+.log-page-input{width:72px;height:34px;border:1px solid var(--line);border-radius:12px;background:var(--paper-2);color:var(--ink);text-align:center;font-weight:900}
+.log-page-total{color:var(--ink-3);font-size:12px;font-weight:900;white-space:nowrap}
 .log-console{height:auto;min-height:0;border-radius:30px;border:1px solid rgba(30,33,29,.84);background:#151713;color:#dde8d9;padding:14px;overflow:auto;box-shadow:0 22px 64px rgba(30,33,29,.22);font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px;line-height:1.55}
-.log-line{display:block;min-height:25px;border-left:4px solid transparent;border-radius:10px;padding:4px 9px;white-space:pre-wrap;word-break:break-word;color:#dfe7db}
+.log-line{display:block;min-height:25px;border-left:4px solid transparent;border-radius:10px;padding:4px 9px 4px 11px;white-space:pre-wrap;word-break:break-word;color:#cfd9c9}
 .log-line + .log-line{margin-top:3px}
-.log-line.log-debug{color:#aab8a5}
-.log-line.log-info{border-left-color:#6ea587}
-.log-line.log-warn{border-left-color:#d39248;background:rgba(211,146,72,.10);color:#ffe4bd}
-.log-line.log-error{border-left-color:#d9635b;background:rgba(217,99,91,.12);color:#ffd4d0}
+.log-line .log-time{color:#7f8c79;font-variant-numeric:tabular-nums}
+.log-line .log-badge{display:inline-block;min-width:60px;text-align:center;padding:1px 8px;margin:0 8px 0 2px;border-radius:7px;font-weight:900;font-size:11px;letter-spacing:.06em;background:rgba(255,255,255,.10);color:#e8efe4;vertical-align:baseline;box-shadow:0 1px 4px rgba(0,0,0,.28)}
+.log-line .log-msg{color:inherit}
+.log-line.log-debug{border-left-color:#6f8696;background:rgba(111,134,150,.08);color:#b5c3cd}
+.log-line.log-debug .log-time{color:#7d8c97}
+.log-line.log-debug .log-badge{background:linear-gradient(180deg,#566776,#46535f);color:#dce8f0}
+.log-line.log-info{border-left-color:#56c489;background:rgba(86,196,137,.08);color:#d4ecda}
+.log-line.log-info .log-time{color:#79a98c}
+.log-line.log-info .log-badge{background:linear-gradient(180deg,#2f9c63,#247a4d);color:#e6fff0}
+.log-line.log-warn{border-left-color:#f0ab4b;background:rgba(240,171,75,.12);color:#ffe6c0}
+.log-line.log-warn .log-time{color:#cf9f63}
+.log-line.log-warn .log-badge{background:linear-gradient(180deg,#dc9433,#bd7a24);color:#fff4df}
+.log-line.log-error{border-left-color:#f15d54;background:rgba(241,93,84,.14);color:#ffd6d1}
+.log-line.log-error .log-time{color:#d28b84}
+.log-line.log-error .log-badge{background:linear-gradient(180deg,#e24a40,#c1352c);color:#ffe6e3}
 .log-empty{height:100%;min-height:360px;display:grid;place-items:center;text-align:center;color:#9ca996;font-weight:900}
 .sheet-layer{position:fixed;inset:0;background:rgba(30,33,29,.42);z-index:300;display:flex;align-items:stretch;justify-content:flex-end;padding:14px;backdrop-filter:blur(12px)}
 .sheet{width:min(760px,100%);height:100%;overflow:auto;background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:32px;padding:28px;box-shadow:var(--shadow)}
@@ -356,6 +371,9 @@ tr:last-child td{border-bottom:0}
   .config-sheet .form-actions{padding:18px}
   .logs-meter{display:grid;grid-template-columns:1fr;width:100%}
   .log-pill,.log-switch{width:100%;justify-content:center}
+  .log-page-jump{width:100%;justify-content:center}
+  .log-page-jump .btn{width:auto;min-width:70px}
+  .log-page-input{flex:1;max-width:110px}
   #toastRoot{left:14px;right:14px;bottom:14px}
   .toast{max-width:none}
 }
@@ -497,6 +515,13 @@ tr:last-child td{border-bottom:0}
             <div class="logs-meter">
               <span class="log-pill" id="logCount">0 条日志</span>
               <span class="log-pill" id="logCapacity">容量 0</span>
+              <select id="logLevelFilter" class="select-input log-level-filter" onchange="setLogLevelFilter(this.value)" aria-label="日志等级">
+                <option value="all">全部</option>
+                <option value="error">ERROR</option>
+                <option value="warn">WARN</option>
+                <option value="info">INFO</option>
+                <option value="debug">DEBUG</option>
+              </select>
               <label class="log-switch" for="logAutoRefresh">
                 <input type="checkbox" id="logAutoRefresh" onchange="setLogAutoRefresh(this.checked)"/>
                 <span>自动刷新</span>
@@ -505,8 +530,13 @@ tr:last-child td{border-bottom:0}
             <div class="action-pack">
               <button class="primary-action" onclick="loadLogs(true)">刷新</button>
               <button class="btn" id="logLatestBtn" onclick="loadLatestLogs(true)">最新</button>
-              <button class="btn" id="logOlderBtn" onclick="loadOlderLogs()">上一页</button>
-              <button class="btn" id="logNewerBtn" onclick="loadNewerLogs()">下一页</button>
+              <button class="btn" id="logNewerBtn" onclick="loadNewerLogs()">上一页</button>
+              <button class="btn" id="logOlderBtn" onclick="loadOlderLogs()">下一页</button>
+              <div class="log-page-jump">
+                <input id="logPageInput" class="log-page-input" type="number" min="1" value="1" onkeydown="if(event.key==='Enter')jumpLogsPage()"/>
+                <span class="log-page-total" id="logPageTotal">/ 1</span>
+                <button class="btn btn-sm" onclick="jumpLogsPage()">跳转</button>
+              </div>
               <button class="btn" onclick="copyLogs()">复制</button>
               <button class="btn btn-danger" onclick="clearLogs()">清空</button>
             </div>
@@ -792,7 +822,7 @@ tr:last-child td{border-bottom:0}
           </div>
           <div class="tg-row">
             <div class="form-group">
-              <label for="cfg-logLevel">日志等级</label>
+              <label for="cfg-logLevel">控制台输出等级</label>
               <select id="cfg-logLevel">
                 <option value="silent">silent</option>
                 <option value="error">error</option>
@@ -803,7 +833,7 @@ tr:last-child td{border-bottom:0}
             </div>
             <div class="toggle-row">
               <input type="checkbox" id="cfg-logAccess" checked/>
-              <label for="cfg-logAccess">输出客户端访问日志</label>
+              <label for="cfg-logAccess">记录客户端访问日志</label>
             </div>
           </div>
         </section>
@@ -966,10 +996,12 @@ let appBuild = null;
 let currentTab = 'nodes';
 let logRefreshTimer = null;
 let lastLogLines = [];
-let currentLogBefore = 0;
-let currentLogOldestId = 0;
+let currentLogPage = 1;
+let currentLogTotalPages = 1;
 let currentLogHasOlder = false;
-let logPageStack = [];
+let lastLogEntries = [];
+let lastLogMeta = {};
+let currentLogLevelFilter = 'all';
 
 const HIDDEN_PROXY_TEXT = '••••••••••••••••••••••••••••••••';
 const IMPERSONATE_LABELS = { yamby: 'Yamby Android', hills_android: 'Hills Android', hills_windows: 'Hills Windows' };
@@ -1812,21 +1844,22 @@ function formatBytes(bytes) {
   return `${Math.round(n)}B`;
 }
 
-async function loadLogs(showToast = false, before = currentLogBefore) {
-  currentLogBefore = Number(before || 0);
-  const payload = { limit: 2000 };
-  if (currentLogBefore > 0) payload.before = currentLogBefore;
+async function loadLogs(showToast = false, page = currentLogPage) {
+  const requestedPage = Math.max(1, Math.floor(Number(page || 1)));
+  currentLogPage = requestedPage;
+  const payload = { limit: 2000, page: requestedPage };
   const r = await api('logs.list', payload);
   if (!r.ok) {
     toast('加载日志失败: ' + (r.error || ''), 'err');
     return;
   }
   const logs = Array.isArray(r.logs) ? r.logs : [];
-  lastLogLines = logs.map(x => x.line || '');
-  currentLogOldestId = Number(r.oldestId || 0);
+  lastLogEntries = logs;
+  lastLogMeta = r;
+  currentLogPage = Math.max(1, Number(r.page || requestedPage));
+  currentLogTotalPages = Math.max(1, Number(r.totalPages || 1));
   currentLogHasOlder = !!r.hasOlder;
   renderLogs(logs, r);
-  renderLogHeadStatus(logs);
   if (showToast) toast('日志已刷新', 'ok');
 }
 
@@ -1838,13 +1871,12 @@ async function clearLogs() {
     return;
   }
   const logs = Array.isArray(r.logs) ? r.logs : [];
-  lastLogLines = logs.map(x => x.line || '');
-  currentLogBefore = 0;
-  currentLogOldestId = Number(r.oldestId || 0);
+  lastLogEntries = logs;
+  lastLogMeta = r;
+  currentLogPage = 1;
+  currentLogTotalPages = Math.max(1, Number(r.totalPages || 1));
   currentLogHasOlder = !!r.hasOlder;
-  logPageStack = [];
   renderLogs(logs, r);
-  renderLogHeadStatus(logs);
   toast('日志已清理', 'ok');
 }
 
@@ -1852,45 +1884,89 @@ function renderLogs(logs, meta = {}) {
   const countEl = document.getElementById('logCount');
   const capacityEl = document.getElementById('logCapacity');
   const consoleEl = document.getElementById('logConsole');
-  const pageText = currentLogBefore > 0 ? '历史页' : '最新页';
-  if (countEl) countEl.textContent = `${pageText} ${logs.length} 条`;
+  const visibleLogs = filterLogsByLevel(logs);
+  const pageText = `第 ${currentLogPage}/${currentLogTotalPages} 页`;
+  if (countEl) {
+    countEl.textContent = visibleLogs.length === logs.length ? `${pageText} ${logs.length} 条` : `${pageText} ${visibleLogs.length} / ${logs.length} 条`;
+  }
   if (capacityEl) capacityEl.textContent = `内存 ${Number(meta.capacity || 0)} / 历史 ${meta.history ? '轮转' : '内存'}`;
+  lastLogLines = visibleLogs.map(x => x.line || '');
+  renderLogHeadStatus(visibleLogs);
   updateLogPager();
   if (!consoleEl) return;
-  if (!logs.length) {
+  if (!visibleLogs.length) {
     consoleEl.innerHTML = '<div class="log-empty">暂无控制台日志</div>';
     return;
   }
-  consoleEl.innerHTML = logs.map(log => `<div class="log-line log-${attr(log.level || 'info')}">${esc(log.line || '')}</div>`).join('');
+  consoleEl.innerHTML = visibleLogs.map(log => `<div class="log-line log-${attr(log.level || 'info')}">${formatLogLine(log)}</div>`).join('');
   consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+function formatLogLine(log) {
+  const raw = String(log.line || '');
+  const m = raw.match(/^(\S+)\s+(\[[A-Z]+\])\s?([\s\S]*)$/);
+  if (!m) return `<span class="log-msg">${esc(raw)}</span>`;
+  return `<span class="log-time">${esc(m[1])}</span><span class="log-badge">${esc(m[2])}</span><span class="log-msg">${esc(m[3])}</span>`;
+}
+
+function filterLogsByLevel(logs) {
+  if (currentLogLevelFilter === 'all') return logs;
+  return logs.filter(log => String(log.level || '').toLowerCase() === currentLogLevelFilter);
+}
+
+function setLogLevelFilter(value) {
+  const level = String(value || 'all').toLowerCase();
+  currentLogLevelFilter = ['all', 'error', 'warn', 'info', 'debug'].includes(level) ? level : 'all';
+  const select = document.getElementById('logLevelFilter');
+  if (select) select.value = currentLogLevelFilter;
+  renderLogs(lastLogEntries, lastLogMeta);
 }
 
 function updateLogPager() {
   const latestBtn = document.getElementById('logLatestBtn');
   const newerBtn = document.getElementById('logNewerBtn');
   const olderBtn = document.getElementById('logOlderBtn');
-  if (latestBtn) latestBtn.disabled = currentLogBefore === 0;
-  if (newerBtn) newerBtn.disabled = logPageStack.length === 0;
-  if (olderBtn) olderBtn.disabled = !currentLogHasOlder || currentLogOldestId <= 0;
+  updateLogPageInput();
+  if (latestBtn) latestBtn.disabled = currentLogPage <= 1;
+  if (newerBtn) newerBtn.disabled = currentLogPage <= 1;
+  if (olderBtn) olderBtn.disabled = !currentLogHasOlder || currentLogPage >= currentLogTotalPages;
 }
 
 function loadLatestLogs(showToast = false) {
-  logPageStack = [];
-  currentLogBefore = 0;
-  loadLogs(showToast, 0);
+  loadLogs(showToast, 1);
 }
 
 function loadOlderLogs() {
-  if (!currentLogHasOlder || currentLogOldestId <= 0) return;
+  if (!currentLogHasOlder || currentLogPage >= currentLogTotalPages) return;
   disableLogAutoRefresh();
-  logPageStack.push(currentLogBefore);
-  loadLogs(false, currentLogOldestId);
+  loadLogs(false, currentLogPage + 1);
 }
 
 function loadNewerLogs() {
-  if (!logPageStack.length) return;
-  currentLogBefore = logPageStack.pop() || 0;
-  loadLogs(false, currentLogBefore);
+  if (currentLogPage <= 1) return;
+  loadLogs(false, currentLogPage - 1);
+}
+
+function jumpLogsPage() {
+  const input = document.getElementById('logPageInput');
+  const page = Math.floor(Number(input?.value || 1));
+  if (!Number.isFinite(page) || page < 1) {
+    toast('页码不合法', 'err');
+    updateLogPageInput();
+    return;
+  }
+  if (page > 1) disableLogAutoRefresh();
+  loadLogs(false, page);
+}
+
+function updateLogPageInput() {
+  const input = document.getElementById('logPageInput');
+  const total = document.getElementById('logPageTotal');
+  if (input) {
+    input.value = currentLogPage;
+    input.max = currentLogTotalPages;
+  }
+  if (total) total.textContent = `/ ${currentLogTotalPages}`;
 }
 
 function renderLogHeadStatus(logs) {
@@ -1902,7 +1978,7 @@ function renderLogHeadStatus(logs) {
 }
 
 function setLogAutoRefresh(enabled) {
-  if (enabled && currentLogBefore > 0) {
+  if (enabled && currentLogPage > 1) {
     disableLogAutoRefresh();
     toast('历史页不启用自动刷新，请切回最新页', 'info');
     return;
@@ -1914,7 +1990,7 @@ function setLogAutoRefresh(enabled) {
 function startLogAutoRefresh() {
   stopLogAutoRefresh();
   logRefreshTimer = setInterval(() => {
-    if (currentTab === 'logs' && currentLogBefore === 0) loadLogs();
+    if (currentTab === 'logs' && currentLogPage === 1) loadLogs();
   }, 5000);
 }
 
