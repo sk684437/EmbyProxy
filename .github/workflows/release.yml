@@ -31,6 +31,11 @@ jobs:
             goarch: "386"
             extension: .exe
             archive: zip
+          - name: windows-arm64
+            goos: windows
+            goarch: arm64
+            extension: .exe
+            archive: zip
           - name: linux-x64
             goos: linux
             goarch: amd64
@@ -39,6 +44,17 @@ jobs:
           - name: linux-x86
             goos: linux
             goarch: "386"
+            extension: ""
+            archive: tar.gz
+          - name: linux-arm64
+            goos: linux
+            goarch: arm64
+            extension: ""
+            archive: tar.gz
+          - name: linux-armv7
+            goos: linux
+            goarch: arm
+            goarm: "7"
             extension: ""
             archive: tar.gz
 
@@ -56,6 +72,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: "0"
         run: |
           mkdir -p dist
