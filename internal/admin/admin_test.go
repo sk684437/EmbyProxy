@@ -126,6 +126,27 @@ func TestDispatchLogsListSupportsPageNumber(t *testing.T) {
 	}
 }
 
+func TestStreamLogsSendsInitialComment(t *testing.T) {
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/admin/logs/stream", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.streamLogs(rec, req)
+
+	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	if got := rec.Body.String(); !strings.Contains(got, ": connected\n\n") {
+		t.Fatalf("stream body = %q, want initial connected comment", got)
+	}
+	if !rec.Flushed {
+		t.Fatal("stream response was not flushed")
+	}
+}
+
 func TestDispatchLogsListFilters(t *testing.T) {
 	tests := []struct {
 		name             string

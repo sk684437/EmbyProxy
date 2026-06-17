@@ -113,6 +113,9 @@ func (h *Handler) streamLogs(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
+	if _, err := fmt.Fprint(w, ": connected\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	for {
