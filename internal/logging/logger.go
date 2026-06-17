@@ -27,76 +27,76 @@ const (
 	logHistoryFlushInterval    = time.Second
 )
 
-var levels = map[string]int{
-	"silent": 0,
-	"error":  1,
-	"warn":   2,
-	"info":   3,
-	"debug":  4,
-}
-
 var (
+	levels = map[string]int{
+		"silent": 0,
+		"error":  1,
+		"warn":   2,
+		"info":   3,
+		"debug":  4,
+	}
+
 	httpURLRE         = regexp.MustCompile(`(?i)^https?://`)
 	embeddedHTTPURLRE = regexp.MustCompile(`(?i)https?://[^\s"'<>\\]+`)
 	safeLogValueRE    = regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`)
-)
 
-var metaFieldOrder = map[string]int{
-	"event":                10,
-	"id":                   20,
-	"method":               30,
-	"uri":                  40,
-	"ip":                   50,
-	"node":                 60,
-	"nodeTarget":           70,
-	"target":               80,
-	"upstreamPool":         85,
-	"location":             90,
-	"range":                100,
-	"contentRange":         110,
-	"streamResumeFrom":     112,
-	"streamResumeAttempts": 114,
-	"streamResumeBytes":    116,
-	"imageCache":           120,
-	"bytes":                130,
-	"contentLen":           140,
-	"copiedBytes":          150,
-	"readBytes":            160,
-	"writeBytes":           170,
-	"readCalls":            180,
-	"writeCalls":           190,
-	"responseReadyMs":      200,
-	"targetAttemptMs":      210,
-	"bodyMs":               220,
-	"copyMs":               230,
-	"totalMs":              240,
-	"firstReadMs":          250,
-	"firstReadStatus":      260,
-	"lastReadMs":           270,
-	"lastWriteMs":          280,
-	"upgradeMs":            290,
-	"addr":                 300,
-	"db":                   310,
-	"profile":              320,
-	"label":                330,
-	"client":               340,
-	"version":              350,
-	"commit":               360,
-	"builtAt":              370,
-	"device":               380,
-	"deviceId":             390,
-	"userAgent":            400,
-	"day":                  410,
-	"count":                420,
-	"reason":               900,
-	"side":                 910,
-	"contextErr":           920,
-	"bodyCopySide":         930,
-	"bodyCopyContextErr":   940,
-	"bodyCopyError":        950,
-	"streamResumeError":    955,
-	"error":                960,
-}
+	metaFieldOrder = map[string]int{
+		"event":                10,
+		"id":                   20,
+		"method":               30,
+		"uri":                  40,
+		"ip":                   50,
+		"node":                 60,
+		"nodeTarget":           70,
+		"target":               80,
+		"upstreamPool":         85,
+		"location":             90,
+		"range":                100,
+		"contentRange":         110,
+		"streamResumeFrom":     112,
+		"streamResumeAttempts": 114,
+		"streamResumeBytes":    116,
+		"imageCache":           120,
+		"bytes":                130,
+		"contentLen":           140,
+		"copiedBytes":          150,
+		"readBytes":            160,
+		"writeBytes":           170,
+		"readCalls":            180,
+		"writeCalls":           190,
+		"responseReadyMs":      200,
+		"targetAttemptMs":      210,
+		"bodyMs":               220,
+		"copyMs":               230,
+		"totalMs":              240,
+		"firstReadMs":          250,
+		"firstReadStatus":      260,
+		"lastReadMs":           270,
+		"lastWriteMs":          280,
+		"upgradeMs":            290,
+		"addr":                 300,
+		"db":                   310,
+		"profile":              320,
+		"label":                330,
+		"client":               340,
+		"version":              350,
+		"commit":               360,
+		"builtAt":              370,
+		"device":               380,
+		"deviceId":             390,
+		"userAgent":            400,
+		"day":                  410,
+		"count":                420,
+		"reason":               900,
+		"side":                 910,
+		"contextErr":           920,
+		"bodyCopySide":         930,
+		"bodyCopyContextErr":   940,
+		"bodyCopyError":        950,
+		"streamResumeError":    955,
+		"error":                960,
+	}
+)
 
 type Logger struct {
 	level     atomic.Int64
@@ -106,9 +106,12 @@ type Logger struct {
 	mu      sync.Mutex
 	buffer  *logBuffer
 	history *logHistory
+	subMu   sync.Mutex
+	subs    map[chan LogEntry]struct{}
 }
 
 type LogEntry struct {
+	Type    string `json:"type,omitempty"`
 	ID      uint64 `json:"id"`
 	Time    string `json:"time"`
 	Level   string `json:"level"`
@@ -117,12 +120,9 @@ type LogEntry struct {
 	Line    string `json:"line"`
 }
 
-type logBuffer struct {
-	mu       sync.Mutex
-	next     uint64
-	start    int
-	entries  []LogEntry
-	capacity int
+type LogFilter struct {
+	Levels map[string]bool
+	Query  string
 }
 
 type LogPage struct {
@@ -132,6 +132,14 @@ type LogPage struct {
 	Page         int
 	TotalPages   int
 	TotalEntries int
+}
+
+type logBuffer struct {
+	mu       sync.Mutex
+	next     uint64
+	start    int
+	entries  []LogEntry
+	capacity int
 }
 
 type logHistory struct {
@@ -146,6 +154,34 @@ type logHistory struct {
 	writer          *bufio.Writer
 	closed          bool
 	done            chan struct{}
+}
+
+func (f LogFilter) empty() bool {
+	return len(f.Levels) == 0 && strings.TrimSpace(f.Query) == ""
+}
+
+func (f LogFilter) match(e LogEntry) bool {
+	if len(f.Levels) > 0 && !f.Levels[strings.ToLower(e.Level)] {
+		return false
+	}
+	query := strings.TrimSpace(strings.ToLower(f.Query))
+	if query != "" && !strings.Contains(strings.ToLower(e.Line), query) {
+		return false
+	}
+	return true
+}
+
+func filterLogEntries(entries []LogEntry, filter LogFilter) []LogEntry {
+	if filter.empty() {
+		return entries
+	}
+	filtered := make([]LogEntry, 0, len(entries))
+	for _, entry := range entries {
+		if filter.match(entry) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 func New(level string, accessLog bool) *Logger {
@@ -176,6 +212,71 @@ func (l *Logger) Enabled(level string) bool {
 	return int(l.level.Load()) >= levels[normalizeLevel(level)]
 }
 
+func (l *Logger) Subscribe(buf int) (<-chan LogEntry, func()) {
+	if l == nil {
+		ch := make(chan LogEntry)
+		close(ch)
+		return ch, func() {}
+	}
+	if buf < 1 {
+		buf = 1
+	}
+	ch := make(chan LogEntry, buf)
+	l.subMu.Lock()
+	if l.subs == nil {
+		l.subs = make(map[chan LogEntry]struct{})
+	}
+	l.subs[ch] = struct{}{}
+	l.subMu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			l.subMu.Lock()
+			if _, ok := l.subs[ch]; ok {
+				delete(l.subs, ch)
+				close(ch)
+			}
+			l.subMu.Unlock()
+		})
+	}
+	return ch, cancel
+}
+
+func (l *Logger) broadcast(entry LogEntry) {
+	if l == nil {
+		return
+	}
+	l.subMu.Lock()
+	defer l.subMu.Unlock()
+	for ch := range l.subs {
+		if entry.Type != "" {
+			broadcastControlEntry(ch, entry)
+			continue
+		}
+		select {
+		case ch <- entry:
+		default:
+		}
+	}
+}
+
+func broadcastControlEntry(ch chan LogEntry, entry LogEntry) {
+	for {
+		select {
+		case ch <- entry:
+			return
+		default:
+		}
+		// Control events mark stream boundaries, so drop stale buffered log lines
+		// instead of losing the boundary or blocking on a slow SSE client.
+		select {
+		case <-ch:
+		default:
+		}
+	}
+}
+
 func (l *Logger) Entries(limit int) []LogEntry {
 	if l == nil || l.buffer == nil {
 		return nil
@@ -198,6 +299,7 @@ func (l *Logger) Clear() error {
 	if l.buffer != nil {
 		l.buffer.Clear()
 	}
+	l.broadcast(LogEntry{Type: "clear"})
 	return nil
 }
 
@@ -206,6 +308,13 @@ func (l *Logger) BufferCapacity() int {
 		return 0
 	}
 	return l.buffer.Capacity()
+}
+
+func (l *Logger) NewestID() uint64 {
+	if l == nil || l.buffer == nil {
+		return 0
+	}
+	return l.buffer.NewestID()
 }
 
 func (l *Logger) EnableHistory(path string, entriesPerFile, maxFiles int) error {
@@ -240,12 +349,20 @@ func (l *Logger) Close() error {
 	return l.history.Close()
 }
 
-func (l *Logger) Page(limit int, before uint64) LogPage {
+func (l *Logger) Page(limit int, before uint64, filter LogFilter) LogPage {
 	if l == nil {
 		return LogPage{}
 	}
 	if l.buffer != nil {
-		entries, hasOlder := l.buffer.EntriesBefore(limit, before)
+		entries, hasOlder := l.buffer.EntriesBefore(limit, before, filter)
+		if l.history != nil && !filter.empty() {
+			historyEntries, historyHasOlder, err := l.history.Page(limit, before, filter)
+			if err == nil {
+				var truncated bool
+				entries, truncated = mergeLogEntriesForPage(limit, historyEntries, entries)
+				return LogPage{Entries: entries, HasOlder: hasOlder || historyHasOlder || truncated, History: true}
+			}
+		}
 		if before == 0 || len(entries) > 0 {
 			if l.history != nil {
 				if len(entries) > 0 && l.history.HasBefore(entries[0].ID) {
@@ -257,7 +374,7 @@ func (l *Logger) Page(limit int, before uint64) LogPage {
 		}
 	}
 	if l.history != nil {
-		entries, hasOlder, err := l.history.Page(limit, before)
+		entries, hasOlder, err := l.history.Page(limit, before, filter)
 		if err == nil {
 			return LogPage{Entries: entries, HasOlder: hasOlder, History: true}
 		}
@@ -265,16 +382,37 @@ func (l *Logger) Page(limit int, before uint64) LogPage {
 	if l.buffer == nil {
 		return LogPage{}
 	}
-	entries, hasOlder := l.buffer.EntriesBefore(limit, before)
+	entries, hasOlder := l.buffer.EntriesBefore(limit, before, filter)
 	return LogPage{Entries: entries, HasOlder: hasOlder}
 }
 
-func (l *Logger) PageNumber(limit, page int) LogPage {
+func mergeLogEntriesForPage(limit int, pages ...[]LogEntry) ([]LogEntry, bool) {
+	seen := map[uint64]bool{}
+	entries := []LogEntry{}
+	for _, page := range pages {
+		for _, entry := range page {
+			if entry.ID > 0 {
+				if seen[entry.ID] {
+					continue
+				}
+				seen[entry.ID] = true
+			}
+			entries = append(entries, entry)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	if limit <= 0 || limit >= len(entries) {
+		return entries, false
+	}
+	return entries[len(entries)-limit:], true
+}
+
+func (l *Logger) PageNumber(limit, page int, filter LogFilter) LogPage {
 	if l == nil {
 		return LogPage{}
 	}
 	if l.history != nil {
-		entries, totalEntries, totalPages, page, hasOlder, err := l.history.PageNumber(limit, page)
+		entries, totalEntries, totalPages, page, hasOlder, err := l.history.PageNumber(limit, page, filter)
 		if err == nil {
 			return LogPage{Entries: entries, HasOlder: hasOlder, History: true, Page: page, TotalPages: totalPages, TotalEntries: totalEntries}
 		}
@@ -282,7 +420,7 @@ func (l *Logger) PageNumber(limit, page int) LogPage {
 	if l.buffer == nil {
 		return LogPage{}
 	}
-	entries, totalEntries, totalPages, page, hasOlder := l.buffer.PageNumber(limit, page)
+	entries, totalEntries, totalPages, page, hasOlder := l.buffer.PageNumber(limit, page, filter)
 	return LogPage{Entries: entries, HasOlder: hasOlder, Page: page, TotalPages: totalPages, TotalEntries: totalEntries}
 }
 
@@ -314,6 +452,7 @@ func (l *Logger) write(level, scope, msg string, meta map[string]any) {
 	if l.history != nil {
 		_ = l.history.Append(entry)
 	}
+	l.broadcast(entry)
 	l.mu.Unlock()
 	if !l.Enabled(level) {
 		return
@@ -347,19 +486,18 @@ func (b *logBuffer) Append(entry LogEntry) LogEntry {
 }
 
 func (b *logBuffer) Entries(limit int) []LogEntry {
-	entries, _ := b.EntriesBefore(limit, 0)
+	entries, _ := b.EntriesBefore(limit, 0, LogFilter{})
 	return entries
 }
 
 func (b *logBuffer) Clear() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.next = 0
 	b.start = 0
 	b.entries = b.entries[:0]
 }
 
-func (b *logBuffer) EntriesBefore(limit int, before uint64) ([]LogEntry, bool) {
+func (b *logBuffer) EntriesBefore(limit int, before uint64, filter LogFilter) ([]LogEntry, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	total := len(b.entries)
@@ -370,7 +508,7 @@ func (b *logBuffer) EntriesBefore(limit int, before uint64) ([]LogEntry, bool) {
 	for i := 0; i < total; i++ {
 		idx := (b.start + i) % b.capacity
 		entry := b.entries[idx]
-		if before == 0 || entry.ID < before {
+		if (before == 0 || entry.ID < before) && (filter.empty() || filter.match(entry)) {
 			all = append(all, entry)
 		}
 	}
@@ -384,19 +522,23 @@ func (b *logBuffer) EntriesBefore(limit int, before uint64) ([]LogEntry, bool) {
 	return all, hasOlder
 }
 
-func (b *logBuffer) PageNumber(limit, page int) ([]LogEntry, int, int, int, bool) {
+func (b *logBuffer) PageNumber(limit, page int, filter LogFilter) ([]LogEntry, int, int, int, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	total := len(b.entries)
 	limit = normalizePageLimit(limit, b.capacity)
+	entries := make([]LogEntry, 0, len(b.entries))
+	for i := 0; i < len(b.entries); i++ {
+		idx := (b.start + i) % b.capacity
+		entry := b.entries[idx]
+		if filter.empty() || filter.match(entry) {
+			entries = append(entries, entry)
+		}
+	}
+	total := len(entries)
 	totalPages := logPageCount(total, limit)
 	page = clampLogPage(page, totalPages)
 	start, end := logPageBounds(total, limit, page)
-	out := make([]LogEntry, 0, end-start)
-	for i := start; i < end; i++ {
-		idx := (b.start + i) % b.capacity
-		out = append(out, b.entries[idx])
-	}
+	out := append([]LogEntry(nil), entries[start:end]...)
 	return out, total, totalPages, page, start > 0
 }
 
@@ -404,6 +546,16 @@ func (b *logBuffer) Capacity() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.capacity
+}
+
+func (b *logBuffer) NewestID() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.entries) == 0 {
+		return 0
+	}
+	idx := (b.start + len(b.entries) - 1) % b.capacity
+	return b.entries[idx].ID
 }
 
 func newLogHistory(path string, entriesPerFile, maxFiles int) (*logHistory, error) {
@@ -559,7 +711,7 @@ func (h *logHistory) HasBefore(id uint64) bool {
 	return h.retainedEntries > 0 && h.oldestID > 0 && h.oldestID < id
 }
 
-func (h *logHistory) Page(limit int, before uint64) ([]LogEntry, bool, error) {
+func (h *logHistory) Page(limit int, before uint64, filter LogFilter) ([]LogEntry, bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.flushWriterLocked(); err != nil {
@@ -575,6 +727,7 @@ func (h *logHistory) Page(limit int, before uint64) ([]LogEntry, bool, error) {
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	entries = filterLogEntries(entries, filter)
 	if limit > len(entries) {
 		limit = len(entries)
 	}
@@ -585,7 +738,7 @@ func (h *logHistory) Page(limit int, before uint64) ([]LogEntry, bool, error) {
 	return entries, hasOlder, nil
 }
 
-func (h *logHistory) PageNumber(limit, page int) ([]LogEntry, int, int, int, bool, error) {
+func (h *logHistory) PageNumber(limit, page int, filter LogFilter) ([]LogEntry, int, int, int, bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.flushWriterLocked(); err != nil {
@@ -599,6 +752,7 @@ func (h *logHistory) PageNumber(limit, page int) ([]LogEntry, int, int, int, boo
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	entries = filterLogEntries(entries, filter)
 	total := len(entries)
 	totalPages := logPageCount(total, limit)
 	page = clampLogPage(page, totalPages)

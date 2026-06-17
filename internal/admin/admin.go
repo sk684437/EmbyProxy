@@ -79,6 +79,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, res.Status, map[string]any{"error": res.Error})
 		return
 	}
+	if r.Method == http.MethodGet && path == "/admin/logs/stream" {
+		h.streamLogs(w, r)
+		return
+	}
 	if r.Method == http.MethodPost && path == "/admin/api" {
 		h.handleAPI(w, r, res.UID)
 		return
@@ -89,6 +93,51 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(indexHTML))
+}
+
+func (h *Handler) streamLogs(w http.ResponseWriter, r *http.Request) {
+	capture.Suppress(r)
+	requestlog.SuppressAccessLog(r.Context())
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "当前响应不支持日志流"})
+		return
+	}
+	header := w.Header()
+	header.Set("Content-Type", "text/event-stream")
+	header.Set("Cache-Control", "no-cache")
+	header.Set("Connection", "keep-alive")
+	header.Set("X-Accel-Buffering", "no")
+
+	ch, cancel := h.log.Subscribe(256)
+	defer cancel()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case entry, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (h *Handler) serveAdminTokenError(w http.ResponseWriter, errText string) {
@@ -309,15 +358,20 @@ func (h *Handler) clearLogs() map[string]any {
 
 func (h *Handler) listLogs(body map[string]any) map[string]any {
 	if h.log == nil {
-		return map[string]any{"ok": true, "logs": []logging.LogEntry{}, "capacity": 0, "hasOlder": false, "page": 1, "totalPages": 1, "totalEntries": 0}
+		return map[string]any{"ok": true, "logs": []logging.LogEntry{}, "capacity": 0, "hasOlder": false, "oldestId": uint64(0), "newestId": uint64(0), "streamId": uint64(0), "page": 1, "totalPages": 1, "totalEntries": 0}
 	}
 	limit := clamp(intValue(body["limit"], h.log.BufferCapacity()), 1, h.log.BufferCapacity())
 	pageNumber := intValue(body["page"], 0)
+	level := strings.ToLower(strings.TrimSpace(asString(body["level"])))
+	filter := logging.LogFilter{Query: strings.ToLower(strings.TrimSpace(asString(body["query"])))}
+	if level != "" && level != "all" {
+		filter.Levels = map[string]bool{level: true}
+	}
 	page := logging.LogPage{}
 	if pageNumber > 0 {
-		page = h.log.PageNumber(limit, pageNumber)
+		page = h.log.PageNumber(limit, pageNumber, filter)
 	} else {
-		page = h.log.Page(limit, uint64Value(body["before"]))
+		page = h.log.Page(limit, uint64Value(body["before"]), filter)
 	}
 	if page.Page <= 0 {
 		page.Page = 1
@@ -331,6 +385,7 @@ func (h *Handler) listLogs(body map[string]any) map[string]any {
 		oldestID = page.Entries[0].ID
 		newestID = page.Entries[len(page.Entries)-1].ID
 	}
+	streamID := h.log.NewestID()
 	return map[string]any{
 		"ok":           true,
 		"logs":         page.Entries,
@@ -338,6 +393,7 @@ func (h *Handler) listLogs(body map[string]any) map[string]any {
 		"hasOlder":     page.HasOlder,
 		"oldestId":     oldestID,
 		"newestId":     newestID,
+		"streamId":     streamID,
 		"history":      page.History,
 		"page":         page.Page,
 		"totalPages":   page.TotalPages,

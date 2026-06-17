@@ -189,11 +189,21 @@ tr:last-child td{border-bottom:0}
 .log-pill{min-height:42px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 14px;display:inline-flex;align-items:center;color:var(--ink-3);font-size:12px;font-weight:900;white-space:nowrap}
 .log-switch{min-height:42px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 14px;display:inline-flex;align-items:center;gap:9px;color:var(--ink-2);font-size:13px;font-weight:900;cursor:pointer;white-space:nowrap}
 .log-switch input{width:18px;height:18px;accent-color:var(--pine);cursor:pointer}
+.log-search{min-width:260px;max-width:430px}
+.log-search input{height:42px;border-radius:16px;font-size:13px}
+.log-search::before{left:15px}
+.log-search::after{left:27px;top:26px}
 .log-level-filter{height:42px;min-width:116px;border-radius:16px;font-size:12px;font-weight:900;color:var(--ink-3)}
+.log-stream-state{gap:7px}
+.log-stream-state::before{content:"";width:8px;height:8px;border-radius:50%;background:#9ca996;box-shadow:0 0 0 4px rgba(156,169,150,.12)}
+.log-stream-state.stream::before{background:var(--green);box-shadow:0 0 0 4px rgba(35,117,71,.14)}
+.log-stream-state.polling::before{background:var(--amber);box-shadow:0 0 0 4px rgba(189,106,52,.14)}
+.log-stream-state.paused::before{background:var(--blue);box-shadow:0 0 0 4px rgba(66,99,142,.14)}
 .log-page-jump{display:inline-flex;align-items:center;gap:6px;min-height:44px;border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:0 8px}
 .log-page-input{width:72px;height:34px;border:1px solid var(--line);border-radius:12px;background:var(--paper-2);color:var(--ink);text-align:center;font-weight:900}
 .log-page-total{color:var(--ink-3);font-size:12px;font-weight:900;white-space:nowrap}
-.log-console{height:auto;min-height:0;border-radius:30px;border:1px solid rgba(30,33,29,.84);background:#151713;color:#dde8d9;padding:14px;overflow:auto;box-shadow:0 22px 64px rgba(30,33,29,.22);font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px;line-height:1.55}
+.log-console-wrap{position:relative;min-height:0;display:grid}
+.log-console{height:100%;min-height:0;border-radius:30px;border:1px solid rgba(30,33,29,.84);background:#151713;color:#dde8d9;padding:14px;overflow:auto;box-shadow:0 22px 64px rgba(30,33,29,.22);font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px;line-height:1.55}
 .log-line{display:block;min-height:25px;border-left:4px solid transparent;border-radius:10px;padding:4px 9px 4px 11px;white-space:pre-wrap;word-break:break-word;color:#cfd9c9}
 .log-line + .log-line{margin-top:3px}
 .log-line .log-time{color:#7f8c79;font-variant-numeric:tabular-nums}
@@ -212,6 +222,8 @@ tr:last-child td{border-bottom:0}
 .log-line.log-error .log-time{color:#d28b84}
 .log-line.log-error .log-badge{background:linear-gradient(180deg,#e24a40,#c1352c);color:#ffe6e3}
 .log-empty{height:100%;min-height:360px;display:grid;place-items:center;text-align:center;color:#9ca996;font-weight:900}
+.log-new-badge{position:absolute;right:18px;bottom:18px;min-height:38px;border:1px solid rgba(86,196,137,.28);border-radius:16px;background:#f8fffb;color:var(--green);padding:0 14px;font-size:13px;font-weight:950;box-shadow:0 14px 36px rgba(0,0,0,.18);cursor:pointer}
+.log-new-badge:hover{border-color:var(--green);background:#fff}
 .sheet-layer{position:fixed;inset:0;background:rgba(30,33,29,.42);z-index:300;display:flex;align-items:stretch;justify-content:flex-end;padding:14px;backdrop-filter:blur(12px)}
 .sheet{width:min(760px,100%);height:100%;overflow:auto;background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:32px;padding:28px;box-shadow:var(--shadow)}
 .config-sheet{width:min(1040px,100%);display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;padding:0;background:linear-gradient(135deg,#fffdf8 0%,#f6f0e4 100%)}
@@ -515,6 +527,9 @@ tr:last-child td{border-bottom:0}
             <div class="logs-meter">
               <span class="log-pill" id="logCount">0 条日志</span>
               <span class="log-pill" id="logCapacity">容量 0</span>
+              <label class="search-field log-search">
+                <input type="text" id="logSearch" placeholder="搜索 requestId、路径或 IP" oninput="setLogQuery(this.value)"/>
+              </label>
               <select id="logLevelFilter" class="select-input log-level-filter" onchange="setLogLevelFilter(this.value)" aria-label="日志等级">
                 <option value="all">全部</option>
                 <option value="error">ERROR</option>
@@ -523,9 +538,10 @@ tr:last-child td{border-bottom:0}
                 <option value="debug">DEBUG</option>
               </select>
               <label class="log-switch" for="logAutoRefresh">
-                <input type="checkbox" id="logAutoRefresh" onchange="setLogAutoRefresh(this.checked)"/>
-                <span>自动刷新</span>
+                <input type="checkbox" id="logAutoRefresh" onchange="setLogAutoRefresh(this.checked)" checked/>
+                <span>实时</span>
               </label>
+              <span class="log-pill log-stream-state paused" id="logStreamStatus">待机</span>
             </div>
             <div class="action-pack">
               <button class="primary-action" onclick="loadLogs(true)">刷新</button>
@@ -541,8 +557,11 @@ tr:last-child td{border-bottom:0}
               <button class="btn btn-danger" onclick="clearLogs()">清空</button>
             </div>
           </div>
-          <div class="log-console" id="logConsole">
-            <div class="log-empty">暂无控制台日志</div>
+          <div class="log-console-wrap">
+            <div class="log-console" id="logConsole">
+              <div class="log-empty">暂无运行日志</div>
+            </div>
+            <button class="log-new-badge" id="logNewBadge" onclick="scrollLogsToBottom()" hidden>↓ 0 条新日志</button>
           </div>
         </section>
       </main>
@@ -1002,6 +1021,21 @@ let currentLogHasOlder = false;
 let lastLogEntries = [];
 let lastLogMeta = {};
 let currentLogLevelFilter = 'all';
+let currentLogQuery = '';
+let logSearchTimer = null;
+let logStreamController = null;
+let logStreamToken = 0;
+let lastLogSeenId = 0;
+let lastLogStreamId = 0;
+let logViewEpoch = 0;
+let logGapRefreshPending = false;
+let pendingLogCount = 0;
+const LOG_PAGE_LIMIT = 2000;
+const LOG_DOM_LIMIT = 4000;
+
+document.getElementById('logConsole')?.addEventListener('scroll', e => {
+  if (isAtBottom(e.currentTarget)) resetPendingLogCount();
+});
 
 const HIDDEN_PROXY_TEXT = '••••••••••••••••••••••••••••••••';
 const IMPERSONATE_LABELS = { yamby: 'Yamby Android', hills_android: 'Hills Android', hills_windows: 'Hills Windows' };
@@ -1032,7 +1066,7 @@ document.getElementById('tokenInput').addEventListener('keydown', e => { if (e.k
 function doLogout() {
   localStorage.removeItem('ep_token');
   TOKEN = '';
-  stopLogAutoRefresh();
+  stopLogRealtime();
   document.getElementById('app').style.display = 'none';
   document.getElementById('loginWrap').style.display = 'grid';
 }
@@ -1071,19 +1105,19 @@ function switchTab(name, btn) {
   const meta = {
     nodes: ['媒体中枢', 'Emby 服务器管理', '统一管理 Emby 服务器访问、线路与策略'],
     stats: ['播放统计', '播放统计', '查看近期播放次数、会话数与客户端分布'],
-    logs: ['控制台日志', '控制台日志', '查看服务运行期间输出到控制台的日志'],
+    logs: ['运行日志', '运行日志', '查看服务运行期间产生的日志'],
   }[name] || ['媒体中枢', 'Emby 服务器管理', '统一管理 Emby 服务器访问、线路与策略'];
   document.getElementById('pageKicker').textContent = meta[0];
   document.getElementById('pageTitle').textContent = meta[1];
   document.getElementById('pageSubtitle').textContent = meta[2];
   if (name === 'stats') {
-    stopLogAutoRefresh();
+    stopLogRealtime('待机', 'paused');
     loadStats();
   } else if (name === 'logs') {
     loadLogs();
-    if (document.getElementById('logAutoRefresh')?.checked) startLogAutoRefresh();
+    if (document.getElementById('logAutoRefresh')?.checked) syncLogRealtime();
   } else {
-    stopLogAutoRefresh();
+    stopLogRealtime('待机', 'paused');
     renderHeadStatus();
   }
 }
@@ -1844,62 +1878,130 @@ function formatBytes(bytes) {
   return `${Math.round(n)}B`;
 }
 
-async function loadLogs(showToast = false, page = currentLogPage) {
+async function loadLogs(showToast = false, page = currentLogPage, options = {}) {
   const requestedPage = Math.max(1, Math.floor(Number(page || 1)));
+  const previousNewestId = Number(lastLogMeta?.newestId || 0);
   currentLogPage = requestedPage;
-  const payload = { limit: 2000, page: requestedPage };
+  const requestLevel = currentLogLevelFilter;
+  const requestQuery = currentLogQuery;
+  const requestLogViewEpoch = logViewEpoch;
+  const payload = { limit: LOG_PAGE_LIMIT, page: requestedPage, level: requestLevel, query: requestQuery };
   const r = await api('logs.list', payload);
   if (!r.ok) {
     toast('加载日志失败: ' + (r.error || ''), 'err');
-    return;
+    return false;
+  }
+  if (requestLevel !== currentLogLevelFilter || requestQuery !== currentLogQuery) {
+    return false;
+  }
+  if (requestLogViewEpoch !== logViewEpoch) {
+    return false;
   }
   const logs = Array.isArray(r.logs) ? r.logs : [];
-  lastLogEntries = logs;
-  lastLogMeta = r;
-  currentLogPage = Math.max(1, Number(r.page || requestedPage));
-  currentLogTotalPages = Math.max(1, Number(r.totalPages || 1));
-  currentLogHasOlder = !!r.hasOlder;
-  renderLogs(logs, r);
+  const currentIds = new Set(lastLogEntries.map(logEntryId).filter(id => id > 0));
+  const nextNewestId = Number(r.newestId || 0);
+  const nextStreamId = Number(r.streamId || nextNewestId || 0);
+  const streamSequenceReset = lastLogStreamId > 0 && nextStreamId < lastLogStreamId;
+  const snapshotNewestId = Math.max(nextNewestId, newestLogId(logs));
+  const logSequenceReset = previousNewestId > 0 && snapshotNewestId < previousNewestId;
+  const newLogCount = requestedPage === 1 && previousNewestId > 0 && nextNewestId > previousNewestId
+    ? logs.filter(log => {
+        const id = logEntryId(log);
+        return id > previousNewestId && !currentIds.has(id);
+      }).length
+    : 0;
+  const resolvedPage = Math.max(1, Number(r.page || requestedPage));
+  const mergedLogs = resolvedPage === 1 ? mergeLogsWithStreamedEntries(logs, { skipExisting: logSequenceReset }) : logs;
+  const mergedExtraCount = Math.max(0, mergedLogs.length - logs.length);
+  const mergedNewestId = Math.max(snapshotNewestId, newestLogId(mergedLogs));
+  const mergedMeta = {
+    ...r,
+    newestId: mergedNewestId,
+    totalEntries: Math.max(0, Number(r.totalEntries ?? logs.length)) + mergedExtraCount,
+  };
+  lastLogEntries = mergedLogs;
+  lastLogMeta = mergedMeta;
+  currentLogPage = resolvedPage;
+  currentLogTotalPages = Math.max(1, Math.ceil(Number(mergedMeta.totalEntries || 0) / payload.limit));
+  currentLogHasOlder = currentLogTotalPages > currentLogPage || !!r.hasOlder;
+  if (currentLogPage === 1) {
+    lastLogSeenId = mergedNewestId;
+    if (requestQuery === '') {
+      lastLogStreamId = streamSequenceReset ? nextStreamId : Math.max(lastLogStreamId, nextStreamId);
+    }
+  }
+  renderLogs(mergedLogs, { ...mergedMeta, newLogCount });
+  if (currentTab === 'logs' && !options.skipRealtimeSync) syncLogRealtime();
   if (showToast) toast('日志已刷新', 'ok');
+  return true;
 }
 
 async function clearLogs() {
-  if (!confirm('确定清空控制台日志？')) return;
+  if (!confirm('确定清空运行日志？')) return;
   const r = await api('logs.clear');
   if (!r.ok) {
     toast('清理日志失败: ' + (r.error || ''), 'err');
     return;
   }
-  const logs = Array.isArray(r.logs) ? r.logs : [];
-  lastLogEntries = logs;
-  lastLogMeta = r;
-  currentLogPage = 1;
-  currentLogTotalPages = Math.max(1, Number(r.totalPages || 1));
-  currentLogHasOlder = !!r.hasOlder;
-  renderLogs(logs, r);
+  resetLogViewAfterClear(r);
+  if (currentTab === 'logs') syncLogRealtime();
   toast('日志已清理', 'ok');
 }
 
+function resetLogViewAfterClear(meta = {}) {
+  stopLogStream();
+  logViewEpoch++;
+  const clearedMeta = {
+    ...lastLogMeta,
+    ...meta,
+    newestId: 0,
+    oldestId: 0,
+    totalEntries: 0,
+    totalPages: 1,
+    page: 1,
+    hasOlder: false,
+  };
+  lastLogEntries = [];
+  lastLogMeta = clearedMeta;
+  currentLogPage = 1;
+  currentLogTotalPages = 1;
+  currentLogHasOlder = false;
+  lastLogSeenId = 0;
+  lastLogStreamId = 0;
+  logGapRefreshPending = false;
+  renderLogs([], { ...clearedMeta, resetPending: true });
+}
+
 function renderLogs(logs, meta = {}) {
-  const countEl = document.getElementById('logCount');
-  const capacityEl = document.getElementById('logCapacity');
   const consoleEl = document.getElementById('logConsole');
-  const visibleLogs = filterLogsByLevel(logs);
-  const pageText = `第 ${currentLogPage}/${currentLogTotalPages} 页`;
-  if (countEl) {
-    countEl.textContent = visibleLogs.length === logs.length ? `${pageText} ${logs.length} 条` : `${pageText} ${visibleLogs.length} / ${logs.length} 条`;
-  }
-  if (capacityEl) capacityEl.textContent = `内存 ${Number(meta.capacity || 0)} / 历史 ${meta.history ? '轮转' : '内存'}`;
-  lastLogLines = visibleLogs.map(x => x.line || '');
-  renderLogHeadStatus(visibleLogs);
+  const wasAtBottom = isAtBottom(consoleEl);
+  updateLogSummary(logs, meta);
+  lastLogLines = logs.map(x => x.line || '');
+  renderLogHeadStatus(logs);
   updateLogPager();
   if (!consoleEl) return;
-  if (!visibleLogs.length) {
-    consoleEl.innerHTML = '<div class="log-empty">暂无控制台日志</div>';
+  if (!logs.length) {
+    consoleEl.innerHTML = '<div class="log-empty">暂无运行日志</div>';
+    resetPendingLogCount();
     return;
   }
-  consoleEl.innerHTML = visibleLogs.map(log => `<div class="log-line log-${attr(log.level || 'info')}">${formatLogLine(log)}</div>`).join('');
-  consoleEl.scrollTop = consoleEl.scrollHeight;
+  consoleEl.innerHTML = logs.map(log => `<div class="log-line log-${attr(safeLogLevel(log.level))}">${formatLogLine(log)}</div>`).join('');
+  if (wasAtBottom || meta.resetPending) {
+    scrollLogsToBottom();
+  } else if (Number(meta.newLogCount || 0) > 0) {
+    addPendingLogCount(Number(meta.newLogCount || 0));
+  }
+}
+
+function updateLogSummary(logs, meta = {}) {
+  const countEl = document.getElementById('logCount');
+  const capacityEl = document.getElementById('logCapacity');
+  const totalEntries = Math.max(0, Number(meta.totalEntries ?? logs.length));
+  const pageText = `第 ${currentLogPage}/${currentLogTotalPages} 页`;
+  if (countEl) {
+    countEl.textContent = totalEntries === logs.length ? `${pageText} ${logs.length} 条` : `${pageText} 当前 ${logs.length} / 共 ${totalEntries} 条`;
+  }
+  if (capacityEl) capacityEl.textContent = `内存 ${Number(meta.capacity || 0)} / 历史 ${meta.history ? '轮转' : '内存'}`;
 }
 
 function formatLogLine(log) {
@@ -1909,9 +2011,31 @@ function formatLogLine(log) {
   return `<span class="log-time">${esc(m[1])}</span><span class="log-badge">${esc(m[2])}</span><span class="log-msg">${esc(m[3])}</span>`;
 }
 
-function filterLogsByLevel(logs) {
-  if (currentLogLevelFilter === 'all') return logs;
-  return logs.filter(log => String(log.level || '').toLowerCase() === currentLogLevelFilter);
+function safeLogLevel(level) {
+  const value = String(level || 'info').toLowerCase();
+  return ['debug', 'info', 'warn', 'error'].includes(value) ? value : 'info';
+}
+
+function logEntryId(entry) {
+  const id = Number(entry?.id || 0);
+  return Number.isFinite(id) ? id : 0;
+}
+
+function newestLogId(logs) {
+  return (logs || []).reduce((max, log) => Math.max(max, logEntryId(log)), 0);
+}
+
+function mergeLogsWithStreamedEntries(snapshotLogs, options = {}) {
+  const snapshotNewestId = newestLogId(snapshotLogs);
+  const seenIds = new Set(snapshotLogs.map(logEntryId).filter(id => id > 0));
+  const existingLogs = options.skipExisting ? [] : lastLogEntries;
+  const streamedLogs = existingLogs
+    .filter(log => {
+      const id = logEntryId(log);
+      return id > snapshotNewestId && !seenIds.has(id) && logMatchesCurrentFilter(log);
+    })
+    .sort((a, b) => logEntryId(a) - logEntryId(b));
+  return [...snapshotLogs, ...streamedLogs].slice(-LOG_DOM_LIMIT);
 }
 
 function setLogLevelFilter(value) {
@@ -1919,7 +2043,16 @@ function setLogLevelFilter(value) {
   currentLogLevelFilter = ['all', 'error', 'warn', 'info', 'debug'].includes(level) ? level : 'all';
   const select = document.getElementById('logLevelFilter');
   if (select) select.value = currentLogLevelFilter;
-  renderLogs(lastLogEntries, lastLogMeta);
+  loadLogs(false, 1);
+}
+
+function setLogQuery(value) {
+  currentLogQuery = String(value || '').trim();
+  if (currentLogQuery && document.getElementById('logAutoRefresh')?.checked) {
+    disableLogAutoRefresh('搜索中', 'paused');
+  }
+  if (logSearchTimer) clearTimeout(logSearchTimer);
+  logSearchTimer = setTimeout(() => loadLogs(false, 1), 300);
 }
 
 function updateLogPager() {
@@ -1978,20 +2111,210 @@ function renderLogHeadStatus(logs) {
 }
 
 function setLogAutoRefresh(enabled) {
-  if (enabled && currentLogPage > 1) {
-    disableLogAutoRefresh();
-    toast('历史页不启用自动刷新，请切回最新页', 'info');
+  if (!enabled) {
+    stopLogRealtime();
     return;
   }
-  if (enabled && currentTab === 'logs') startLogAutoRefresh();
-  else stopLogAutoRefresh();
+  if (currentLogPage > 1) {
+    disableLogAutoRefresh();
+    toast('历史页不启用实时日志，请切回最新页', 'info');
+    return;
+  }
+  if (currentLogQuery) {
+    disableLogAutoRefresh('搜索中', 'paused');
+    toast('搜索时不启用实时日志，请清空搜索后再打开', 'info');
+    return;
+  }
+  if (currentTab === 'logs') startLogStream();
+  else setLogStreamStatus('待机', 'paused');
+}
+
+function syncLogRealtime() {
+  if (!isLogRealtimeEnabled()) {
+    stopLogRealtime();
+    return;
+  }
+  if (!isLogStreamAllowed()) {
+    stopLogStream();
+    stopLogAutoRefresh();
+    setLogStreamStatus(currentLogQuery ? '搜索中' : '历史页', 'paused');
+    return;
+  }
+  if (!logStreamController && !logRefreshTimer) startLogStream();
+}
+
+function isLogStreamAllowed() {
+  return currentTab === 'logs' && currentLogPage === 1 && currentLogQuery === '';
+}
+
+function isLogRealtimeEnabled() {
+  return !!document.getElementById('logAutoRefresh')?.checked;
+}
+
+async function startLogStream() {
+  stopLogStream();
+  stopLogAutoRefresh();
+  if (!isLogStreamAllowed()) {
+    setLogStreamStatus(currentLogQuery ? '搜索中' : '待机', 'paused');
+    return;
+  }
+  const token = ++logStreamToken;
+  const controller = new AbortController();
+  logStreamController = controller;
+  logGapRefreshPending = false;
+  setLogStreamStatus('连接中', 'paused');
+  try {
+    const response = await fetch('/admin/logs/stream', {
+      headers: { 'Authorization': 'Bearer ' + TOKEN },
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.body) throw new Error('日志流不可用');
+    setLogStreamStatus('同步中', 'stream');
+    const streamEpoch = logViewEpoch;
+    const hydrated = await loadLogs(false, 1, { skipRealtimeSync: true });
+    if (!hydrated) throw new Error('日志补齐失败');
+    if (token !== logStreamToken || streamEpoch !== logViewEpoch) return;
+    setLogStreamStatus('已连接', 'stream');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, '\n');
+      buffer = consumeLogStreamBuffer(buffer, token, streamEpoch);
+    }
+    if (buffer.trim()) handleLogStreamFrame(buffer, token, streamEpoch);
+    if (!controller.signal.aborted && token === logStreamToken) startLogAutoRefresh();
+  } catch (e) {
+    if (!controller.signal.aborted && token === logStreamToken) {
+      controller.abort();
+      startLogAutoRefresh();
+    }
+  } finally {
+    if (logStreamController === controller) logStreamController = null;
+  }
+}
+
+function consumeLogStreamBuffer(buffer, token, streamEpoch) {
+  let index = buffer.indexOf('\n\n');
+  while (index >= 0) {
+    handleLogStreamFrame(buffer.slice(0, index), token, streamEpoch);
+    buffer = buffer.slice(index + 2);
+    index = buffer.indexOf('\n\n');
+  }
+  return buffer;
+}
+
+function handleLogStreamFrame(frame, token, streamEpoch) {
+  if (token !== logStreamToken || streamEpoch !== logViewEpoch) return;
+  const data = frame.split('\n')
+    .filter(line => line.startsWith('data:'))
+    .map(line => line.slice(5).trimStart())
+    .join('\n');
+  if (!data) return;
+  try {
+    handleLogStreamEntry(JSON.parse(data), token, streamEpoch);
+  } catch (e) {
+    return;
+  }
+}
+
+function handleLogStreamEntry(entry, token, streamEpoch) {
+  if (token !== logStreamToken || streamEpoch !== logViewEpoch) return;
+  if (!entry || typeof entry !== 'object' || !isLogStreamAllowed()) return;
+  if (entry.type === 'clear') {
+    resetLogViewAfterClear();
+    if (currentTab === 'logs') syncLogRealtime();
+    return;
+  }
+  const id = logEntryId(entry);
+  if (id > 0 && !noteLogStreamId(id)) return;
+  if (!logMatchesCurrentFilter(entry)) return;
+  if (id > 0 && id <= lastLogSeenId) return;
+  appendLogLine(entry);
+}
+
+function noteLogStreamId(id) {
+  if (id <= 0) return true;
+  if (lastLogStreamId > 0 && id <= lastLogStreamId) return false;
+  if (lastLogStreamId > 0 && id > lastLogStreamId + 1) {
+    scheduleLogGapRefresh();
+  }
+  lastLogStreamId = id;
+  return true;
+}
+
+function scheduleLogGapRefresh() {
+  if (logGapRefreshPending) return;
+  logGapRefreshPending = true;
+  const expectedEpoch = logViewEpoch;
+  const expectedToken = logStreamToken;
+  setLogStreamStatus('同步中', 'stream');
+  Promise.resolve().then(async () => {
+    try {
+      await loadLogs(false, 1, { skipRealtimeSync: true });
+    } catch (e) {
+      return;
+    } finally {
+      logGapRefreshPending = false;
+      if (expectedEpoch === logViewEpoch && expectedToken === logStreamToken && logStreamController && isLogStreamAllowed()) {
+        setLogStreamStatus('已连接', 'stream');
+      }
+    }
+  });
+}
+
+function logMatchesCurrentFilter(entry) {
+  if (currentLogLevelFilter !== 'all' && safeLogLevel(entry.level) !== currentLogLevelFilter) return false;
+  const query = currentLogQuery.toLowerCase();
+  if (query && !String(entry.line || '').toLowerCase().includes(query)) return false;
+  return true;
+}
+
+function appendLogLine(entry) {
+  const consoleEl = document.getElementById('logConsole');
+  if (!consoleEl) return;
+  const id = logEntryId(entry);
+  if (id > 0 && id <= lastLogSeenId) return;
+  const wasAtBottom = isAtBottom(consoleEl);
+  if (consoleEl.querySelector('.log-empty')) consoleEl.innerHTML = '';
+  const lineEl = document.createElement('div');
+  lineEl.className = `log-line log-${safeLogLevel(entry.level)}`;
+  lineEl.innerHTML = formatLogLine(entry);
+  consoleEl.appendChild(lineEl);
+  while (consoleEl.children.length > LOG_DOM_LIMIT) {
+    consoleEl.firstElementChild?.remove();
+  }
+
+  const previousTotal = Math.max(Number(lastLogMeta.totalEntries || 0), lastLogEntries.length);
+  lastLogEntries = [...lastLogEntries, entry].slice(-LOG_DOM_LIMIT);
+  lastLogLines = lastLogEntries.map(x => x.line || '');
+  const totalEntries = previousTotal + 1;
+  lastLogMeta = { ...lastLogMeta, newestId: entry.id || lastLogMeta.newestId, totalEntries };
+  lastLogSeenId = Math.max(lastLogSeenId, id);
+  currentLogTotalPages = Math.max(1, Math.ceil(totalEntries / LOG_PAGE_LIMIT));
+  currentLogHasOlder = currentLogTotalPages > currentLogPage;
+  updateLogSummary(lastLogEntries, lastLogMeta);
+  renderLogHeadStatus(lastLogEntries);
+  updateLogPager();
+  if (wasAtBottom) scrollLogsToBottom();
+  else addPendingLogCount(1);
 }
 
 function startLogAutoRefresh() {
   stopLogAutoRefresh();
+  if (!isLogStreamAllowed()) {
+    setLogStreamStatus(currentLogQuery ? '搜索中' : '待机', 'paused');
+    return;
+  }
+  setLogStreamStatus('自动刷新', 'polling');
   logRefreshTimer = setInterval(() => {
-    if (currentTab === 'logs' && currentLogPage === 1) loadLogs();
+    if (isLogStreamAllowed()) loadLogs();
+    else stopLogAutoRefresh();
   }, 5000);
+  loadLogs();
 }
 
 function stopLogAutoRefresh() {
@@ -2001,10 +2324,59 @@ function stopLogAutoRefresh() {
   }
 }
 
-function disableLogAutoRefresh() {
+function stopLogStream() {
+  logStreamToken++;
+  if (logStreamController) {
+    logStreamController.abort();
+    logStreamController = null;
+  }
+}
+
+function stopLogRealtime(status = '已关闭', mode = '') {
+  stopLogStream();
+  stopLogAutoRefresh();
+  setLogStreamStatus(status, mode);
+}
+
+function disableLogAutoRefresh(status = '已关闭', mode = '') {
   const el = document.getElementById('logAutoRefresh');
   if (el) el.checked = false;
-  stopLogAutoRefresh();
+  stopLogRealtime(status, mode);
+}
+
+function setLogStreamStatus(text, mode = '') {
+  const el = document.getElementById('logStreamStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.className = `log-pill log-stream-state${mode ? ' ' + mode : ''}`;
+}
+
+function isAtBottom(el) {
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+}
+
+function scrollLogsToBottom() {
+  const consoleEl = document.getElementById('logConsole');
+  if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+  resetPendingLogCount();
+}
+
+function addPendingLogCount(count) {
+  pendingLogCount += Math.max(0, Number(count || 0));
+  updateLogNewBadge();
+}
+
+function resetPendingLogCount() {
+  pendingLogCount = 0;
+  updateLogNewBadge();
+}
+
+function updateLogNewBadge() {
+  const el = document.getElementById('logNewBadge');
+  if (!el) return;
+  el.hidden = pendingLogCount <= 0;
+  el.textContent = `↓ ${pendingLogCount} 条新日志`;
 }
 
 function copyLogs() {

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRedactTextStripsEmbeddedURLQueries(t *testing.T) {
@@ -114,6 +115,68 @@ func TestLoggerStoresEntriesBelowConfiguredLevel(t *testing.T) {
 	}
 }
 
+func TestLoggerSubscribeReceivesStoredEntries(t *testing.T) {
+	log := New("silent", true)
+	ch, cancel := log.Subscribe(1)
+	defer cancel()
+
+	log.Info("test", "streamed line", nil)
+
+	select {
+	case entry := <-ch:
+		if entry.ID != 1 || entry.Level != "info" || entry.Message != "streamed line" {
+			t.Fatalf("streamed entry = %+v", entry)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for streamed log entry")
+	}
+}
+
+func TestLoggerSubscribeReceivesClearBeforeNextEntry(t *testing.T) {
+	log := New("silent", true)
+	ch, cancel := log.Subscribe(4)
+	defer cancel()
+
+	log.Info("test", "before clear", nil)
+	first := <-ch
+	if first.ID != 1 || first.Type != "" {
+		t.Fatalf("first event = %+v", first)
+	}
+	if err := log.Clear(); err != nil {
+		t.Fatalf("Clear() error = %v", err)
+	}
+	log.Info("test", "after clear", nil)
+
+	clearEvent := <-ch
+	if clearEvent.Type != "clear" {
+		t.Fatalf("clear event = %+v", clearEvent)
+	}
+	next := <-ch
+	if next.ID != 2 || next.Message != "after clear" {
+		t.Fatalf("next event = %+v, want monotonic id after clear", next)
+	}
+}
+
+func TestLoggerSubscribeReceivesClearWhenBufferFull(t *testing.T) {
+	log := New("silent", true)
+	ch, cancel := log.Subscribe(1)
+	defer cancel()
+
+	log.Info("test", "stale line", nil)
+	if err := log.Clear(); err != nil {
+		t.Fatalf("Clear() error = %v", err)
+	}
+
+	select {
+	case event := <-ch:
+		if event.Type != "clear" {
+			t.Fatalf("event = %+v, want clear event", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for clear event")
+	}
+}
+
 func TestFormatMetaUsesSemanticFieldOrder(t *testing.T) {
 	got := formatMeta(map[string]any{
 		"bodyCopyError":   "broken pipe",
@@ -208,7 +271,7 @@ func TestLoggerHistoryPagination(t *testing.T) {
 				log.Info("test", fmt.Sprintf("line-%d", i), nil)
 			}
 
-			latest := log.Page(2, 0)
+			latest := log.Page(2, 0, LogFilter{})
 			if !latest.History || !latest.HasOlder {
 				t.Fatalf("latest page metadata = %+v", latest)
 			}
@@ -216,7 +279,7 @@ func TestLoggerHistoryPagination(t *testing.T) {
 				t.Fatalf("latest messages = %q", messages(latest.Entries))
 			}
 
-			older := log.Page(2, latest.Entries[0].ID)
+			older := log.Page(2, latest.Entries[0].ID, LogFilter{})
 			if messages(older.Entries) != "line-2,line-3" {
 				t.Fatalf("older messages = %q", messages(older.Entries))
 			}
@@ -227,12 +290,63 @@ func TestLoggerHistoryPagination(t *testing.T) {
 				t.Fatalf("older page metadata = %+v", older)
 			}
 
-			oldest := log.Page(2, older.Entries[0].ID)
+			oldest := log.Page(2, older.Entries[0].ID, LogFilter{})
 			if oldest.HasOlder {
 				t.Fatalf("oldest page metadata = %+v", oldest)
 			}
 			if messages(oldest.Entries) != tt.wantOldest {
 				t.Fatalf("oldest messages = %q", messages(oldest.Entries))
+			}
+		})
+	}
+}
+
+func TestLoggerHistoryPaginationFiltersAcrossHistoryAndBuffer(t *testing.T) {
+	tests := []struct {
+		name      string
+		maxFiles  int
+		query     string
+		wantLines string
+		wantOlder bool
+	}{
+		{
+			name:      "match only in rotated history",
+			maxFiles:  3,
+			query:     "line-1",
+			wantLines: "line-1",
+		},
+		{
+			name:      "match only in memory after history rotation",
+			maxFiles:  1,
+			query:     "line-4",
+			wantLines: "line-4",
+		},
+		{
+			name:      "full page across history and memory",
+			maxFiles:  3,
+			query:     "line-",
+			wantLines: "line-4,line-5",
+			wantOlder: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := New("debug", true)
+			if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, tt.maxFiles); err != nil {
+				t.Fatalf("EnableHistory() error = %v", err)
+			}
+			t.Cleanup(func() { _ = log.Close() })
+			for i := 1; i <= 5; i++ {
+				log.Info("test", fmt.Sprintf("line-%d", i), nil)
+			}
+
+			page := log.Page(2, 0, LogFilter{Query: tt.query})
+			if !page.History || page.HasOlder != tt.wantOlder {
+				t.Fatalf("page metadata = %+v", page)
+			}
+			if got := messages(page.Entries); got != tt.wantLines {
+				t.Fatalf("page entries = %q, want %q", got, tt.wantLines)
 			}
 		})
 	}
@@ -261,12 +375,144 @@ func TestLoggerHistoryPageNumber(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("page-%d", tt.page), func(t *testing.T) {
-			page := log.PageNumber(2, tt.page)
+			page := log.PageNumber(2, tt.page, LogFilter{})
 			if page.Page != tt.wantPage || page.TotalPages != 3 || page.TotalEntries != 5 || page.HasOlder != tt.wantOlder {
 				t.Fatalf("page metadata = %+v", page)
 			}
 			if got := messages(page.Entries); got != tt.wantLines {
 				t.Fatalf("page entries = %q, want %q", got, tt.wantLines)
+			}
+		})
+	}
+}
+
+func TestLogFilterMatch(t *testing.T) {
+	entry := LogEntry{
+		Level: "error",
+		Line:  "2026-06-16T12:00:00+08:00 [ERROR] [proxy] event=requestFinished id=req-42 uri=/Videos/1",
+	}
+	tests := []struct {
+		name   string
+		filter LogFilter
+		want   bool
+	}{
+		{name: "empty filter", want: true},
+		{name: "level matches", filter: LogFilter{Levels: map[string]bool{"error": true}}, want: true},
+		{name: "level mismatch", filter: LogFilter{Levels: map[string]bool{"warn": true}}},
+		{name: "query matches line", filter: LogFilter{Query: "req-42"}, want: true},
+		{name: "query is case insensitive", filter: LogFilter{Query: "videos/1"}, want: true},
+		{name: "query mismatch", filter: LogFilter{Query: "req-99"}},
+		{name: "level and query match", filter: LogFilter{Levels: map[string]bool{"error": true}, Query: "requestfinished"}, want: true},
+		{name: "level match but query mismatch", filter: LogFilter{Levels: map[string]bool{"error": true}, Query: "not-found"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.filter.match(entry); got != tt.want {
+				t.Fatalf("match() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoggerPageNumberFiltersEntries(t *testing.T) {
+	tests := []struct {
+		name        string
+		withHistory bool
+	}{
+		{name: "buffer"},
+		{name: "history", withHistory: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := New("debug", true)
+			if tt.withHistory {
+				if err := log.EnableHistory(filepath.Join(t.TempDir(), "console-logs.jsonl"), 2, 3); err != nil {
+					t.Fatalf("EnableHistory() error = %v", err)
+				}
+				t.Cleanup(func() { _ = log.Close() })
+			}
+			log.Info("proxy", "alpha path", map[string]any{"id": "req-alpha", "uri": "/Items/1"})
+			log.Warn("proxy", "beta path", map[string]any{"id": "req-beta", "uri": "/Videos/2"})
+			log.Error("proxy", "gamma failure", map[string]any{"id": "req-gamma", "uri": "/Videos/3"})
+			log.Info("proxy", "delta path", map[string]any{"id": "req-delta", "uri": "/Users/1"})
+			log.Error("proxy", "epsilon failure", map[string]any{"id": "req-epsilon", "uri": "/Videos/5"})
+
+			cases := []struct {
+				name         string
+				limit        int
+				page         int
+				filter       LogFilter
+				wantPage     int
+				wantTotal    int
+				wantPages    int
+				wantOlder    bool
+				wantMessages string
+			}{
+				{
+					name:         "empty filter matches original pagination",
+					limit:        2,
+					page:         1,
+					wantPage:     1,
+					wantTotal:    5,
+					wantPages:    3,
+					wantOlder:    true,
+					wantMessages: "delta path,epsilon failure",
+				},
+				{
+					name:         "level filter latest page",
+					limit:        1,
+					page:         1,
+					filter:       LogFilter{Levels: map[string]bool{"error": true}},
+					wantPage:     1,
+					wantTotal:    2,
+					wantPages:    2,
+					wantOlder:    true,
+					wantMessages: "epsilon failure",
+				},
+				{
+					name:         "level filter older page",
+					limit:        1,
+					page:         2,
+					filter:       LogFilter{Levels: map[string]bool{"error": true}},
+					wantPage:     2,
+					wantTotal:    2,
+					wantPages:    2,
+					wantMessages: "gamma failure",
+				},
+				{
+					name:         "query searches full line",
+					limit:        2,
+					page:         1,
+					filter:       LogFilter{Query: "req-beta"},
+					wantPage:     1,
+					wantTotal:    1,
+					wantPages:    1,
+					wantMessages: "beta path",
+				},
+				{
+					name:         "level and query combine",
+					limit:        2,
+					page:         1,
+					filter:       LogFilter{Levels: map[string]bool{"info": true}, Query: "/users/1"},
+					wantPage:     1,
+					wantTotal:    1,
+					wantPages:    1,
+					wantMessages: "delta path",
+				},
+			}
+
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					page := log.PageNumber(tc.limit, tc.page, tc.filter)
+					if page.Page != tc.wantPage || page.TotalEntries != tc.wantTotal || page.TotalPages != tc.wantPages || page.HasOlder != tc.wantOlder {
+						t.Fatalf("page metadata = %+v", page)
+					}
+					if got := messages(page.Entries); got != tc.wantMessages {
+						t.Fatalf("page entries = %q, want %q", got, tc.wantMessages)
+					}
+				})
 			}
 		})
 	}
@@ -296,7 +542,7 @@ func TestLoggerClearRemovesBufferedAndHistoryEntries(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		log.Info("test", fmt.Sprintf("before-%d", i), nil)
 	}
-	if page := log.Page(10, 0); messages(page.Entries) != "before-1,before-2,before-3" {
+	if page := log.Page(10, 0, LogFilter{}); messages(page.Entries) != "before-1,before-2,before-3" {
 		t.Fatalf("entries before clear = %q", messages(page.Entries))
 	}
 
@@ -304,17 +550,23 @@ func TestLoggerClearRemovesBufferedAndHistoryEntries(t *testing.T) {
 		t.Fatalf("Clear() error = %v", err)
 	}
 
-	cleared := log.Page(10, 0)
+	cleared := log.Page(10, 0, LogFilter{})
 	if len(cleared.Entries) != 0 || cleared.HasOlder != false || !cleared.History {
 		t.Fatalf("page after clear = %+v", cleared)
 	}
+	if got := log.NewestID(); got != 0 {
+		t.Fatalf("NewestID() after clear = %d, want 0", got)
+	}
 	log.Info("test", "after", nil)
-	latest := log.Page(10, 0)
+	latest := log.Page(10, 0, LogFilter{})
 	if messages(latest.Entries) != "after" {
 		t.Fatalf("entries after clear = %q", messages(latest.Entries))
 	}
-	if latest.Entries[0].ID != 1 {
-		t.Fatalf("first entry ID after clear = %d, want 1", latest.Entries[0].ID)
+	if latest.Entries[0].ID != 4 {
+		t.Fatalf("first entry ID after clear = %d, want 4", latest.Entries[0].ID)
+	}
+	if got := log.NewestID(); got != 4 {
+		t.Fatalf("NewestID() after new entry = %d, want 4", got)
 	}
 }
 

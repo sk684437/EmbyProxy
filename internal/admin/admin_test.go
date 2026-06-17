@@ -121,6 +121,76 @@ func TestDispatchLogsListSupportsPageNumber(t *testing.T) {
 	if res["page"] != 2 || res["totalPages"] != 3 || res["totalEntries"] != 5 || res["hasOlder"] != true {
 		t.Fatalf("pagination metadata = %+v", res)
 	}
+	if res["streamId"] != uint64(5) {
+		t.Fatalf("streamId = %v, want 5", res["streamId"])
+	}
+}
+
+func TestDispatchLogsListFilters(t *testing.T) {
+	tests := []struct {
+		name             string
+		body             map[string]any
+		wantMetadata     bool
+		wantNewestID     uint64
+		wantStreamID     uint64
+		wantTotalEntries int
+	}{
+		{
+			name: "level and query",
+			body: map[string]any{
+				"limit": 10,
+				"page":  1,
+				"level": "error",
+				"query": "req-target",
+			},
+			wantMetadata:     true,
+			wantNewestID:     2,
+			wantStreamID:     3,
+			wantTotalEntries: 1,
+		},
+		{
+			name: "before cursor",
+			body: map[string]any{
+				"limit":  10,
+				"before": 3,
+				"level":  "error",
+				"query":  "req-target",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			handler, closeStore := newConfigTestHandler(t)
+			defer closeStore()
+
+			handler.log.Info("admin", "node checked", map[string]any{"id": "req-info", "uri": "/System/Info"})
+			handler.log.Error("proxy", "upstream failed", map[string]any{"id": "req-target", "uri": "/Videos/1"})
+			handler.log.Error("proxy", "other failed", map[string]any{"id": "req-other", "uri": "/Videos/2"})
+			res, status := handler.dispatch(ctx, "admin", "logs.list", tt.body)
+
+			if status != http.StatusOK || res["ok"] != true {
+				t.Fatalf("dispatch logs.list status=%d res=%+v", status, res)
+			}
+			logs, ok := res["logs"].([]logging.LogEntry)
+			if !ok {
+				t.Fatalf("logs type = %T, want []logging.LogEntry", res["logs"])
+			}
+			if len(logs) != 1 || logs[0].ID != 2 || logs[0].Level != "error" || !strings.Contains(logs[0].Line, "req-target") {
+				t.Fatalf("filtered logs = %+v", logs)
+			}
+			if !tt.wantMetadata {
+				return
+			}
+			if res["totalEntries"] != tt.wantTotalEntries || res["totalPages"] != 1 || res["hasOlder"] != false {
+				t.Fatalf("filtered metadata = %+v", res)
+			}
+			if res["newestId"] != tt.wantNewestID || res["streamId"] != tt.wantStreamID {
+				t.Fatalf("filtered newest metadata = %+v", res)
+			}
+		})
+	}
 }
 
 func TestDispatchLogsClearRemovesBufferedLogs(t *testing.T) {
