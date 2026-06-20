@@ -937,6 +937,7 @@ tr:last-child td{border-bottom:0}
                 </div>
                 <div class="cache-actions">
                   <button type="button" class="btn" onclick="refreshTrafficCaptureStats()">刷新状态</button>
+                  <button type="button" class="btn btn-danger" id="trafficCaptureClearBtn" onclick="clearTrafficCapture()">清空记录</button>
                 </div>
               </div>
             </div>
@@ -1771,6 +1772,20 @@ async function refreshTrafficCaptureStats(showToast = true) {
   }
   renderTrafficCaptureStats(r.capture);
   if (showToast) toast('代理流量记录状态已刷新', 'ok');
+}
+
+async function clearTrafficCapture() {
+  if (!confirm('确定清空代理流量记录？')) return;
+  const btn = document.getElementById('trafficCaptureClearBtn');
+  if (btn) btn.disabled = true;
+  const r = await api('trafficCapture.clear');
+  if (btn) btn.disabled = false;
+  if (!r.ok) {
+    toast('清空代理流量记录失败: ' + (r.error || ''), 'err');
+    return;
+  }
+  renderTrafficCaptureStats(r.capture);
+  toast('代理流量记录已清空', 'ok');
 }
 
 async function saveConfig() {

@@ -347,35 +347,79 @@ func TestHandleAPISuppressesLogReadActionsAccessLogAndTrafficCapture(t *testing.
 	}
 }
 
-func TestHandleAPISuppressesTrafficCaptureStatsRecord(t *testing.T) {
+func TestDispatchTrafficCaptureClear(t *testing.T) {
+	ctx := context.Background()
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
 	cwd := t.TempDir()
-	store, err := storage.New(filepath.Join(cwd, "proxy.db"))
-	if err != nil {
-		t.Fatalf("storage.New() error = %v", err)
-	}
-	defer store.Close()
+	handler.cfg.CWD = cwd
 	sys := storage.DefaultSystemConfig()
 	sys.TrafficCaptureEnabled = true
 	sys.TrafficCaptureFile = "data/traffic-captures.jsonl"
-	if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+	if err := handler.store.SaveSystemConfig(ctx, sys); err != nil {
 		t.Fatalf("SaveSystemConfig() error = %v", err)
 	}
-	handler := New(config.Config{CWD: cwd}, store, nil, nil, logging.New("info", false), nil)
-	recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
-	req := httptest.NewRequest(http.MethodPost, "/admin/api", strings.NewReader(`{"action":"trafficCapture.stats"}`))
-	rec := httptest.NewRecorder()
-	captureSuppressed := false
-
-	recorder.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler.handleAPI(w, r, "admin")
-		captureSuppressed = capture.Suppressed(r)
-	})).ServeHTTP(rec, req)
-
-	if !captureSuppressed {
-		t.Fatal("trafficCapture.stats should suppress its traffic capture record")
+	path := filepath.Join(cwd, "data", "traffic-captures.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(cwd, "data", "traffic-captures.jsonl")); !os.IsNotExist(err) {
-		t.Fatalf("traffic capture file should not be written, stat err = %v", err)
+	if err := os.WriteFile(path, []byte("{\"id\":1}\n{\"id\":2}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	res, status := handler.dispatch(ctx, "admin", "trafficCapture.clear", map[string]any{})
+	if status != http.StatusOK || res["ok"] != true {
+		t.Fatalf("dispatch trafficCapture.clear status=%d res=%+v", status, res)
+	}
+	stats, ok := res["capture"].(trafficCaptureStats)
+	if !ok {
+		t.Fatalf("capture stats type = %T, want trafficCaptureStats", res["capture"])
+	}
+	if !stats.Enabled || stats.File != "data/traffic-captures.jsonl" || stats.Bytes != 0 || stats.Records != 0 {
+		t.Fatalf("traffic capture stats after clear = %+v", stats)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("traffic capture file size after clear = %d, want 0", info.Size())
+	}
+}
+
+func TestHandleAPISuppressesTrafficCaptureAdminActionRecords(t *testing.T) {
+	for _, action := range []string{"trafficCapture.stats", "trafficCapture.clear"} {
+		t.Run(action, func(t *testing.T) {
+			cwd := t.TempDir()
+			store, err := storage.New(filepath.Join(cwd, "proxy.db"))
+			if err != nil {
+				t.Fatalf("storage.New() error = %v", err)
+			}
+			defer store.Close()
+			sys := storage.DefaultSystemConfig()
+			sys.TrafficCaptureEnabled = true
+			sys.TrafficCaptureFile = "data/traffic-captures.jsonl"
+			if err := store.SaveSystemConfig(context.Background(), sys); err != nil {
+				t.Fatalf("SaveSystemConfig() error = %v", err)
+			}
+			handler := New(config.Config{CWD: cwd}, store, nil, nil, logging.New("info", false), nil)
+			recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
+			req := httptest.NewRequest(http.MethodPost, "/admin/api", strings.NewReader(fmt.Sprintf(`{"action":"%s"}`, action)))
+			rec := httptest.NewRecorder()
+			captureSuppressed := false
+
+			recorder.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handler.handleAPI(w, r, "admin")
+				captureSuppressed = capture.Suppressed(r)
+			})).ServeHTTP(rec, req)
+
+			if !captureSuppressed {
+				t.Fatalf("%s should suppress its traffic capture record", action)
+			}
+			if _, err := os.Stat(filepath.Join(cwd, "data", "traffic-captures.jsonl")); !os.IsNotExist(err) {
+				t.Fatalf("traffic capture file should not be written, stat err = %v", err)
+			}
+		})
 	}
 }
 

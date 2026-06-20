@@ -196,7 +196,7 @@ func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) 
 		capture.Suppress(r)
 		requestlog.SuppressAccessLog(ctx)
 	}
-	if action == "trafficCapture.stats" {
+	if action == "trafficCapture.stats" || action == "trafficCapture.clear" {
 		capture.Suppress(r)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "admin", "adminAction": action, "stage": "admin-api"})
@@ -339,6 +339,8 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return h.clearImageCache(ctx), http.StatusOK
 	case "trafficCapture.stats":
 		return h.trafficCaptureStats(ctx), http.StatusOK
+	case "trafficCapture.clear":
+		return h.clearTrafficCapture(ctx), http.StatusOK
 	default:
 		return fail("未知 action: " + action), http.StatusOK
 	}
@@ -371,12 +373,10 @@ func (h *Handler) trafficCaptureStats(ctx context.Context) map[string]any {
 }
 
 func (h *Handler) readTrafficCaptureStats(cfg storage.SystemConfig) (trafficCaptureStats, error) {
-	file, errText := normalizeTrafficCaptureFile(cfg.TrafficCaptureFile, h.defaultSystemConfig().TrafficCaptureFile)
-	stats := trafficCaptureStats{Enabled: cfg.TrafficCaptureEnabled, File: file}
-	if errText != "" {
-		return stats, errors.New(errText)
+	stats, path, err := h.trafficCaptureStatsTarget(cfg)
+	if err != nil {
+		return stats, err
 	}
-	path := h.trafficCaptureFilePath(file)
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return stats, nil
@@ -394,6 +394,51 @@ func (h *Handler) readTrafficCaptureStats(cfg storage.SystemConfig) (trafficCapt
 	}
 	stats.Records = records
 	return stats, nil
+}
+
+func (h *Handler) clearTrafficCapture(ctx context.Context) map[string]any {
+	if h.store == nil {
+		return fail("存储未初始化")
+	}
+	cfg, err := h.store.GetSystemConfig(ctx, h.defaultSystemConfig())
+	if err != nil {
+		return fail(err.Error())
+	}
+	stats, err := h.clearTrafficCaptureRecords(cfg)
+	if err != nil {
+		return fail(err.Error())
+	}
+	return map[string]any{"ok": true, "capture": stats}
+}
+
+func (h *Handler) clearTrafficCaptureRecords(cfg storage.SystemConfig) (trafficCaptureStats, error) {
+	stats, path, err := h.trafficCaptureStatsTarget(cfg)
+	if err != nil {
+		return stats, err
+	}
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return stats, nil
+	}
+	if err != nil {
+		return stats, err
+	}
+	if info.IsDir() {
+		return stats, errors.New("代理流量记录路径不是文件")
+	}
+	if err := os.Truncate(path, 0); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+func (h *Handler) trafficCaptureStatsTarget(cfg storage.SystemConfig) (trafficCaptureStats, string, error) {
+	file, errText := normalizeTrafficCaptureFile(cfg.TrafficCaptureFile, h.defaultSystemConfig().TrafficCaptureFile)
+	stats := trafficCaptureStats{Enabled: cfg.TrafficCaptureEnabled, File: file}
+	if errText != "" {
+		return stats, "", errors.New(errText)
+	}
+	return stats, h.trafficCaptureFilePath(file), nil
 }
 
 func (h *Handler) trafficCaptureFilePath(file string) string {
