@@ -926,6 +926,19 @@ tr:last-child td{border-bottom:0}
                 <input id="cfg-trafficCaptureFile" placeholder="./data/traffic-captures.jsonl"/>
                 <div class="form-hint">写入 JSONL 文件；开启后会原样保存请求与响应内容</div>
               </div>
+              <div class="cache-ops">
+                <div class="cache-metric">
+                  <span>记录大小</span>
+                  <b id="trafficCaptureBytes">--</b>
+                </div>
+                <div class="cache-metric">
+                  <span>记录条数</span>
+                  <b id="trafficCaptureRecords">--</b>
+                </div>
+                <div class="cache-actions">
+                  <button type="button" class="btn" onclick="refreshTrafficCaptureStats()">刷新状态</button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -1681,6 +1694,7 @@ async function openConfigModal() {
   if (panel) panel.scrollTop = 0;
   document.querySelectorAll('#configForm .config-nav-button').forEach((btn, index) => btn.classList.toggle('active', index === 0));
   refreshImageCacheStats(false);
+  refreshTrafficCaptureStats(false);
 }
 
 function closeConfigModal() { hideModal('configModal'); }
@@ -1733,6 +1747,30 @@ async function clearImageCache() {
   }
   renderImageCacheStats(r.cache);
   toast('图片缓存已清理', 'ok');
+}
+
+function renderTrafficCaptureStats(capture) {
+  const bytesEl = document.getElementById('trafficCaptureBytes');
+  const recordsEl = document.getElementById('trafficCaptureRecords');
+  if (!bytesEl || !recordsEl) return;
+  if (!capture) {
+    bytesEl.textContent = '--';
+    recordsEl.textContent = '--';
+    return;
+  }
+  bytesEl.textContent = formatBytes(capture.bytes);
+  recordsEl.textContent = `${formatCacheNumber(capture.records)} 条`;
+}
+
+async function refreshTrafficCaptureStats(showToast = true) {
+  const r = await api('trafficCapture.stats');
+  if (!r.ok) {
+    renderTrafficCaptureStats(null);
+    if (showToast) toast('刷新代理流量记录状态失败: ' + (r.error || ''), 'err');
+    return;
+  }
+  renderTrafficCaptureStats(r.capture);
+  if (showToast) toast('代理流量记录状态已刷新', 'ok');
 }
 
 async function saveConfig() {

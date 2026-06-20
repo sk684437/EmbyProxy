@@ -1,12 +1,17 @@
 package admin
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -34,6 +39,13 @@ type ResetFunc func(uid, name string)
 type ImageCacheManager interface {
 	ImageCacheStats(ctx context.Context) (proxy.ImageCacheStats, error)
 	ClearImageCache(ctx context.Context) (proxy.ImageCacheStats, error)
+}
+
+type trafficCaptureStats struct {
+	Enabled bool   `json:"enabled"`
+	File    string `json:"file"`
+	Bytes   int64  `json:"bytes"`
+	Records int64  `json:"records"`
 }
 
 type Handler struct {
@@ -184,6 +196,9 @@ func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) 
 		capture.Suppress(r)
 		requestlog.SuppressAccessLog(ctx)
 	}
+	if action == "trafficCapture.stats" {
+		capture.Suppress(r)
+	}
 	capture.SetMeta(r, map[string]any{"mode": "admin", "adminAction": action, "stage": "admin-api"})
 	if uid == "" {
 		uid = "admin"
@@ -322,6 +337,8 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return h.imageCacheStats(ctx), http.StatusOK
 	case "imageCache.clear":
 		return h.clearImageCache(ctx), http.StatusOK
+	case "trafficCapture.stats":
+		return h.trafficCaptureStats(ctx), http.StatusOK
 	default:
 		return fail("未知 action: " + action), http.StatusOK
 	}
@@ -336,6 +353,93 @@ func (h *Handler) imageCacheStats(ctx context.Context) map[string]any {
 		return fail(err.Error())
 	}
 	return map[string]any{"ok": true, "cache": stats}
+}
+
+func (h *Handler) trafficCaptureStats(ctx context.Context) map[string]any {
+	if h.store == nil {
+		return fail("存储未初始化")
+	}
+	cfg, err := h.store.GetSystemConfig(ctx, h.defaultSystemConfig())
+	if err != nil {
+		return fail(err.Error())
+	}
+	stats, err := h.readTrafficCaptureStats(cfg)
+	if err != nil {
+		return fail(err.Error())
+	}
+	return map[string]any{"ok": true, "capture": stats}
+}
+
+func (h *Handler) readTrafficCaptureStats(cfg storage.SystemConfig) (trafficCaptureStats, error) {
+	file, errText := normalizeTrafficCaptureFile(cfg.TrafficCaptureFile, h.defaultSystemConfig().TrafficCaptureFile)
+	stats := trafficCaptureStats{Enabled: cfg.TrafficCaptureEnabled, File: file}
+	if errText != "" {
+		return stats, errors.New(errText)
+	}
+	path := h.trafficCaptureFilePath(file)
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return stats, nil
+	}
+	if err != nil {
+		return stats, err
+	}
+	if info.IsDir() {
+		return stats, errors.New("代理流量记录路径不是文件")
+	}
+	stats.Bytes = info.Size()
+	records, err := countTrafficCaptureRecords(path)
+	if err != nil {
+		return stats, err
+	}
+	stats.Records = records
+	return stats, nil
+}
+
+func (h *Handler) trafficCaptureFilePath(file string) string {
+	file = filepath.FromSlash(file)
+	if h == nil || strings.TrimSpace(h.cfg.CWD) == "" {
+		return file
+	}
+	return filepath.Join(h.cfg.CWD, file)
+}
+
+func countTrafficCaptureRecords(path string) (int64, error) {
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	reader := bufio.NewReader(f)
+	var records int64
+	lineHasContent := false
+	for {
+		part, err := reader.ReadSlice('\n')
+		if len(bytes.TrimSpace(part)) > 0 {
+			lineHasContent = true
+		}
+		if err == nil {
+			if lineHasContent {
+				records++
+			}
+			lineHasContent = false
+			continue
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if lineHasContent {
+				records++
+			}
+			return records, nil
+		}
+		return 0, err
+	}
 }
 
 func (h *Handler) clearImageCache(ctx context.Context) map[string]any {
