@@ -32,18 +32,7 @@ var clientIPHeaderNames = []string{
 	"X-Original-Forwarded-For",
 	"X-Forward-For",
 	"X-Real-IP",
-	"True-Client-IP",
-	"CF-Connecting-IP",
-	"CF-Connecting-IPv6",
-	"CF-Pseudo-IPv4",
-	"Fastly-Client-IP",
-	"CloudFront-Viewer-Address",
-	"X-Azure-ClientIP",
-	"X-Azure-SocketIP",
 	"X-Envoy-External-Address",
-	"Ali-Cdn-Real-IP",
-	"Ali-Real-Client-IP",
-	"Akamai-Client-IP",
 	"Client-IP",
 	"ClientIP",
 	"Client-Real-IP",
@@ -84,9 +73,58 @@ var clientIPHeaderNames = []string{
 	"X-Forwarded-Port",
 }
 
-func stripClientIPHeaders(h http.Header) {
-	for _, key := range clientIPHeaderNames {
-		h.Del(key)
+var cdnMetadataHeaderNames = []string{
+	"CDN-Loop",
+	"Via",
+	"True-Client-IP",
+	"Ali-Cdn-Real-IP",
+	"Ali-Real-Client-IP",
+	"X-Forward-Port",
+	"X-Forwarded-SSL",
+	"X-Cache",
+	"X-Cache-Hits",
+	"X-Served-By",
+	"X-Timer",
+	"X-Varnish",
+}
+
+var cdnMetadataHeaderPrefixes = []string{
+	"cf-",
+	"cloudfront-",
+	"x-amz-cf-",
+	"x-edge-",
+	"fastly-",
+	"x-fastly-",
+	"x-azure-",
+	"x-fd-",
+	"akamai-",
+	"x-vercel-",
+	"fly-",
+}
+
+func stripProxyMetadataHeaders(h http.Header) {
+headerLoop:
+	for key := range h {
+		for _, name := range clientIPHeaderNames {
+			if strings.EqualFold(key, name) {
+				delete(h, key)
+				continue headerLoop
+			}
+		}
+		for _, name := range cdnMetadataHeaderNames {
+			if strings.EqualFold(key, name) {
+				delete(h, key)
+				continue headerLoop
+			}
+		}
+		lower := strings.ToLower(key)
+		for _, prefix := range cdnMetadataHeaderPrefixes {
+			if !strings.HasPrefix(lower, prefix) {
+				continue
+			}
+			delete(h, key)
+			break
+		}
 	}
 }
 
@@ -122,7 +160,7 @@ func applyIdentityToURL(ids *identity.Manager, u *url.URL, headers http.Header, 
 
 func buildCleanProxyHeaders(ids *identity.Manager, raw http.Header, targetURL *url.URL, node storage.Node, env config.ProxyEnv, streaming bool) http.Header {
 	h := cloneHeader(raw)
-	stripClientIPHeaders(h)
+	stripProxyMetadataHeaders(h)
 	deleteHeaders(h, "Content-Length")
 	if !streaming {
 		deleteHeaders(h, "Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User")
@@ -145,7 +183,7 @@ func buildCleanProxyHeaders(ids *identity.Manager, raw http.Header, targetURL *u
 func buildDirectOutboundHeaders(ids *identity.Manager, raw http.Header, targetURL *url.URL, env config.ProxyEnv, node storage.Node, mode string) http.Header {
 	h := cloneHeader(raw)
 	adapter := directAdapter(targetURL)
-	stripClientIPHeaders(h)
+	stripProxyMetadataHeaders(h)
 	deleteHeaders(h,
 		"X-Forwarded-For", "X-Real-IP", "X-Forwarded-Proto", "X-Forwarded-Host", "X-Forwarded-Port",
 		"Forwarded", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Content-Length", "Origin", "Referer",

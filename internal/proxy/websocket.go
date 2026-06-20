@@ -129,7 +129,7 @@ func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter,
 
 func buildWebSocketHeaders(ids *identity.Manager, raw http.Header, targetURL *url.URL, node storage.Node) http.Header {
 	headers := cloneHeader(raw)
-	stripClientIPHeaders(headers)
+	stripProxyMetadataHeaders(headers)
 	deleteHeaders(headers, "Connection", "Content-Length", "Host")
 	headers.Set("Host", targetURL.Host)
 	setProxyUA(ids, headers, node)

@@ -31,7 +31,7 @@ var errProxyRewriteBodyTooLarge = errors.New("rewritable upstream response body 
 func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, sourceURL *url.URL, body []byte, env config.ProxyEnv) (*http.Response, error) {
 	headers := cloneHeader(r.Header)
 	applyIdentityToURL(h.ids, sourceURL, headers, node)
-	stripClientIPHeaders(headers)
+	stripProxyMetadataHeaders(headers)
 	headers.Del("Range")
 	headers.Del("If-Range")
 	setProxyUA(h.ids, headers, node)
@@ -269,7 +269,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	if isImageAPI && res.StatusCode == http.StatusForbidden {
 		_ = res.Body.Close()
 		hImg := cloneHeader(hClean)
-		stripClientIPHeaders(hImg)
+		stripProxyMetadataHeaders(hImg)
 		deleteHeaders(hImg, "Origin", "Referer", "Range", "If-Range")
 		setProxyUA(h.ids, hImg, node)
 		hImg.Set("Accept", "image/avif,image/webp,image/apng,image*;q=0.8")
@@ -383,7 +383,7 @@ func shouldLogStreamingRangeFields(targetURL *url.URL, isStreamingMedia bool) bo
 
 func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, targetURL *url.URL, headers http.Header, body []byte, env config.ProxyEnv, base *url.URL) (*http.Response, http.Header, error) {
 	h3 := cloneHeader(headers)
-	stripClientIPHeaders(h3)
+	stripProxyMetadataHeaders(h3)
 	h3.Set("Host", base.Host)
 	setProxyUA(h.ids, h3, node)
 	if rg := r.Header.Get("Range"); rg != "" {
@@ -401,7 +401,7 @@ func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node sto
 	for _, stage := range []string{"general-retry-origin", "general-retry-origin-repeat"} {
 		_ = res.Body.Close()
 		h4 := cloneHeader(h3)
-		stripClientIPHeaders(h4)
+		stripProxyMetadataHeaders(h4)
 		h4.Set("Host", base.Host)
 		setProxyUA(h.ids, h4, node)
 		h4.Set("Referer", originOf(base)+"/")

@@ -509,7 +509,7 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 	applyIdentityToURL(h.ids, targetURL, outboundHeaders, node)
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-target", "targetUrl": targetURL.String()})
 	headers := cloneHeader(outboundHeaders)
-	stripClientIPHeaders(headers)
+	stripProxyMetadataHeaders(headers)
 	deleteHeaders(headers, "Content-Length")
 	if isCapy && isAuthAPI {
 		deleteHeaders(headers, "X-Emby-Token", "X-MediaBrowser-Token", "X-Authorization")

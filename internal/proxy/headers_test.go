@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"embyproxy/internal/config"
@@ -78,6 +79,84 @@ func TestOutboundHeaderBuildersMapClientIdentityHeaders(t *testing.T) {
 	}
 }
 
+func TestOutboundHeaderBuildersStripProxyMetadataHeaders(t *testing.T) {
+	targetURL, err := url.Parse("https://upstream.example/emby/Items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := identity.NewManager(nil)
+	node := storage.Node{}
+	raw := http.Header{}
+	wantAbsent := append([]string{}, cdnMetadataHeaderNames...)
+	for _, key := range cdnMetadataHeaderNames {
+		raw.Set(key, "proxy-metadata")
+	}
+	for _, key := range []string{
+		"CF-Ray",
+		"CF-Visitor",
+		"CF-Warp-Tag-Id",
+		"Fastly-Client-IP",
+		"Fastly-FF",
+		"CloudFront-Viewer-Country",
+		"CloudFront-Viewer-Address",
+		"X-Amz-Cf-Id",
+		"X-Edge-Request-Id",
+		"X-Fastly-Request-ID",
+		"X-Azure-ClientIP",
+		"X-Azure-SocketIP",
+		"X-Azure-Ref",
+		"X-Azure-RequestChain",
+		"X-Azure-FDID",
+		"X-Azure-Region",
+		"X-FD-HealthProbe",
+		"Akamai-Client-IP",
+		"Akamai-Origin-Hop",
+		"X-Vercel-Id",
+		"Fly-Client-IP",
+	} {
+		raw.Set(key, "proxy-prefix-metadata")
+		wantAbsent = append(wantAbsent, key)
+	}
+	raw["cf-worker"] = []string{"lowercase-proxy-metadata"}
+	raw["cdn-loop"] = []string{"lowercase-proxy-metadata"}
+	wantAbsent = append(wantAbsent, "cf-worker", "cdn-loop")
+	raw.Set("User-Agent", "Client/1.0")
+	raw.Set("X-Request-Id", "keep-me")
+
+	tests := []struct {
+		name  string
+		build func(http.Header) http.Header
+	}{
+		{
+			name: "clean proxy",
+			build: func(raw http.Header) http.Header {
+				return buildCleanProxyHeaders(ids, raw, targetURL, node, config.ProxyEnv{}, false)
+			},
+		},
+		{
+			name: "direct",
+			build: func(raw http.Header) http.Header {
+				return buildDirectOutboundHeaders(ids, raw, targetURL, config.ProxyEnv{}, node, "normal")
+			},
+		},
+		{
+			name: "websocket",
+			build: func(raw http.Header) http.Header {
+				return buildWebSocketHeaders(ids, raw, targetURL, node)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := tt.build(raw)
+			assertHeaderKeysAbsent(t, headers, wantAbsent...)
+			if got := headers.Get("X-Request-Id"); got != "keep-me" {
+				t.Fatalf("X-Request-Id = %q, want keep-me", got)
+			}
+		})
+	}
+}
+
 func TestOutboundHeaderBuildersPreserveClientCompressionAndHopByHopHeaders(t *testing.T) {
 	targetURL, err := url.Parse("https://upstream.example/emby/Items")
 	if err != nil {
@@ -125,6 +204,17 @@ func TestOutboundHeaderBuildersPreserveClientCompressionAndHopByHopHeaders(t *te
 				}
 			}
 		})
+	}
+}
+
+func assertHeaderKeysAbsent(t *testing.T, headers http.Header, absentKeys ...string) {
+	t.Helper()
+	for _, absentKey := range absentKeys {
+		for key, values := range headers {
+			if strings.EqualFold(key, absentKey) {
+				t.Fatalf("%s was forwarded as %q", key, values)
+			}
+		}
 	}
 }
 
