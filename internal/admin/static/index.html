@@ -300,6 +300,11 @@ tr:last-child td{border-bottom:0}
 .cache-metric b{max-width:100%;font-size:22px;line-height:1;color:var(--ink);letter-spacing:0;overflow-wrap:anywhere;word-break:break-word}
 .cache-actions{display:grid;grid-template-columns:1fr;gap:8px;min-width:0}
 .cache-actions .btn{width:100%}
+.traffic-stage-list{display:grid;gap:8px}
+.traffic-stage-row{border:1px solid var(--line);border-radius:16px;background:var(--paper);padding:10px 12px;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center}
+.traffic-stage-name{min-width:0;font-weight:950;color:var(--ink);overflow-wrap:anywhere;word-break:break-word}
+.traffic-stage-meta{font-size:12px;font-weight:850;color:var(--ink-3);white-space:nowrap}
+.traffic-stage-empty{border:1px dashed var(--line);border-radius:16px;padding:12px;color:var(--ink-3);font-weight:850;text-align:center}
 .config-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .config-card-head h4{font-size:15px;line-height:1.15;color:var(--ink);letter-spacing:-.035em}
 .config-card-head span{border:1px solid rgba(36,89,77,.16);background:var(--pine-wash);color:var(--pine);border-radius:999px;padding:3px 8px;font-size:10px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
@@ -379,6 +384,8 @@ tr:last-child td{border-bottom:0}
   .config-group-head{grid-template-columns:minmax(0,1fr) auto}
   .config-group > .tg-row{grid-template-columns:1fr}
   .cache-ops{grid-template-columns:1fr}
+  .traffic-stage-row{grid-template-columns:1fr;align-items:stretch}
+  .traffic-stage-meta{white-space:normal}
   .config-index{min-width:32px;height:22px}
   .config-sheet .form-actions{padding:18px}
   .logs-meter{display:grid;grid-template-columns:1fr;width:100%}
@@ -940,6 +947,7 @@ tr:last-child td{border-bottom:0}
                   <button type="button" class="btn btn-danger" id="trafficCaptureClearBtn" onclick="clearTrafficCapture()">清空记录</button>
                 </div>
               </div>
+              <div class="traffic-stage-list" id="trafficCaptureStages"></div>
             </div>
           </div>
         </section>
@@ -1753,14 +1761,51 @@ async function clearImageCache() {
 function renderTrafficCaptureStats(capture) {
   const bytesEl = document.getElementById('trafficCaptureBytes');
   const recordsEl = document.getElementById('trafficCaptureRecords');
+  const stagesEl = document.getElementById('trafficCaptureStages');
   if (!bytesEl || !recordsEl) return;
   if (!capture) {
     bytesEl.textContent = '--';
     recordsEl.textContent = '--';
+    renderTrafficCaptureStages(stagesEl, []);
     return;
   }
   bytesEl.textContent = formatBytes(capture.bytes);
   recordsEl.textContent = `${formatCacheNumber(capture.records)} 条`;
+  renderTrafficCaptureStages(stagesEl, capture.stages || []);
+}
+
+function renderTrafficCaptureStages(el, stages) {
+  if (!el) return;
+  el.innerHTML = '';
+  if (!stages.length) {
+    const empty = document.createElement('div');
+    empty.className = 'traffic-stage-empty';
+    empty.textContent = '暂无代理流量记录';
+    el.appendChild(empty);
+    return;
+  }
+  for (const item of stages) {
+    const row = document.createElement('div');
+    row.className = 'traffic-stage-row';
+    const name = document.createElement('div');
+    name.className = 'traffic-stage-name';
+    name.textContent = trafficCaptureStageLabel(item.stage);
+    const meta = document.createElement('div');
+    meta.className = 'traffic-stage-meta';
+    meta.textContent = `${formatBytes(item.bytes)} · ${formatCacheNumber(item.records)} 条`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-danger';
+    btn.textContent = '清除';
+    btn.addEventListener('click', () => clearTrafficCaptureStage(item.stage, btn));
+    row.append(name, meta, btn);
+    el.appendChild(row);
+  }
+}
+
+function trafficCaptureStageLabel(stage) {
+  const text = String(stage || '').trim();
+  return text || '未分类';
 }
 
 async function refreshTrafficCaptureStats(showToast = true) {
@@ -1786,6 +1831,20 @@ async function clearTrafficCapture() {
   }
   renderTrafficCaptureStats(r.capture);
   toast('代理流量记录已清空', 'ok');
+}
+
+async function clearTrafficCaptureStage(stage, btn) {
+  const label = trafficCaptureStageLabel(stage);
+  if (!confirm(`确定清空「${label}」分类下的代理流量记录？`)) return;
+  if (btn) btn.disabled = true;
+  const r = await api('trafficCapture.clearStage', { stage });
+  if (btn) btn.disabled = false;
+  if (!r.ok) {
+    toast('清空分类记录失败: ' + (r.error || ''), 'err');
+    return;
+  }
+  renderTrafficCaptureStats(r.capture);
+  toast(`「${label}」分类记录已清空`, 'ok');
 }
 
 async function saveConfig() {

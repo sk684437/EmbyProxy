@@ -289,7 +289,9 @@ func TestDispatchTrafficCaptureStats(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	content := []byte("{\"id\":1}\n\n{\"id\":2}")
+	mediaLine := `{"id":1,"stage":"media-proxy"}`
+	imageLine := `{"id":2,"stage":"image-cache-hit"}`
+	content := []byte(mediaLine + "\n\n" + imageLine + "\n" + mediaLine)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -302,8 +304,14 @@ func TestDispatchTrafficCaptureStats(t *testing.T) {
 	if !ok {
 		t.Fatalf("capture stats type = %T, want trafficCaptureStats", res["capture"])
 	}
-	if !stats.Enabled || stats.File != "data/traffic-captures.jsonl" || stats.Bytes != int64(len(content)) || stats.Records != 2 {
+	if !stats.Enabled || stats.File != "data/traffic-captures.jsonl" || stats.Bytes != int64(len(content)) || stats.Records != 3 {
 		t.Fatalf("traffic capture stats = %+v", stats)
+	}
+	if got := findTrafficCaptureStageStats(t, stats, "media-proxy"); got.Records != 2 || got.Bytes != int64(len(mediaLine+"\n")+len(mediaLine)) {
+		t.Fatalf("media-proxy stage stats = %+v", got)
+	}
+	if got := findTrafficCaptureStageStats(t, stats, "image-cache-hit"); got.Records != 1 || got.Bytes != int64(len(imageLine+"\n")) {
+		t.Fatalf("image-cache-hit stage stats = %+v", got)
 	}
 }
 
@@ -375,7 +383,7 @@ func TestDispatchTrafficCaptureClear(t *testing.T) {
 	if !ok {
 		t.Fatalf("capture stats type = %T, want trafficCaptureStats", res["capture"])
 	}
-	if !stats.Enabled || stats.File != "data/traffic-captures.jsonl" || stats.Bytes != 0 || stats.Records != 0 {
+	if !stats.Enabled || stats.File != "data/traffic-captures.jsonl" || stats.Bytes != 0 || stats.Records != 0 || len(stats.Stages) != 0 {
 		t.Fatalf("traffic capture stats after clear = %+v", stats)
 	}
 	info, err := os.Stat(path)
@@ -387,9 +395,63 @@ func TestDispatchTrafficCaptureClear(t *testing.T) {
 	}
 }
 
+func TestDispatchTrafficCaptureClearStage(t *testing.T) {
+	ctx := context.Background()
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
+	cwd := t.TempDir()
+	handler.cfg.CWD = cwd
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures.jsonl"
+	if err := handler.store.SaveSystemConfig(ctx, sys); err != nil {
+		t.Fatalf("SaveSystemConfig() error = %v", err)
+	}
+	path := filepath.Join(cwd, "data", "traffic-captures.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	mediaLine := `{"id":1,"stage":"media-proxy"}`
+	imageLine := `{"id":2,"stage":"image-cache-hit"}`
+	content := []byte(mediaLine + "\n" + imageLine + "\n" + mediaLine + "\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	res, status := handler.dispatch(ctx, "admin", "trafficCapture.clearStage", map[string]any{"stage": "media-proxy"})
+	if status != http.StatusOK || res["ok"] != true {
+		t.Fatalf("dispatch trafficCapture.clearStage status=%d res=%+v", status, res)
+	}
+	stats, ok := res["capture"].(trafficCaptureStats)
+	if !ok {
+		t.Fatalf("capture stats type = %T, want trafficCaptureStats", res["capture"])
+	}
+	if stats.Bytes != int64(len(imageLine+"\n")) || stats.Records != 1 || len(stats.Stages) != 1 {
+		t.Fatalf("traffic capture stats after stage clear = %+v", stats)
+	}
+	if got := findTrafficCaptureStageStats(t, stats, "image-cache-hit"); got.Records != 1 || got.Bytes != int64(len(imageLine+"\n")) {
+		t.Fatalf("remaining stage stats = %+v", got)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != imageLine+"\n" {
+		t.Fatalf("traffic capture file after stage clear = %q", got)
+	}
+}
+
 func TestHandleAPISuppressesTrafficCaptureAdminActionRecords(t *testing.T) {
-	for _, action := range []string{"trafficCapture.stats", "trafficCapture.clear"} {
-		t.Run(action, func(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "stats", body: `{"action":"trafficCapture.stats"}`},
+		{name: "clear", body: `{"action":"trafficCapture.clear"}`},
+		{name: "clear stage", body: `{"action":"trafficCapture.clearStage","stage":"media-proxy"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			cwd := t.TempDir()
 			store, err := storage.New(filepath.Join(cwd, "proxy.db"))
 			if err != nil {
@@ -404,7 +466,7 @@ func TestHandleAPISuppressesTrafficCaptureAdminActionRecords(t *testing.T) {
 			}
 			handler := New(config.Config{CWD: cwd}, store, nil, nil, logging.New("info", false), nil)
 			recorder := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false))
-			req := httptest.NewRequest(http.MethodPost, "/admin/api", strings.NewReader(fmt.Sprintf(`{"action":"%s"}`, action)))
+			req := httptest.NewRequest(http.MethodPost, "/admin/api", strings.NewReader(tt.body))
 			rec := httptest.NewRecorder()
 			captureSuppressed := false
 
@@ -414,13 +476,24 @@ func TestHandleAPISuppressesTrafficCaptureAdminActionRecords(t *testing.T) {
 			})).ServeHTTP(rec, req)
 
 			if !captureSuppressed {
-				t.Fatalf("%s should suppress its traffic capture record", action)
+				t.Fatalf("%s should suppress its traffic capture record", tt.name)
 			}
 			if _, err := os.Stat(filepath.Join(cwd, "data", "traffic-captures.jsonl")); !os.IsNotExist(err) {
 				t.Fatalf("traffic capture file should not be written, stat err = %v", err)
 			}
 		})
 	}
+}
+
+func findTrafficCaptureStageStats(t *testing.T, stats trafficCaptureStats, stage string) trafficCaptureStageStats {
+	t.Helper()
+	for _, item := range stats.Stages {
+		if item.Stage == stage {
+			return item
+		}
+	}
+	t.Fatalf("stage %q not found in %+v", stage, stats.Stages)
+	return trafficCaptureStageStats{}
 }
 
 func TestNormalizeTrafficCaptureFileRequiresDataDirectory(t *testing.T) {

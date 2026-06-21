@@ -73,18 +73,7 @@ func main() {
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
 	mux := http.NewServeMux()
-	mux.Handle("/admin", adminHandler)
-	mux.Handle("/admin/", adminHandler)
-	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/admin", http.StatusFound)
-			return
-		}
-		proxyHandler.ServeHTTP(w, r)
-	})
+	registerRoutes(mux, adminHandler, proxyHandler)
 
 	var handler http.Handler = mux
 	handler = capture.New(cfg, store, log).Middleware(handler)
@@ -112,6 +101,23 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
 	}
+}
+
+func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler http.Handler) {
+	mux.Handle("/admin", adminHandler)
+	mux.Handle("/admin/", adminHandler)
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "favicon"})
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-redirect"})
+			http.Redirect(w, r, "/admin", http.StatusFound)
+			return
+		}
+		proxyHandler.ServeHTTP(w, r)
+	})
 }
 
 func logBuildInfo(log *logging.Logger) {

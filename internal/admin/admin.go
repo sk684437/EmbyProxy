@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,8 @@ import (
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
 	"embyproxy/internal/validators"
+
+	"github.com/tidwall/gjson"
 )
 
 //go:embed static/index.html
@@ -42,11 +45,26 @@ type ImageCacheManager interface {
 }
 
 type trafficCaptureStats struct {
-	Enabled bool   `json:"enabled"`
-	File    string `json:"file"`
+	Enabled bool                       `json:"enabled"`
+	File    string                     `json:"file"`
+	Bytes   int64                      `json:"bytes"`
+	Records int64                      `json:"records"`
+	Stages  []trafficCaptureStageStats `json:"stages"`
+}
+
+type trafficCaptureStageStats struct {
+	Stage   string `json:"stage"`
 	Bytes   int64  `json:"bytes"`
 	Records int64  `json:"records"`
 }
+
+type trafficCaptureScan struct {
+	Bytes   int64
+	Records int64
+	Stages  []trafficCaptureStageStats
+}
+
+const trafficCaptureClearWriterBuffer = 256 * 1024
 
 type Handler struct {
 	cfg        config.Config
@@ -196,7 +214,7 @@ func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) 
 		capture.Suppress(r)
 		requestlog.SuppressAccessLog(ctx)
 	}
-	if action == "trafficCapture.stats" || action == "trafficCapture.clear" {
+	if action == "trafficCapture.stats" || action == "trafficCapture.clear" || action == "trafficCapture.clearStage" {
 		capture.Suppress(r)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "admin", "adminAction": action, "stage": "admin-api"})
@@ -341,6 +359,8 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return h.trafficCaptureStats(ctx), http.StatusOK
 	case "trafficCapture.clear":
 		return h.clearTrafficCapture(ctx), http.StatusOK
+	case "trafficCapture.clearStage":
+		return h.clearTrafficCaptureStage(ctx, body), http.StatusOK
 	default:
 		return fail("未知 action: " + action), http.StatusOK
 	}
@@ -377,22 +397,27 @@ func (h *Handler) readTrafficCaptureStats(cfg storage.SystemConfig) (trafficCapt
 	if err != nil {
 		return stats, err
 	}
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return stats, nil
-	}
-	if err != nil {
+	var scan trafficCaptureScan
+	if err := capture.WithFileLock(path, func() error {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			scan = trafficCaptureScan{}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return errors.New("代理流量记录路径不是文件")
+		}
+		scan, err = scanTrafficCaptureRecords(path)
+		return err
+	}); err != nil {
 		return stats, err
 	}
-	if info.IsDir() {
-		return stats, errors.New("代理流量记录路径不是文件")
-	}
-	stats.Bytes = info.Size()
-	records, err := countTrafficCaptureRecords(path)
-	if err != nil {
-		return stats, err
-	}
-	stats.Records = records
+	stats.Bytes = scan.Bytes
+	stats.Records = scan.Records
+	stats.Stages = scan.Stages
 	return stats, nil
 }
 
@@ -416,19 +441,69 @@ func (h *Handler) clearTrafficCaptureRecords(cfg storage.SystemConfig) (trafficC
 	if err != nil {
 		return stats, err
 	}
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return stats, nil
+	if err := capture.WithFileLock(path, func() error {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return errors.New("代理流量记录路径不是文件")
+		}
+		return os.Truncate(path, 0)
+	}); err != nil {
+		return stats, err
 	}
+	return stats, nil
+}
+
+func (h *Handler) clearTrafficCaptureStage(ctx context.Context, body map[string]any) map[string]any {
+	if _, ok := body["stage"]; !ok {
+		return fail("stage 不能为空")
+	}
+	stage := strings.TrimSpace(asString(body["stage"]))
+	if h.store == nil {
+		return fail("存储未初始化")
+	}
+	cfg, err := h.store.GetSystemConfig(ctx, h.defaultSystemConfig())
+	if err != nil {
+		return fail(err.Error())
+	}
+	stats, err := h.clearTrafficCaptureStageRecords(cfg, stage)
+	if err != nil {
+		return fail(err.Error())
+	}
+	return map[string]any{"ok": true, "capture": stats}
+}
+
+func (h *Handler) clearTrafficCaptureStageRecords(cfg storage.SystemConfig, stage string) (trafficCaptureStats, error) {
+	stats, path, err := h.trafficCaptureStatsTarget(cfg)
 	if err != nil {
 		return stats, err
 	}
-	if info.IsDir() {
-		return stats, errors.New("代理流量记录路径不是文件")
-	}
-	if err := os.Truncate(path, 0); err != nil {
+	var scan trafficCaptureScan
+	if err := capture.WithFileLock(path, func() error {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			scan = trafficCaptureScan{}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return errors.New("代理流量记录路径不是文件")
+		}
+		scan, err = filterTrafficCaptureRecordsByStage(path, stage)
+		return err
+	}); err != nil {
 		return stats, err
 	}
+	stats.Bytes = scan.Bytes
+	stats.Records = scan.Records
+	stats.Stages = scan.Stages
 	return stats, nil
 }
 
@@ -449,42 +524,154 @@ func (h *Handler) trafficCaptureFilePath(file string) string {
 	return filepath.Join(h.cfg.CWD, file)
 }
 
-func countTrafficCaptureRecords(path string) (int64, error) {
+func scanTrafficCaptureRecords(path string) (trafficCaptureScan, error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return 0, nil
+		return trafficCaptureScan{}, nil
 	}
 	if err != nil {
-		return 0, err
+		return trafficCaptureScan{}, err
 	}
 	defer f.Close()
 
 	reader := bufio.NewReader(f)
-	var records int64
-	lineHasContent := false
+	scan := trafficCaptureScan{}
+	byStage := map[string]*trafficCaptureStageStats{}
 	for {
-		part, err := reader.ReadSlice('\n')
-		if len(bytes.TrimSpace(part)) > 0 {
-			lineHasContent = true
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			scan.Bytes += int64(len(line))
+		}
+		if len(bytes.TrimSpace(line)) > 0 {
+			scan.Records++
+			stage := trafficCaptureLineStage(line)
+			stats := byStage[stage]
+			if stats == nil {
+				stats = &trafficCaptureStageStats{Stage: stage}
+				byStage[stage] = stats
+			}
+			stats.Records++
+			stats.Bytes += int64(len(line))
 		}
 		if err == nil {
-			if lineHasContent {
-				records++
-			}
-			lineHasContent = false
-			continue
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
 		if errors.Is(err, io.EOF) {
-			if lineHasContent {
-				records++
-			}
-			return records, nil
+			scan.Stages = sortedTrafficCaptureStageStats(byStage)
+			return scan, nil
 		}
-		return 0, err
+		return trafficCaptureScan{}, err
 	}
+}
+
+func trafficCaptureLineStage(line []byte) string {
+	result := gjson.GetBytes(line, "stage")
+	if !result.Exists() || result.Type != gjson.String {
+		return ""
+	}
+	return strings.TrimSpace(result.String())
+}
+
+func sortedTrafficCaptureStageStats(byStage map[string]*trafficCaptureStageStats) []trafficCaptureStageStats {
+	stages := make([]trafficCaptureStageStats, 0, len(byStage))
+	for _, stats := range byStage {
+		stages = append(stages, *stats)
+	}
+	sort.Slice(stages, func(i, j int) bool {
+		if stages[i].Records != stages[j].Records {
+			return stages[i].Records > stages[j].Records
+		}
+		if stages[i].Bytes != stages[j].Bytes {
+			return stages[i].Bytes > stages[j].Bytes
+		}
+		return stages[i].Stage < stages[j].Stage
+	})
+	return stages
+}
+
+func filterTrafficCaptureRecordsByStage(path, stage string) (trafficCaptureScan, error) {
+	src, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return trafficCaptureScan{}, nil
+	}
+	if err != nil {
+		return trafficCaptureScan{}, err
+	}
+	defer src.Close()
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return trafficCaptureScan{}, err
+	}
+	tmpName := tmp.Name()
+	keepTemp := false
+	defer func() {
+		if !keepTemp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	reader := bufio.NewReader(src)
+	writer := bufio.NewWriterSize(tmp, trafficCaptureClearWriterBuffer)
+	scan := trafficCaptureScan{}
+	byStage := map[string]*trafficCaptureStageStats{}
+	removed := false
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			recordLine := len(bytes.TrimSpace(line)) > 0
+			lineStage := ""
+			if recordLine {
+				lineStage = trafficCaptureLineStage(line)
+			}
+			if recordLine && lineStage == stage {
+				removed = true
+			} else if _, err := writer.Write(line); err != nil {
+				_ = tmp.Close()
+				return trafficCaptureScan{}, err
+			} else {
+				scan.Bytes += int64(len(line))
+				if recordLine {
+					scan.Records++
+					stats := byStage[lineStage]
+					if stats == nil {
+						stats = &trafficCaptureStageStats{Stage: lineStage}
+						byStage[lineStage] = stats
+					}
+					stats.Records++
+					stats.Bytes += int64(len(line))
+				}
+			}
+		}
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		_ = tmp.Close()
+		return trafficCaptureScan{}, readErr
+	}
+	scan.Stages = sortedTrafficCaptureStageStats(byStage)
+	if err := writer.Flush(); err != nil {
+		_ = tmp.Close()
+		return trafficCaptureScan{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return trafficCaptureScan{}, err
+	}
+	if !removed {
+		return scan, nil
+	}
+	if err := src.Close(); err != nil {
+		return trafficCaptureScan{}, err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return trafficCaptureScan{}, err
+	}
+	keepTemp = true
+	return scan, nil
 }
 
 func (h *Handler) clearImageCache(ctx context.Context) map[string]any {

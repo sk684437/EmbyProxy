@@ -445,6 +445,13 @@ func (r *Recorder) appendHTTP(req *http.Request, cw *captureWriter, cfg storage.
 
 func (r *Recorder) appendRecord(record Record, cfg storage.SystemConfig) {
 	file := r.captureFilePath(cfg)
+	_ = WithFileLock(file, func() error {
+		r.appendRecordLocked(file, record)
+		return nil
+	})
+}
+
+func (r *Recorder) appendRecordLocked(file string, record Record) {
 	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
 		r.log.Warn("traffic", "capture mkdir failed", map[string]any{"event": "captureMkdirFailed", "error": err.Error()})
 		return
@@ -460,7 +467,9 @@ func (r *Recorder) appendRecord(record Record, cfg storage.SystemConfig) {
 	if err != nil {
 		return
 	}
-	_, _ = f.Write(append(b, '\n'))
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		r.log.Warn("traffic", "capture write failed", map[string]any{"event": "captureWriteFailed", "error": err.Error()})
+	}
 }
 
 func (r *Recorder) captureFilePath(cfg storage.SystemConfig) string {

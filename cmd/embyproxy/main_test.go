@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
@@ -171,6 +172,55 @@ func TestRequestMiddlewareSuppressesMarkedAccessLog(t *testing.T) {
 
 	if entries := log.Entries(10); len(entries) != 0 {
 		t.Fatalf("entries len = %d, want 0: %+v", len(entries), entries)
+	}
+}
+
+func TestEntryRoutesSetTrafficCaptureStage(t *testing.T) {
+	ctx := context.Background()
+	cwd := t.TempDir()
+	store, err := storage.New(filepath.Join(cwd, "proxy.db"))
+	if err != nil {
+		t.Fatalf("storage.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	sys := storage.DefaultSystemConfig()
+	sys.TrafficCaptureEnabled = true
+	sys.TrafficCaptureFile = "data/traffic-captures.jsonl"
+	if err := store.SaveSystemConfig(ctx, sys); err != nil {
+		t.Fatalf("SaveSystemConfig() error = %v", err)
+	}
+	mux := http.NewServeMux()
+	registerRoutes(mux, http.NotFoundHandler(), http.NotFoundHandler())
+	handler := capture.New(config.Config{CWD: cwd}, store, logging.New("silent", false)).Middleware(mux)
+
+	rootRec := httptest.NewRecorder()
+	handler.ServeHTTP(rootRec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rootRec.Code != http.StatusFound {
+		t.Fatalf("root status = %d, want %d", rootRec.Code, http.StatusFound)
+	}
+	faviconRec := httptest.NewRecorder()
+	handler.ServeHTTP(faviconRec, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if faviconRec.Code != http.StatusNoContent {
+		t.Fatalf("favicon status = %d, want %d", faviconRec.Code, http.StatusNoContent)
+	}
+
+	records, err := capture.ReadJSONL(filepath.Join(cwd, "data", "traffic-captures.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadJSONL() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records len = %d, want 2", len(records))
+	}
+	assertCaptureRouteMeta(t, records[0], "admin", "admin-redirect", "/", http.StatusFound)
+	assertCaptureRouteMeta(t, records[1], "admin", "favicon", "/favicon.ico", http.StatusNoContent)
+}
+
+func assertCaptureRouteMeta(t *testing.T, record capture.Record, mode, stage, inboundURL string, status int) {
+	t.Helper()
+	if record.Mode != mode || record.Stage != stage || record.InboundURL != inboundURL || record.Status != status {
+		t.Fatalf("record = %+v, want mode=%q stage=%q inboundURL=%q status=%d", record, mode, stage, inboundURL, status)
 	}
 }
 
