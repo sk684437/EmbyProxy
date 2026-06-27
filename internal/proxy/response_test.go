@@ -2775,6 +2775,59 @@ func TestServeHTTPLogsPlaybackReadAndWriteBytes(t *testing.T) {
 	}
 }
 
+func TestServeHTTPCountsPlaybackStartEvent(t *testing.T) {
+	h := newProxyTestHandler(t, storage.Node{})
+	h.noRedirectClient = failRoundTripClient(t, "general no-redirect client should not handle playback start")
+	h.defaultFollowClient = failRoundTripClient(t, "default follow client should not handle playback start")
+	h.playbackStreamClient = failRoundTripClient(t, "playback stream client should not handle playback start")
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", req.Method)
+		}
+		if req.URL.String() != "https://upstream.example/emby/Sessions/Playing" {
+			t.Fatalf("upstream URL = %q", req.URL.String())
+		}
+		raw, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read upstream body error = %v", err)
+		}
+		if string(raw) != `{"ItemId":"1","SessionId":"session-1","PlaySessionId":"play-session-1"}` {
+			t.Fatalf("upstream body = %q", string(raw))
+		}
+		return textResponse(http.StatusNoContent, "", nil), nil
+	})}
+
+	req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/secret/emby/Sessions/Playing", strings.NewReader(`{"ItemId":"1","SessionId":"session-1","PlaySessionId":"play-session-1"}`))
+	req.Header.Set("User-Agent", "start-client")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusNoContent, rr.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stats, err := h.store.GetTodayStats(context.Background())
+		if err != nil {
+			t.Fatalf("GetTodayStats() error = %v", err)
+		}
+		for _, row := range stats.Today {
+			if row.Node == "node" && row.Client == "start-client" {
+				if row.Plays != 1 || row.Sessions != 1 {
+					t.Fatalf("play_stats = plays %d sessions %d; want 1, 1", row.Plays, row.Sessions)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("playback start stat was not written")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestServeHTTPDoesNotLogImageTrafficAsPlayback(t *testing.T) {
 	h := newProxyTestHandler(t, storage.Node{})
 	h.imageFollowClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

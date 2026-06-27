@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -22,16 +24,17 @@ var (
 )
 
 type PlaybackInput struct {
-	Node       Node
-	RequestIP  string
-	Headers    http.Header
-	Status     int
-	RespHeader http.Header
-	IsPlayback bool
-	Mode       string
-	RequestURL string
-	Method     string
-	OccurredAt int64
+	Node        Node
+	RequestIP   string
+	Headers     http.Header
+	Status      int
+	RespHeader  http.Header
+	IsPlayback  bool
+	Mode        string
+	RequestURL  string
+	Method      string
+	RequestBody []byte
+	OccurredAt  int64
 
 	TrafficOnly   bool
 	InboundBytes  int64
@@ -107,6 +110,7 @@ func (s *Store) LogPlaybackAsync(in PlaybackInput) bool {
 func clonePlaybackInput(in PlaybackInput) PlaybackInput {
 	in.Headers = cloneHTTPHeader(in.Headers)
 	in.RespHeader = cloneHTTPHeader(in.RespHeader)
+	in.RequestBody = append([]byte(nil), in.RequestBody...)
 	return in
 }
 
@@ -137,7 +141,8 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		method = "GET"
 	}
 	sessionEvent := sessionPlayingEvent(in.RequestURL)
-	countable := (method == http.MethodGet || method == http.MethodHead) && sessionEvent == ""
+	isPlaybackStart := method == http.MethodPost && sessionEvent == "playing"
+	countable := isPlaybackStart && playbackStatusSuccessful(in.Status)
 
 	ua := cutString(in.Headers.Get("User-Agent"), 128)
 	client := ua
@@ -149,8 +154,11 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		ip = "unknown"
 	}
 	reqURL := parseRequestURL(in.RequestURL)
-	deviceID := cutString(headerOrQuery(in.Headers, reqURL, "X-Emby-Device-Id", "X-MediaBrowser-Device-Id", "DeviceId", "deviceId"), 64)
-	sessionID := cutString(headerOrQuery(in.Headers, reqURL, "X-Emby-Session-Id", "SessionId", "sessionId"), 64)
+	bodyValues := parsePlaybackRequestBody(in.RequestBody)
+	userID := cutString(headerOrQueryOrBody(in.Headers, reqURL, bodyValues, "X-Emby-User-Id", "X-MediaBrowser-User-Id", "UserId", "userId", "user_id"), 64)
+	deviceID := cutString(headerOrQueryOrBody(in.Headers, reqURL, bodyValues, "X-Emby-Device-Id", "X-MediaBrowser-Device-Id", "DeviceId", "deviceId", "device_id"), 64)
+	sessionID := cutString(headerOrQueryOrBody(in.Headers, reqURL, bodyValues, "X-Emby-Session-Id", "SessionId", "sessionId", "session_id"), 64)
+	playSessionID := cutString(headerOrQueryOrBody(in.Headers, reqURL, bodyValues, "PlaySessionId", "playSessionId", "play_session_id"), 128)
 
 	sessInc := int64(0)
 	if countable {
@@ -171,7 +179,7 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	}
 
 	if countable {
-		sessKey := strings.Join([]string{day, nodeName, client, ip, deviceID, sessionID}, "|")
+		sessKey := strings.Join([]string{day, nodeName, client, ip, userID, deviceID, sessionID}, "|")
 		var lastTS int64
 		err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_sessions WHERE k = ?`, sessKey).Scan(&lastTS)
 		if err == nil && now-lastTS < 15*60*1000 {
@@ -187,32 +195,31 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 			return err
 		}
 	}
-	playInc := sessInc
+	playInc := int64(0)
 	if countable {
-		if mediaKey := playbackMediaKey(reqURL); mediaKey != "" {
-			playInc = 1
-			playKey := strings.Join([]string{day, nodeName, client, ip, deviceID, sessionID, mediaKey}, "|")
-			var lastTS int64
-			err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_events WHERE k = ?`, playKey).Scan(&lastTS)
-			if err == nil && now-lastTS < 15*60*1000 {
-				playInc = 0
-			} else if err != nil && err != sql.ErrNoRows {
-				return err
-			}
-			_, err = tx.ExecContext(ctx, `
-				INSERT INTO play_events (k, day, last_ts) VALUES (?, ?, ?)
-				ON CONFLICT(k) DO UPDATE SET last_ts = MAX(play_events.last_ts, excluded.last_ts)
-			`, playKey, day, now)
-			if err != nil {
-				return err
-			}
+		playInc = 1
+		mediaKey := playbackStartMediaKey(reqURL, bodyValues)
+		playKey := strings.Join([]string{day, nodeName, client, ip, userID, deviceID, sessionID, playSessionID, mediaKey}, "|")
+		var lastTS int64
+		err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_events WHERE k = ?`, playKey).Scan(&lastTS)
+		if err == nil && now-lastTS < 15*60*1000 {
+			playInc = 0
+		} else if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO play_events (k, day, last_ts) VALUES (?, ?, ?)
+			ON CONFLICT(k) DO UPDATE SET last_ts = MAX(play_events.last_ts, excluded.last_ts)
+		`, playKey, day, now)
+		if err != nil {
+			return err
 		}
 	}
 	errInc := int64(0)
-	if in.Status >= 500 {
+	if isPlaybackStart && in.Status >= 500 {
 		errInc = 1
 	}
-	if countable {
+	if isPlaybackStart && (playInc > 0 || sessInc > 0 || errInc > 0) {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO play_stats (day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at)
 			VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?)
@@ -266,7 +273,7 @@ func (s *Store) LogPlaybackTraffic(ctx context.Context, in PlaybackInput) error 
 	if method == "" {
 		method = "GET"
 	}
-	countable := method == http.MethodGet && sessionPlayingEvent(in.RequestURL) == ""
+	countable := playbackTrafficCountable(method, in.RequestURL)
 	if in.Mode != "proxy" || !countable {
 		return nil
 	}
@@ -435,6 +442,34 @@ func sessionPlayingEvent(raw string) string {
 	}
 }
 
+func playbackStatusSuccessful(status int) bool {
+	return status == 0 || (status >= 200 && status < 300)
+}
+
+func playbackTrafficCountable(method, raw string) bool {
+	if method != http.MethodGet || sessionPlayingEvent(raw) != "" {
+		return false
+	}
+	path := strings.ToLower(parseRequestPath(raw))
+	if strings.Contains(path, "/playbackinfo") || strings.Contains(path, "/additionalparts") {
+		return false
+	}
+	return true
+}
+
+func playbackStartMediaKey(reqURL *url.URL, body map[string]any) string {
+	if id := bodyOrQuery(body, reqURL, "ItemId", "itemId", "item_id"); id != "" {
+		return "item:" + cutString(id, 128)
+	}
+	if id := bodyOrQuery(body, reqURL, "MediaId", "mediaId", "media_id"); id != "" {
+		return "media:" + cutString(id, 128)
+	}
+	if id := bodyOrQuery(body, reqURL, "MediaSourceId", "mediaSourceId", "media_source_id"); id != "" {
+		return "source:" + cutString(id, 128)
+	}
+	return playbackMediaKey(reqURL)
+}
+
 func playbackMediaKey(reqURL *url.URL) string {
 	if reqURL == nil {
 		return ""
@@ -452,6 +487,68 @@ func playbackMediaKey(reqURL *url.URL) string {
 		return "source:" + cutString(id, 128)
 	}
 	return ""
+}
+
+func parsePlaybackRequestBody(body []byte) map[string]any {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 || body[0] != '{' {
+		return nil
+	}
+	var out map[string]any
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func headerOrQueryOrBody(headers http.Header, u *url.URL, body map[string]any, names ...string) string {
+	if value := headerOrQuery(headers, u, names...); value != "" {
+		return value
+	}
+	return bodyValue(body, names...)
+}
+
+func bodyOrQuery(body map[string]any, u *url.URL, names ...string) string {
+	if value := bodyValue(body, names...); value != "" {
+		return value
+	}
+	return QueryValue(u, names...)
+}
+
+func bodyValue(body map[string]any, names ...string) string {
+	if len(body) == 0 {
+		return ""
+	}
+	for _, name := range names {
+		if value, ok := body[name]; ok {
+			return jsonScalarString(value)
+		}
+	}
+	for key, value := range body {
+		for _, name := range names {
+			if strings.EqualFold(key, name) {
+				return jsonScalarString(value)
+			}
+		}
+	}
+	return ""
+}
+
+func jsonScalarString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	case float64:
+		return strings.TrimSpace(strconv.FormatFloat(v, 'f', -1, 64))
+	case bool:
+		return strconv.FormatBool(v)
+	default:
+		return ""
+	}
 }
 
 func parseRequestPath(raw string) string {

@@ -71,11 +71,11 @@ func (s *Service) BuildReport(ctx context.Context, now int64) (string, error) {
 	yesterdayEndTime := startTime
 	yesterdayStartTime := tReportToday.AddDate(0, 0, -2).UnixMilli()
 
-	todayStats, proxyPlaysToday, directPlaysToday, err := s.store.GetRangeStats(ctx, startTime, endTime)
+	todayStats, _, _, err := s.store.GetRangeStats(ctx, startTime, endTime)
 	if err != nil {
 		return "", err
 	}
-	yesterdayStats, proxyPlaysYesterday, directPlaysYesterday, err := s.store.GetRangeStats(ctx, yesterdayStartTime, yesterdayEndTime)
+	yesterdayStats, _, _, err := s.store.GetRangeStats(ctx, yesterdayStartTime, yesterdayEndTime)
 	if err != nil {
 		return "", err
 	}
@@ -94,7 +94,7 @@ func (s *Service) BuildReport(ctx context.Context, now int64) (string, error) {
 		}
 	}
 	day := tReportToday.Format("2006-01-02")
-	return buildReportText(day, today, yesterday, proxyPlaysToday, directPlaysToday, proxyPlaysYesterday, directPlaysYesterday, nodeDisplay), nil
+	return buildReportText(day, today, yesterday, nodeDisplay), nil
 }
 
 func (s *Service) CheckAndSendReport(ctx context.Context) error {
@@ -131,17 +131,15 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 	return nil
 }
 
-func buildReportText(day string, today, yesterday summary, proxyPlaysToday, directPlaysToday, proxyPlaysYesterday, directPlaysYesterday int64, nodeDisplay map[string]string) string {
+func buildReportText(day string, today, yesterday summary, nodeDisplay map[string]string) string {
 	if today.Plays == 0 {
-		return buildEmptyDayReport(day, yesterday, proxyPlaysYesterday, directPlaysYesterday, nodeDisplay)
+		return buildEmptyDayReport(day, yesterday, nodeDisplay)
 	}
 	lines := []string{
 		reportHeaderPrefix + day,
 		"",
 		fmt.Sprintf("▶ 播放 %d 次 · %d 会话 · %d 节点", today.Plays, today.Sessions, len(today.NodeMap)),
 	}
-	total := proxyPlaysToday + directPlaysToday
-	lines = append(lines, fmt.Sprintf("   代理 %d | 302直链 %d (%s)", proxyPlaysToday, directPlaysToday, formatPercent(directPlaysToday, total)))
 	lines = append(lines, fmt.Sprintf("   入站 %s | 出站 %s", formatBytes(today.InboundBytes), formatBytes(today.OutboundBytes)))
 	if today.Errors > 0 {
 		lines = append(lines, fmt.Sprintf("   ⚠️ 5xx: %d 次", today.Errors))
@@ -159,7 +157,7 @@ func buildReportText(day string, today, yesterday summary, proxyPlaysToday, dire
 	return strings.Join(lines, "\n")
 }
 
-func buildEmptyDayReport(day string, yesterday summary, proxyPlaysYesterday, directPlaysYesterday int64, nodeDisplay map[string]string) string {
+func buildEmptyDayReport(day string, yesterday summary, nodeDisplay map[string]string) string {
 	lines := []string{
 		reportHeaderPrefix + day,
 		"",
@@ -168,8 +166,6 @@ func buildEmptyDayReport(day string, yesterday summary, proxyPlaysYesterday, dir
 	if yesterday.Plays > 0 {
 		lines = append(lines, "", "📅 昨日回顾")
 		lines = append(lines, fmt.Sprintf("▶ 播放 %d 次 · %d 会话 · %d 节点", yesterday.Plays, yesterday.Sessions, len(yesterday.NodeMap)))
-		total := proxyPlaysYesterday + directPlaysYesterday
-		lines = append(lines, fmt.Sprintf("   代理 %d | 302直链 %d (%s)", proxyPlaysYesterday, directPlaysYesterday, formatPercent(directPlaysYesterday, total)))
 		lines = append(lines, fmt.Sprintf("   入站 %s | 出站 %s", formatBytes(yesterday.InboundBytes), formatBytes(yesterday.OutboundBytes)))
 		if yesterday.Errors > 0 {
 			lines = append(lines, fmt.Sprintf("   ⚠️ 5xx: %d 次", yesterday.Errors))

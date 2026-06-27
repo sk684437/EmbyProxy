@@ -13,17 +13,13 @@ import (
 
 func TestBuildReportText(t *testing.T) {
 	tests := []struct {
-		name                 string
-		day                  string
-		today                summary
-		yesterday            summary
-		proxyPlaysToday      int64
-		directPlaysToday     int64
-		proxyPlaysYesterday  int64
-		directPlaysYesterday int64
-		nodeDisplay          map[string]string
-		wantContains         []string
-		wantNotContains      []string
+		name            string
+		day             string
+		today           summary
+		yesterday       summary
+		nodeDisplay     map[string]string
+		wantContains    []string
+		wantNotContains []string
 	}{
 		{
 			name: "normal day",
@@ -45,15 +41,10 @@ func TestBuildReportText(t *testing.T) {
 				NodeMap:       map[string]int64{"alpha": 7},
 				ClientMap:     map[string]int64{"Infuse/8.0": 7},
 			},
-			proxyPlaysToday:      9,
-			directPlaysToday:     3,
-			proxyPlaysYesterday:  6,
-			directPlaysYesterday: 1,
-			nodeDisplay:          map[string]string{"alpha": "朋友服"},
+			nodeDisplay: map[string]string{"alpha": "朋友服"},
 			wantContains: []string{
 				"📊 Emby 播放日报 · 2026-06-08",
 				"▶ 播放 12 次 · 8 会话 · 2 节点",
-				"代理 9 | 302直链 3 (25.0%)",
 				"入站 10.00 GB | 出站 9.00 GB",
 				"⚠️ 5xx: 1 次",
 				"📈 较昨日  播放 +5 · 会话 +3 · 流量 +5.00 GB",
@@ -65,6 +56,7 @@ func TestBuildReportText(t *testing.T) {
 				"2. Emby Theater — 4 次 (33.3%)",
 				"3. Unknown — 2 次 (16.7%)",
 			},
+			wantNotContains: []string{"302直链"},
 		},
 		{
 			name:  "empty day with yesterday",
@@ -79,15 +71,12 @@ func TestBuildReportText(t *testing.T) {
 				NodeMap:       map[string]int64{"alpha": 15, "beta": 7},
 				ClientMap:     map[string]int64{"Infuse/8.0": 14, "Emby Theater": 8},
 			},
-			proxyPlaysYesterday:  18,
-			directPlaysYesterday: 4,
-			nodeDisplay:          map[string]string{"alpha": "朋友服"},
+			nodeDisplay: map[string]string{"alpha": "朋友服"},
 			wantContains: []string{
 				"📊 Emby 播放日报 · 2026-06-10",
 				"📭 今日无播放",
 				"📅 昨日回顾",
 				"▶ 播放 22 次 · 18 会话 · 2 节点",
-				"代理 18 | 302直链 4 (18.2%)",
 				"入站 10.00 GB | 出站 9.23 GB",
 				"⚠️ 5xx: 2 次",
 				"🏆 节点排行:",
@@ -97,7 +86,7 @@ func TestBuildReportText(t *testing.T) {
 				"1. Infuse/8.0 — 14 次 (63.6%)",
 				"2. Emby Theater — 8 次 (36.4%)",
 			},
-			wantNotContains: []string{"📈 较昨日"},
+			wantNotContains: []string{"📈 较昨日", "302直链"},
 		},
 		{
 			name: "normal day without errors or yesterday",
@@ -109,7 +98,6 @@ func TestBuildReportText(t *testing.T) {
 				ClientMap: map[string]int64{"b": 5},
 			},
 			yesterday:       summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
-			proxyPlaysToday: 5,
 			wantNotContains: []string{"5xx", "较昨日"},
 		},
 		{
@@ -128,10 +116,6 @@ func TestBuildReportText(t *testing.T) {
 				tt.day,
 				tt.today,
 				tt.yesterday,
-				tt.proxyPlaysToday,
-				tt.directPlaysToday,
-				tt.proxyPlaysYesterday,
-				tt.directPlaysYesterday,
 				tt.nodeDisplay,
 			)
 			assertContainsAll(t, text, tt.wantContains)

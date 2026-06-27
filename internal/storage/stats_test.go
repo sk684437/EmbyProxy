@@ -25,12 +25,17 @@ func TestLogPlaybackConcurrentSessionDedup(t *testing.T) {
 		Node:       Node{Name: "alpha"},
 		RequestIP:  "127.0.0.1",
 		Headers:    headers,
-		Status:     http.StatusOK,
+		Status:     http.StatusNoContent,
 		RespHeader: http.Header{"Content-Length": {"1024"}},
 		IsPlayback: true,
 		Mode:       "proxy",
-		RequestURL: "/emby/videos/1/stream",
-		Method:     http.MethodGet,
+		RequestURL: "/emby/Sessions/Playing",
+		Method:     http.MethodPost,
+		RequestBody: []byte(`{
+			"ItemId": "1",
+			"SessionId": "session-1",
+			"PlaySessionId": "play-session-1"
+		}`),
 	}
 
 	const calls = 20
@@ -88,12 +93,17 @@ func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
 		Node:       Node{Name: "alpha"},
 		RequestIP:  "127.0.0.1",
 		Headers:    headers,
-		Status:     http.StatusOK,
+		Status:     http.StatusNoContent,
 		RespHeader: http.Header{"Content-Length": {"1024"}},
 		IsPlayback: true,
 		Mode:       "proxy",
-		RequestURL: "/emby/videos/1/stream",
-		Method:     http.MethodGet,
+		RequestURL: "/emby/Sessions/Playing",
+		Method:     http.MethodPost,
+		RequestBody: []byte(`{
+			"ItemId": "1",
+			"SessionId": "session-1",
+			"PlaySessionId": "play-session-1"
+		}`),
 		OccurredAt: base,
 	}
 	if err := store.LogPlayback(ctx, input); err != nil {
@@ -101,30 +111,41 @@ func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
 	}
 	traffic := input
 	traffic.TrafficOnly = true
+	traffic.RequestURL = "/emby/videos/1/stream"
+	traffic.Method = http.MethodGet
 	traffic.InboundBytes = 1024
 	traffic.OutboundBytes = 1024
 	if err := store.LogPlaybackTraffic(ctx, traffic); err != nil {
 		t.Fatalf("LogPlaybackTraffic(first) error = %v", err)
 	}
-	input.RequestURL = "/emby/videos/1/stream.m3u8"
+	input.RequestURL = "/emby/Sessions/Playing"
+	input.Method = http.MethodPost
 	input.OccurredAt = base + int64(time.Minute/time.Millisecond)
 	if err := store.LogPlayback(ctx, input); err != nil {
 		t.Fatalf("LogPlayback(repeat) error = %v", err)
 	}
 	traffic = input
 	traffic.TrafficOnly = true
+	traffic.RequestURL = "/emby/videos/1/stream.m3u8"
+	traffic.Method = http.MethodGet
 	traffic.InboundBytes = 1024
 	traffic.OutboundBytes = 1024
 	if err := store.LogPlaybackTraffic(ctx, traffic); err != nil {
 		t.Fatalf("LogPlaybackTraffic(repeat) error = %v", err)
 	}
-	input.RequestURL = "/emby/videos/2/stream"
+	input.RequestBody = []byte(`{
+		"ItemId": "2",
+		"SessionId": "session-1",
+		"PlaySessionId": "play-session-2"
+	}`)
 	input.OccurredAt = base + int64(2*time.Minute/time.Millisecond)
 	if err := store.LogPlayback(ctx, input); err != nil {
 		t.Fatalf("LogPlayback(second media) error = %v", err)
 	}
 	traffic = input
 	traffic.TrafficOnly = true
+	traffic.RequestURL = "/emby/videos/2/stream"
+	traffic.Method = http.MethodGet
 	traffic.InboundBytes = 1024
 	traffic.OutboundBytes = 1024
 	if err := store.LogPlaybackTraffic(ctx, traffic); err != nil {
@@ -157,17 +178,18 @@ func TestLogPlaybackDedupsSessionsAcrossMediaPlaySessionIDs(t *testing.T) {
 		Node:       Node{Name: "alpha"},
 		RequestIP:  "127.0.0.1",
 		Headers:    headers,
-		Status:     http.StatusPartialContent,
+		Status:     http.StatusNoContent,
 		IsPlayback: true,
 		Mode:       "proxy",
-		Method:     http.MethodGet,
+		Method:     http.MethodPost,
+		RequestURL: "/emby/Sessions/Playing",
 		OccurredAt: base,
 	}
-	for idx, reqURL := range []string{
-		"/emby/videos/3197063/original.mkv?DeviceId=device-1&MediaSourceId=mediasource_3197063&PlaySessionId=play-session-1",
-		"/emby/videos/3407103/original.mkv?DeviceId=device-1&MediaSourceId=mediasource_3407141&PlaySessionId=play-session-2",
+	for idx, body := range [][]byte{
+		[]byte(`{"ItemId":"3197063","SessionId":"session-1","MediaSourceId":"mediasource_3197063","PlaySessionId":"play-session-1"}`),
+		[]byte(`{"ItemId":"3407103","SessionId":"session-1","MediaSourceId":"mediasource_3407141","PlaySessionId":"play-session-2"}`),
 	} {
-		input.RequestURL = reqURL
+		input.RequestBody = body
 		input.OccurredAt = base + int64(idx)*int64(time.Minute/time.Millisecond)
 		if err := store.LogPlayback(ctx, input); err != nil {
 			t.Fatalf("LogPlayback(%d) error = %v", idx, err)
@@ -196,11 +218,14 @@ func TestLogPlaybackDedupsSessionWithoutDeviceOrSessionID(t *testing.T) {
 		Node:       Node{Name: "alpha"},
 		RequestIP:  "198.51.100.42",
 		Headers:    http.Header{"User-Agent": {"test-client"}},
-		Status:     http.StatusPartialContent,
+		Status:     http.StatusNoContent,
 		IsPlayback: true,
 		Mode:       "proxy",
-		Method:     http.MethodGet,
-		RequestURL: "/emby/smartstrm?item_id=item-a&media_id=source-a",
+		Method:     http.MethodPost,
+		RequestURL: "/emby/Sessions/Playing",
+		RequestBody: []byte(`{
+			"ItemId": "item-a"
+		}`),
 		OccurredAt: base,
 	}
 	for idx := 0; idx < 9; idx++ {
@@ -223,7 +248,7 @@ func TestLogPlaybackDedupsSessionWithoutDeviceOrSessionID(t *testing.T) {
 	}
 }
 
-func TestLogPlaybackDoesNotCountHeadResponseBytes(t *testing.T) {
+func TestLogPlaybackDoesNotCountHeadAsPlay(t *testing.T) {
 	ctx := context.Background()
 	store := newStatsTestStore(t)
 
@@ -250,8 +275,46 @@ func TestLogPlaybackDoesNotCountHeadResponseBytes(t *testing.T) {
 	`, "alpha", "head-client").Scan(&plays, &sessions, &bytes); err != nil {
 		t.Fatalf("query play_stats error = %v", err)
 	}
-	if plays != 1 || sessions != 1 || bytes != 0 {
-		t.Fatalf("play_stats = plays %d sessions %d bytes %d; want 1, 1, 0", plays, sessions, bytes)
+	if plays != 0 || sessions != 0 || bytes != 0 {
+		t.Fatalf("play_stats = plays %d sessions %d bytes %d; want 0, 0, 0", plays, sessions, bytes)
+	}
+}
+
+func TestLogPlaybackDoesNotCountPlaybackInfoAsPlayOrTraffic(t *testing.T) {
+	ctx := context.Background()
+	store := newStatsTestStore(t)
+
+	input := PlaybackInput{
+		Node:       Node{Name: "alpha"},
+		RequestIP:  "127.0.0.1",
+		Headers:    http.Header{"User-Agent": {"info-client"}},
+		Status:     http.StatusOK,
+		IsPlayback: true,
+		Mode:       "proxy",
+		RequestURL: "/emby/Items/1/PlaybackInfo",
+		Method:     http.MethodGet,
+	}
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback() error = %v", err)
+	}
+	traffic := input
+	traffic.TrafficOnly = true
+	traffic.InboundBytes = 256
+	traffic.OutboundBytes = 512
+	if err := store.LogPlaybackTraffic(ctx, traffic); err != nil {
+		t.Fatalf("LogPlaybackTraffic() error = %v", err)
+	}
+
+	var plays, sessions, bytes int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0), COALESCE(SUM(sessions), 0), COALESCE(SUM(bytes), 0)
+		FROM play_stats
+		WHERE node = ? AND client = ?
+	`, "alpha", "info-client").Scan(&plays, &sessions, &bytes); err != nil {
+		t.Fatalf("query play_stats error = %v", err)
+	}
+	if plays != 0 || sessions != 0 || bytes != 0 {
+		t.Fatalf("play_stats = plays %d sessions %d bytes %d; want 0, 0, 0", plays, sessions, bytes)
 	}
 }
 
@@ -284,16 +347,16 @@ func TestLogPlaybackTrafficCountsReadAndWriteBytes(t *testing.T) {
 		t.Fatalf("LogPlaybackTraffic() error = %v", err)
 	}
 
-	var bytes, inboundBytes, outboundBytes int64
+	var plays, bytes, inboundBytes, outboundBytes int64
 	if err := store.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(bytes), 0), COALESCE(SUM(inbound_bytes), 0), COALESCE(SUM(outbound_bytes), 0)
+		SELECT COALESCE(SUM(plays), 0), COALESCE(SUM(bytes), 0), COALESCE(SUM(inbound_bytes), 0), COALESCE(SUM(outbound_bytes), 0)
 		FROM play_stats
 		WHERE node = ? AND client = ?
-	`, "alpha", "range-client").Scan(&bytes, &inboundBytes, &outboundBytes); err != nil {
+	`, "alpha", "range-client").Scan(&plays, &bytes, &inboundBytes, &outboundBytes); err != nil {
 		t.Fatalf("query play_stats error = %v", err)
 	}
-	if bytes != 1280 || inboundBytes != 768 || outboundBytes != 512 {
-		t.Fatalf("play_stats bytes = %d inbound = %d outbound = %d; want 1280, 768, 512", bytes, inboundBytes, outboundBytes)
+	if plays != 0 || bytes != 1280 || inboundBytes != 768 || outboundBytes != 512 {
+		t.Fatalf("play_stats plays = %d bytes = %d inbound = %d outbound = %d; want 0, 1280, 768, 512", plays, bytes, inboundBytes, outboundBytes)
 	}
 }
 
@@ -310,12 +373,17 @@ func TestLogPlaybackAsyncDoesNotWaitForDatabase(t *testing.T) {
 		Node:       Node{Name: "async"},
 		RequestIP:  "127.0.0.1",
 		Headers:    http.Header{"User-Agent": {"async-client"}},
-		Status:     http.StatusOK,
+		Status:     http.StatusNoContent,
 		RespHeader: http.Header{"Content-Length": {"2048"}},
 		IsPlayback: true,
 		Mode:       "proxy",
-		RequestURL: "/emby/videos/2/stream",
-		Method:     http.MethodGet,
+		RequestURL: "/emby/Sessions/Playing",
+		Method:     http.MethodPost,
+		RequestBody: []byte(`{
+			"ItemId": "2",
+			"SessionId": "session-async",
+			"PlaySessionId": "play-session-async"
+		}`),
 	}
 
 	started := time.Now()
@@ -356,12 +424,17 @@ func TestLogPlaybackAsyncUsesOccurredAtForStatsTime(t *testing.T) {
 		Node:       Node{Name: "occurred"},
 		RequestIP:  "127.0.0.1",
 		Headers:    http.Header{"User-Agent": {"time-client"}},
-		Status:     http.StatusOK,
+		Status:     http.StatusNoContent,
 		RespHeader: http.Header{"Content-Length": {"4096"}},
 		IsPlayback: true,
 		Mode:       "proxy",
-		RequestURL: "/emby/videos/3/stream",
-		Method:     http.MethodGet,
+		RequestURL: "/emby/Sessions/Playing",
+		Method:     http.MethodPost,
+		RequestBody: []byte(`{
+			"ItemId": "3",
+			"SessionId": "session-occurred",
+			"PlaySessionId": "play-session-occurred"
+		}`),
 		OccurredAt: occurredAt,
 	}
 	if ok := store.LogPlaybackAsync(input); !ok {
@@ -522,12 +595,17 @@ func TestGetRangeStatsUsesMinuteBucketsAndPrune(t *testing.T) {
 		Node:       Node{Name: "node1"},
 		RequestIP:  "127.0.0.1",
 		Headers:    http.Header{"User-Agent": {"client1"}},
-		Status:     http.StatusOK,
+		Status:     http.StatusNoContent,
 		RespHeader: http.Header{"Content-Length": {"1024"}},
 		IsPlayback: true,
 		Mode:       "proxy",
-		RequestURL: "/emby/videos/1/stream",
-		Method:     http.MethodGet,
+		RequestURL: "/emby/Sessions/Playing",
+		Method:     http.MethodPost,
+		RequestBody: []byte(`{
+			"ItemId": "1",
+			"SessionId": "session-1",
+			"PlaySessionId": "play-session-1"
+		}`),
 		OccurredAt: t1,
 	}
 	if err := store.LogPlayback(ctx, input1); err != nil {
@@ -557,7 +635,11 @@ func TestGetRangeStatsUsesMinuteBucketsAndPrune(t *testing.T) {
 	inputDirect := input1
 	inputDirect.OccurredAt = t1 + 30*1000
 	inputDirect.Mode = "direct"
-	inputDirect.RequestURL = "/emby/videos/2/stream"
+	inputDirect.RequestBody = []byte(`{
+		"ItemId": "2",
+		"SessionId": "session-1",
+		"PlaySessionId": "play-session-2"
+	}`)
 	if err := store.LogPlayback(ctx, inputDirect); err != nil {
 		t.Fatalf("LogPlayback direct failed: %v", err)
 	}
