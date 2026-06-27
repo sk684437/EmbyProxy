@@ -41,7 +41,12 @@ type PlaybackInput struct {
 const (
 	playbackAsyncQueueSize    = 4096
 	playbackAsyncWriteTimeout = 5 * time.Second
+	playbackBucketMillis      = int64(time.Minute / time.Millisecond)
 )
+
+type sqlExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
 
 func (s *Store) startPlaybackAsyncLogger() {
 	if s == nil {
@@ -219,6 +224,13 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		`, day, nodeName, client, playInc, sessInc, errInc, now); err != nil {
 			return err
 		}
+		mode := in.Mode
+		if mode == "" {
+			mode = "proxy"
+		}
+		if err := upsertPlayBucket(ctx, tx, now, nodeName, client, mode, playInc, 0, 0, 0, sessInc, errInc); err != nil {
+			return err
+		}
 	}
 	if playInc > 0 {
 		key := "stats:proxyPlays:" + day
@@ -283,7 +295,10 @@ func (s *Store) LogPlaybackTraffic(ctx context.Context, in PlaybackInput) error 
 			outbound_bytes = outbound_bytes + excluded.outbound_bytes,
 			updated_at = MAX(play_stats.updated_at, excluded.updated_at)
 	`, day, nodeName, client, totalBytes, inboundBytes, outboundBytes, now)
-	return err
+	if err != nil {
+		return err
+	}
+	return upsertPlayBucket(ctx, s.db, now, nodeName, client, "proxy", 0, totalBytes, inboundBytes, outboundBytes, 0, 0)
 }
 
 func playbackOccurredAt(in PlaybackInput) int64 {
@@ -483,4 +498,82 @@ func cutString(value string, max int) string {
 		return value[:max]
 	}
 	return value
+}
+
+func (s *Store) GetRangeStats(ctx context.Context, startTime, endTime int64) ([]PlayStat, int64, int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT node, client, SUM(plays), SUM(bytes), SUM(inbound_bytes), SUM(outbound_bytes), SUM(sessions), SUM(errors)
+		FROM play_buckets
+		WHERE bucket_start >= ? AND bucket_start < ?
+		GROUP BY node, client
+	`, startTime, endTime)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+
+	out := []PlayStat{}
+	for rows.Next() {
+		var stat PlayStat
+		if err := rows.Scan(&stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
+			return nil, 0, 0, err
+		}
+		stat.Bytes = stat.InboundBytes + stat.OutboundBytes
+		out = append(out, stat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, err
+	}
+
+	var proxyPlays, directPlays int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0) FROM play_buckets
+		WHERE bucket_start >= ? AND bucket_start < ? AND mode = 'proxy' AND plays > 0
+	`, startTime, endTime).Scan(&proxyPlays)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0) FROM play_buckets
+		WHERE bucket_start >= ? AND bucket_start < ? AND mode = 'direct' AND plays > 0
+	`, startTime, endTime).Scan(&directPlays)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+
+	return out, proxyPlays, directPlays, nil
+}
+
+func (s *Store) PrunePlayBuckets(ctx context.Context, keepDays int) error {
+	if keepDays <= 0 {
+		keepDays = 3
+	}
+	cutoff := playbackBucketStart(time.Now().AddDate(0, 0, -keepDays).UnixMilli())
+	_, err := s.db.ExecContext(ctx, `DELETE FROM play_buckets WHERE bucket_start < ?`, cutoff)
+	return err
+}
+
+func upsertPlayBucket(ctx context.Context, exec sqlExecer, occurredAt int64, node, client, mode string, plays, bytes, inboundBytes, outboundBytes, sessions, errors int64) error {
+	bucketStart := playbackBucketStart(occurredAt)
+	_, err := exec.ExecContext(ctx, `
+		INSERT INTO play_buckets (bucket_start, node, client, mode, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(bucket_start, node, client, mode) DO UPDATE SET
+			plays = plays + excluded.plays,
+			bytes = bytes + excluded.bytes,
+			inbound_bytes = inbound_bytes + excluded.inbound_bytes,
+			outbound_bytes = outbound_bytes + excluded.outbound_bytes,
+			sessions = sessions + excluded.sessions,
+			errors = errors + excluded.errors,
+			updated_at = MAX(play_buckets.updated_at, excluded.updated_at)
+	`, bucketStart, node, client, mode, plays, bytes, inboundBytes, outboundBytes, sessions, errors, occurredAt)
+	return err
+}
+
+func playbackBucketStart(ts int64) int64 {
+	if ts <= 0 {
+		return 0
+	}
+	return ts - ts%playbackBucketMillis
 }

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,25 +49,40 @@ func (s *Service) Send(ctx context.Context, token, chat, text string) bool {
 	return res.StatusCode >= 200 && res.StatusCode < 300
 }
 
-var digestTimestampsRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?`)
-var digestDateRe = regexp.MustCompile(`· \d{4}-\d{2}-\d{2}`)
-
 const reportHeaderPrefix = "📊 Emby 播放日报 · "
 
 func (s *Service) BuildReport(ctx context.Context, now int64) (string, error) {
-	day := storage.BeijingDate(now)
-	stats, err := s.store.GetTodayStats(ctx)
+	cfg, err := s.store.GetTGConfig(ctx)
 	if err != nil {
 		return "", err
 	}
-	today := summarize(stats.Today)
-	yesterday := summarize(stats.Yesterday)
-	kv := s.store.KV()
-	proxyPlaysToday := int64Value(mustKVGet(ctx, kv, "stats:proxyPlays:"+day))
-	directPlaysToday := int64Value(mustKVGet(ctx, kv, "stats:directPlays:"+day))
-	yesterdayDate := previousReportDate(now)
-	proxyPlaysYesterday := int64Value(mustKVGet(ctx, kv, "stats:proxyPlays:"+yesterdayDate))
-	directPlaysYesterday := int64Value(mustKVGet(ctx, kv, "stats:directPlays:"+yesterdayDate))
+	reportTime := cfg.ReportTime
+	if reportTime == "" {
+		reportTime = "00:00"
+	}
+	var hh, mm int
+	_, _ = fmt.Sscanf(reportTime, "%d:%d", &hh, &mm)
+
+	tNow := localtime.FromUnixMilli(now)
+	tReportToday := time.Date(tNow.Year(), tNow.Month(), tNow.Day(), hh, mm, 0, 0, localtime.Location())
+
+	endTime := tReportToday.UnixMilli()
+	startTime := tReportToday.AddDate(0, 0, -1).UnixMilli()
+	yesterdayEndTime := startTime
+	yesterdayStartTime := tReportToday.AddDate(0, 0, -2).UnixMilli()
+
+	todayStats, proxyPlaysToday, directPlaysToday, err := s.store.GetRangeStats(ctx, startTime, endTime)
+	if err != nil {
+		return "", err
+	}
+	yesterdayStats, proxyPlaysYesterday, directPlaysYesterday, err := s.store.GetRangeStats(ctx, yesterdayStartTime, yesterdayEndTime)
+	if err != nil {
+		return "", err
+	}
+
+	today := summarize(todayStats)
+	yesterday := summarize(yesterdayStats)
+
 	nodeDisplay := map[string]string{}
 	if nodes, err := s.store.ListNodes(ctx, "admin"); err == nil {
 		for _, node := range nodes {
@@ -79,6 +93,7 @@ func (s *Service) BuildReport(ctx context.Context, now int64) (string, error) {
 			nodeDisplay[strings.ToLower(node.Name)] = display
 		}
 	}
+	day := tReportToday.Format("2006-01-02")
 	return buildReportText(day, today, yesterday, proxyPlaysToday, directPlaysToday, proxyPlaysYesterday, directPlaysYesterday, nodeDisplay), nil
 }
 
@@ -97,46 +112,22 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 	if hhmm < reportTime {
 		return nil
 	}
-	reportMaxPerDay := cfg.ReportMaxPerDay
-	if reportMaxPerDay <= 0 {
-		reportMaxPerDay = 1
-	}
-	reportEveryMin := cfg.ReportEveryMin
-	if reportEveryMin < 60 {
-		reportEveryMin = 1440
-	}
-	reportChangeOnly := cfg.ReportChangeOnly
 	kv := s.store.KV()
 	cntKey := "report:cnt:" + day
-	lastKey := "report:last:" + day
-	digestKey := "report:digest:" + day
 	cnt := int64Value(mustKVGet(ctx, kv, cntKey))
-	if int(cnt) >= reportMaxPerDay {
-		return nil
-	}
-	lastTS := int64Value(mustKVGet(ctx, kv, lastKey))
-	if lastTS > 0 && now-lastTS < int64(reportEveryMin)*60000 {
+	if cnt >= 1 {
 		return nil
 	}
 	text, err := s.BuildReport(ctx, now)
 	if err != nil {
 		return err
 	}
-	digestText := digestTimestampsRe.ReplaceAllString(text, "")
-	digestText = digestDateRe.ReplaceAllString(digestText, "")
-	digest := storage.FNV1a(digestText)
-	prevDigest := mustKVGet(ctx, kv, digestKey)
-	if reportChangeOnly && prevDigest == digest {
-		return nil
-	}
 	if !s.Send(ctx, cfg.Token, cfg.Chat, text) {
 		s.log.Warn("telegram", "daily report send failed", map[string]any{"event": "dailyReportSendFailed", "day": day})
 		return nil
 	}
-	_ = kv.Put(ctx, cntKey, strconv.FormatInt(cnt+1, 10))
-	_ = kv.Put(ctx, lastKey, strconv.FormatInt(now, 10))
-	_ = kv.Put(ctx, digestKey, digest)
-	s.log.Debug("telegram", "daily report sent", map[string]any{"event": "dailyReportSent", "day": day, "count": cnt + 1})
+	_ = kv.Put(ctx, cntKey, "1")
+	s.log.Debug("telegram", "daily report sent", map[string]any{"event": "dailyReportSent", "day": day, "count": 1})
 	return nil
 }
 
@@ -166,10 +157,6 @@ func buildReportText(day string, today, yesterday summary, proxyPlaysToday, dire
 	lines = append(lines, "", "📱 客户端排行:")
 	lines = append(lines, rankEntries(today.ClientMap, today.Plays, nil)...)
 	return strings.Join(lines, "\n")
-}
-
-func previousReportDate(now int64) string {
-	return localtime.FromUnixMilli(now).AddDate(0, 0, -1).Format("2006-01-02")
 }
 
 func buildEmptyDayReport(day string, yesterday summary, proxyPlaysYesterday, directPlaysYesterday int64, nodeDisplay map[string]string) string {

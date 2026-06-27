@@ -308,6 +308,9 @@ func (h *Handler) CleanupTTLMaps() {
 	if imageCache := h.ensureImageCache(context.Background()); imageCache != nil {
 		imageCache.CleanupExpired()
 	}
+	if h.store != nil {
+		_ = h.store.PrunePlayBuckets(context.Background(), 3)
+	}
 }
 
 func (h *Handler) ResetNodeRoutingState(uid, name string) {

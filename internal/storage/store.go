@@ -136,6 +136,20 @@ func (s *Store) InitSchema(ctx context.Context) error {
 			updated_at INTEGER NOT NULL,
 			PRIMARY KEY(day, node, client)
 		);
+		CREATE TABLE IF NOT EXISTS play_buckets (
+			bucket_start INTEGER NOT NULL,
+			node TEXT NOT NULL,
+			client TEXT NOT NULL,
+			mode TEXT NOT NULL,
+			plays INTEGER DEFAULT 0,
+			bytes INTEGER DEFAULT 0,
+			inbound_bytes INTEGER DEFAULT 0,
+			outbound_bytes INTEGER DEFAULT 0,
+			sessions INTEGER DEFAULT 0,
+			errors INTEGER DEFAULT 0,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(bucket_start, node, client, mode)
+		);
 	`)
 	if err != nil {
 		return err

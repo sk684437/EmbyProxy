@@ -937,14 +937,11 @@ func (h *Handler) tgSet(ctx context.Context, body map[string]any) map[string]any
 		reportTime = "00:00"
 	}
 	cfg := storage.TGConfig{
-		Enabled:          validators.ToBool(cfgMap["enabled"]),
-		Token:            strings.TrimSpace(asString(cfgMap["token"])),
-		Chat:             strings.TrimSpace(asString(cfgMap["chat"])),
-		ReportEnabled:    boolValue(cfgMap, "reportEnabled", validators.ToBool(cfgMap["enabled"])),
-		ReportTime:       reportTime,
-		ReportEveryMin:   clamp(intValue(cfgMap["reportEveryMin"], 1440), 60, 1440),
-		ReportMaxPerDay:  clamp(intValue(cfgMap["reportMaxPerDay"], 1), 1, 24),
-		ReportChangeOnly: cfgMap["reportChangeOnly"] != false,
+		Enabled:       validators.ToBool(cfgMap["enabled"]),
+		Token:         strings.TrimSpace(asString(cfgMap["token"])),
+		Chat:          strings.TrimSpace(asString(cfgMap["chat"])),
+		ReportEnabled: boolValue(cfgMap, "reportEnabled", validators.ToBool(cfgMap["enabled"])),
+		ReportTime:    reportTime,
 	}
 	if err := h.store.SaveTGConfig(ctx, cfg); err != nil {
 		return fail(err.Error())

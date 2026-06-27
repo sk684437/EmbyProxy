@@ -507,3 +507,127 @@ func newStatsTestStore(t *testing.T) *Store {
 	})
 	return store
 }
+
+func TestGetRangeStatsUsesMinuteBucketsAndPrune(t *testing.T) {
+	ctx := context.Background()
+	store := newStatsTestStore(t)
+
+	now := time.Now().UnixMilli()
+	t1 := playbackBucketStart(now-12*60*60*1000) + 10*1000
+	t2 := t1 + 20*1000
+	tOld := playbackBucketStart(now - 4*24*60*60*1000)
+
+	// 1. Log a play at t1
+	input1 := PlaybackInput{
+		Node:       Node{Name: "node1"},
+		RequestIP:  "127.0.0.1",
+		Headers:    http.Header{"User-Agent": {"client1"}},
+		Status:     http.StatusOK,
+		RespHeader: http.Header{"Content-Length": {"1024"}},
+		IsPlayback: true,
+		Mode:       "proxy",
+		RequestURL: "/emby/videos/1/stream",
+		Method:     http.MethodGet,
+		OccurredAt: t1,
+	}
+	if err := store.LogPlayback(ctx, input1); err != nil {
+		t.Fatalf("LogPlayback at t1 failed: %v", err)
+	}
+
+	// 2. Log a traffic update in the same minute bucket.
+	input2 := PlaybackInput{
+		Node:          Node{Name: "node1"},
+		RequestIP:     "127.0.0.1",
+		Headers:       http.Header{"User-Agent": {"client1"}},
+		Status:        http.StatusOK,
+		IsPlayback:    true,
+		Mode:          "proxy",
+		RequestURL:    "/emby/videos/1/stream",
+		Method:        http.MethodGet,
+		OccurredAt:    t2,
+		TrafficOnly:   true,
+		InboundBytes:  500,
+		OutboundBytes: 700,
+	}
+	if err := store.LogPlaybackTraffic(ctx, input2); err != nil {
+		t.Fatalf("LogPlaybackTraffic at t2 failed: %v", err)
+	}
+
+	// 3. Log a direct play in the same minute bucket.
+	inputDirect := input1
+	inputDirect.OccurredAt = t1 + 30*1000
+	inputDirect.Mode = "direct"
+	inputDirect.RequestURL = "/emby/videos/2/stream"
+	if err := store.LogPlayback(ctx, inputDirect); err != nil {
+		t.Fatalf("LogPlayback direct failed: %v", err)
+	}
+
+	var proxyBucketRows int
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM play_buckets
+		WHERE bucket_start = ? AND node = ? AND client = ? AND mode = ?
+	`, playbackBucketStart(t1), "node1", "client1", "proxy").Scan(&proxyBucketRows); err != nil {
+		t.Fatalf("query play_buckets error = %v", err)
+	}
+	if proxyBucketRows != 1 {
+		t.Fatalf("proxy bucket rows = %d; want 1", proxyBucketRows)
+	}
+
+	// 4. Log an old play at tOld
+	inputOld := input1
+	inputOld.OccurredAt = tOld
+	inputOld.Node.Name = "node-old"
+	if err := store.LogPlayback(ctx, inputOld); err != nil {
+		t.Fatalf("LogPlayback at tOld failed: %v", err)
+	}
+
+	// Verify stats in range [now - 24h, now + 1h)
+	stats, proxyPlays, directPlays, err := store.GetRangeStats(ctx, now-24*60*60*1000, now+60*60*1000)
+	if err != nil {
+		t.Fatalf("GetRangeStats failed: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 stat group, got %d: %+v", len(stats), stats)
+	}
+	if stats[0].Node != "node1" || stats[0].Client != "client1" {
+		t.Fatalf("unexpected stat: %+v", stats[0])
+	}
+	if stats[0].Plays != 2 || stats[0].InboundBytes != 500 || stats[0].OutboundBytes != 700 || stats[0].Sessions != 1 {
+		t.Fatalf("unexpected metrics in stat: %+v", stats[0])
+	}
+	if proxyPlays != 1 || directPlays != 1 {
+		t.Fatalf("unexpected proxy/direct plays: proxy=%d, direct=%d", proxyPlays, directPlays)
+	}
+
+	// Verify old stat is visible in full range query
+	allStats, _, _, err := store.GetRangeStats(ctx, now-50*24*60*60*1000, now+60*60*1000)
+	if err != nil {
+		t.Fatalf("GetRangeStats for full range failed: %v", err)
+	}
+	foundOld := false
+	for _, s := range allStats {
+		if s.Node == "node-old" {
+			foundOld = true
+			break
+		}
+	}
+	if !foundOld {
+		t.Fatalf("old play stat not found in full range query")
+	}
+
+	// Prune old buckets (keep last 3 days)
+	if err := store.PrunePlayBuckets(ctx, 3); err != nil {
+		t.Fatalf("PrunePlayBuckets failed: %v", err)
+	}
+
+	// Verify old stat is gone, but new stat remains
+	allStatsAfter, _, _, err := store.GetRangeStats(ctx, now-50*24*60*60*1000, now+60*60*1000)
+	if err != nil {
+		t.Fatalf("GetRangeStats after prune failed: %v", err)
+	}
+	for _, s := range allStatsAfter {
+		if s.Node == "node-old" {
+			t.Fatalf("old play stat still exists after prune")
+		}
+	}
+}

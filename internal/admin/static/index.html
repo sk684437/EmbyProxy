@@ -252,7 +252,6 @@ tr:last-child td{border-bottom:0}
 .inline-check,.toggle-row{min-height:48px;display:flex;align-items:center;gap:10px}
 .toggle-row[hidden]{display:none}
 #tgForm .toggle-row{border:1px solid var(--line);border-radius:16px;background:rgba(255,253,248,.78);padding:0 12px}
-#tgForm #tg-changeOnlyRow{align-self:end}
 .inline-check input,.toggle-row input{width:19px;height:19px;accent-color:var(--pine);cursor:pointer;flex-shrink:0}
 .inline-check label,.toggle-row label{font-size:13px;color:var(--ink-2);font-weight:900;cursor:pointer}
 .identity-policy{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px;align-items:center;border:1px solid var(--line);background:linear-gradient(135deg,var(--pine-wash),var(--paper));border-radius:24px;padding:16px}
@@ -999,20 +998,6 @@ tr:last-child td{border-bottom:0}
         <input type="time" id="tg-reportTime" value="08:00"/>
       </div>
 
-      <div class="form-group tg-report-setting">
-        <label for="tg-reportEveryMin">推送间隔 <span class="form-hint">单位：分钟，最小 60</span></label>
-        <input type="number" id="tg-reportEveryMin" value="1440" min="60" max="1440"/>
-      </div>
-
-      <div class="form-group tg-report-setting">
-        <label for="tg-reportMaxPerDay">每日最多推送次数</label>
-        <input type="number" id="tg-reportMaxPerDay" value="1" min="1" max="24" oninput="syncTgChangeOnlyVisibility()"/>
-      </div>
-
-      <div class="toggle-row tg-report-setting" id="tg-changeOnlyRow" hidden>
-        <input type="checkbox" id="tg-changeOnly" checked/>
-        <label for="tg-changeOnly">仅内容变化时推送</label>
-      </div>
     </div>
     <div class="form-actions">
       <button class="btn" onclick="testTg()">测试推送</button>
@@ -1882,9 +1867,6 @@ async function openTgModal() {
     document.getElementById('tg-chat').value = c.chat || '';
     document.getElementById('tg-reportEnabled').checked = c.reportEnabled === true;
     document.getElementById('tg-reportTime').value = c.reportTime || '08:00';
-    document.getElementById('tg-reportEveryMin').value = c.reportEveryMin || 1440;
-    document.getElementById('tg-reportMaxPerDay').value = c.reportMaxPerDay || 1;
-    document.getElementById('tg-changeOnly').checked = c.reportChangeOnly !== false;
   }
   syncTgNotificationControls();
   showModal('tgModal');
@@ -1901,29 +1883,20 @@ function syncTgReportControls() {
   document.querySelectorAll('.tg-report-setting').forEach(el => {
     el.hidden = !reportEnabled;
   });
-  ['tg-reportTime', 'tg-reportEveryMin', 'tg-reportMaxPerDay', 'tg-changeOnly'].forEach(id => {
+  ['tg-reportTime'].forEach(id => {
     document.getElementById(id).disabled = !reportEnabled;
   });
-  syncTgChangeOnlyVisibility();
 }
 
-function syncTgChangeOnlyVisibility() {
-  const reportEnabled = document.getElementById('tg-reportEnabled').checked;
-  const maxPerDay = parseInt(document.getElementById('tg-reportMaxPerDay').value, 10);
-  document.getElementById('tg-changeOnlyRow').hidden = !reportEnabled || !Number.isFinite(maxPerDay) || maxPerDay <= 1;
-}
+
 
 async function saveTg() {
-  const reportMaxPerDay = parseInt(document.getElementById('tg-reportMaxPerDay').value, 10);
   const config = {
     enabled: document.getElementById('tg-enabled').checked,
     token: document.getElementById('tg-token').value.trim(),
     chat: document.getElementById('tg-chat').value.trim(),
     reportEnabled: document.getElementById('tg-reportEnabled').checked,
     reportTime: document.getElementById('tg-reportTime').value,
-    reportEveryMin: parseInt(document.getElementById('tg-reportEveryMin').value, 10),
-    reportMaxPerDay,
-    reportChangeOnly: reportMaxPerDay > 1 ? document.getElementById('tg-changeOnly').checked : true,
   };
   const r = await api('tg.set', { config });
   if (r.ok) { closeTgModal(); toast('TG 配置已保存', 'ok'); }

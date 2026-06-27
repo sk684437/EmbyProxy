@@ -2,7 +2,6 @@ package telegram
 
 import (
 	"context"
-	"embyproxy/internal/localtime"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/storage"
 	"io"
@@ -10,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestBuildReportText(t *testing.T) {
@@ -157,16 +155,6 @@ func assertContainsNone(t *testing.T, text string, values []string) {
 		if strings.Contains(text, value) {
 			t.Fatalf("report text should not contain %q\n%s", value, text)
 		}
-	}
-}
-
-func TestPreviousReportDateUsesCalendarDayAroundDST(t *testing.T) {
-	t.Setenv(localtime.EnvName, "America/New_York")
-	loc := localtime.Location()
-	now := time.Date(2026, 3, 9, 0, 30, 0, 0, loc).UnixMilli()
-
-	if got := previousReportDate(now); got != "2026-03-08" {
-		t.Fatalf("previousReportDate() = %q, want %q", got, "2026-03-08")
 	}
 }
 
