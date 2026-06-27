@@ -165,7 +165,7 @@ func TestLogPlaybackCountsDistinctMediaWithinSession(t *testing.T) {
 	}
 }
 
-func TestLogPlaybackDedupsSessionsAcrossMediaPlaySessionIDs(t *testing.T) {
+func TestLogPlaybackDedupsSessionsAcrossMediaSessionIDs(t *testing.T) {
 	ctx := context.Background()
 	store := newStatsTestStore(t)
 
@@ -187,7 +187,7 @@ func TestLogPlaybackDedupsSessionsAcrossMediaPlaySessionIDs(t *testing.T) {
 	}
 	for idx, body := range [][]byte{
 		[]byte(`{"ItemId":"3197063","SessionId":"session-1","MediaSourceId":"mediasource_3197063","PlaySessionId":"play-session-1"}`),
-		[]byte(`{"ItemId":"3407103","SessionId":"session-1","MediaSourceId":"mediasource_3407141","PlaySessionId":"play-session-2"}`),
+		[]byte(`{"ItemId":"3407103","SessionId":"session-2","MediaSourceId":"mediasource_3407141","PlaySessionId":"play-session-2"}`),
 	} {
 		input.RequestBody = body
 		input.OccurredAt = base + int64(idx)*int64(time.Minute/time.Millisecond)
@@ -202,6 +202,154 @@ func TestLogPlaybackDedupsSessionsAcrossMediaPlaySessionIDs(t *testing.T) {
 		FROM play_stats
 		WHERE node = ? AND client = ?
 	`, "alpha", "session-client").Scan(&plays, &sessions); err != nil {
+		t.Fatalf("query play_stats error = %v", err)
+	}
+	if plays != 2 || sessions != 1 {
+		t.Fatalf("play_stats = plays %d sessions %d; want 2, 1", plays, sessions)
+	}
+}
+
+func TestLogPlaybackDedupsSessionAcrossMidnight(t *testing.T) {
+	ctx := context.Background()
+	store := newStatsTestStore(t)
+
+	headers := http.Header{
+		"User-Agent":       {"night-client"},
+		"X-Emby-Device-Id": {"device-1"},
+	}
+	base := time.Date(2026, 6, 8, 23, 58, 0, 0, localtime.Location()).UnixMilli()
+	input := PlaybackInput{
+		Node:       Node{Name: "alpha"},
+		RequestIP:  "127.0.0.1",
+		Headers:    headers,
+		Status:     http.StatusNoContent,
+		IsPlayback: true,
+		Mode:       "proxy",
+		Method:     http.MethodPost,
+		RequestURL: "/emby/Sessions/Playing",
+		OccurredAt: base,
+	}
+	for idx, body := range [][]byte{
+		[]byte(`{"ItemId":"night-1","SessionId":"session-1","PlaySessionId":"play-session-1"}`),
+		[]byte(`{"ItemId":"night-2","SessionId":"session-2","PlaySessionId":"play-session-2"}`),
+	} {
+		input.RequestBody = body
+		input.OccurredAt = base + int64(idx)*5*int64(time.Minute/time.Millisecond)
+		if err := store.LogPlayback(ctx, input); err != nil {
+			t.Fatalf("LogPlayback(%d) error = %v", idx, err)
+		}
+	}
+
+	var plays, sessions int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0), COALESCE(SUM(sessions), 0)
+		FROM play_stats
+		WHERE node = ? AND client = ?
+	`, "alpha", "night-client").Scan(&plays, &sessions); err != nil {
+		t.Fatalf("query play_stats error = %v", err)
+	}
+	if plays != 2 || sessions != 1 {
+		t.Fatalf("play_stats = plays %d sessions %d; want 2, 1", plays, sessions)
+	}
+}
+
+func TestLogPlaybackProgressRefreshesSessionDedupWindow(t *testing.T) {
+	ctx := context.Background()
+	store := newStatsTestStore(t)
+
+	headers := http.Header{
+		"User-Agent":       {"progress-client"},
+		"X-Emby-Device-Id": {"device-1"},
+	}
+	base := time.Date(2026, 6, 8, 9, 0, 0, 0, localtime.Location()).UnixMilli()
+	input := PlaybackInput{
+		Node:        Node{Name: "alpha"},
+		RequestIP:   "127.0.0.1",
+		Headers:     headers,
+		Status:      http.StatusNoContent,
+		IsPlayback:  true,
+		Mode:        "proxy",
+		Method:      http.MethodPost,
+		RequestURL:  "/emby/Sessions/Playing",
+		RequestBody: []byte(`{"ItemId":"item-1","SessionId":"session-1","PlaySessionId":"play-session-1"}`),
+		OccurredAt:  base,
+	}
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(start) error = %v", err)
+	}
+
+	input.RequestURL = "/emby/Sessions/Playing/Progress"
+	input.RequestBody = []byte(`{"ItemId":"item-1","SessionId":"session-1","PlaySessionId":"play-session-1"}`)
+	input.OccurredAt = base + int64(20*time.Minute/time.Millisecond)
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(progress) error = %v", err)
+	}
+
+	input.RequestURL = "/emby/Sessions/Playing"
+	input.RequestBody = []byte(`{"ItemId":"item-2","SessionId":"session-2","PlaySessionId":"play-session-2"}`)
+	input.OccurredAt = base + int64(21*time.Minute/time.Millisecond)
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(next) error = %v", err)
+	}
+
+	var plays, sessions int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0), COALESCE(SUM(sessions), 0)
+		FROM play_stats
+		WHERE node = ? AND client = ?
+	`, "alpha", "progress-client").Scan(&plays, &sessions); err != nil {
+		t.Fatalf("query play_stats error = %v", err)
+	}
+	if plays != 2 || sessions != 1 {
+		t.Fatalf("play_stats = plays %d sessions %d; want 2, 1", plays, sessions)
+	}
+}
+
+func TestLogPlaybackStoppedRefreshesSessionDedupWindow(t *testing.T) {
+	ctx := context.Background()
+	store := newStatsTestStore(t)
+
+	headers := http.Header{
+		"User-Agent":       {"stopped-client"},
+		"X-Emby-Device-Id": {"device-1"},
+	}
+	base := time.Date(2026, 6, 8, 9, 0, 0, 0, localtime.Location()).UnixMilli()
+	input := PlaybackInput{
+		Node:        Node{Name: "alpha"},
+		RequestIP:   "127.0.0.1",
+		Headers:     headers,
+		Status:      http.StatusNoContent,
+		IsPlayback:  true,
+		Mode:        "proxy",
+		Method:      http.MethodPost,
+		RequestURL:  "/emby/Sessions/Playing",
+		RequestBody: []byte(`{"ItemId":"item-1","SessionId":"session-1","PlaySessionId":"play-session-1"}`),
+		OccurredAt:  base,
+	}
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(start) error = %v", err)
+	}
+
+	input.RequestURL = "/emby/Sessions/Playing/Stopped"
+	input.RequestBody = []byte(`{"ItemId":"item-1","SessionId":"session-1","PlaySessionId":"play-session-1"}`)
+	input.OccurredAt = base + int64(30*time.Minute/time.Millisecond)
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(stopped) error = %v", err)
+	}
+
+	input.RequestURL = "/emby/Sessions/Playing"
+	input.RequestBody = []byte(`{"ItemId":"item-2","SessionId":"session-2","PlaySessionId":"play-session-2"}`)
+	input.OccurredAt = base + int64(31*time.Minute/time.Millisecond)
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(next) error = %v", err)
+	}
+
+	var plays, sessions int64
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(plays), 0), COALESCE(SUM(sessions), 0)
+		FROM play_stats
+		WHERE node = ? AND client = ?
+	`, "alpha", "stopped-client").Scan(&plays, &sessions); err != nil {
 		t.Fatalf("query play_stats error = %v", err)
 	}
 	if plays != 2 || sessions != 1 {

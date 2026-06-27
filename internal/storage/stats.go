@@ -178,21 +178,36 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		return err
 	}
 
-	if countable {
-		sessKey := strings.Join([]string{day, nodeName, client, ip, userID, deviceID, sessionID}, "|")
+	sessionActivity := method == http.MethodPost && playbackStatusSuccessful(in.Status) && (sessionEvent == "progress" || sessionEvent == "stopped")
+	if countable || sessionActivity {
+		sessKey := playbackSessionKey(nodeName, client, ip, userID, deviceID)
 		var lastTS int64
-		err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_sessions WHERE k = ?`, sessKey).Scan(&lastTS)
-		if err == nil && now-lastTS < 15*60*1000 {
-			sessInc = 0
-		} else if err != nil && err != sql.ErrNoRows {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO play_sessions (k, day, last_ts) VALUES (?, ?, ?)
-			ON CONFLICT(k) DO UPDATE SET last_ts = MAX(play_sessions.last_ts, excluded.last_ts)
-		`, sessKey, day, now)
-		if err != nil {
-			return err
+		if countable {
+			err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_sessions WHERE k = ?`, sessKey).Scan(&lastTS)
+			if err == nil && now-lastTS < 15*60*1000 {
+				sessInc = 0
+			} else if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO play_sessions (k, day, last_ts) VALUES (?, ?, ?)
+				ON CONFLICT(k) DO UPDATE SET
+					day = CASE WHEN excluded.last_ts >= play_sessions.last_ts THEN excluded.day ELSE play_sessions.day END,
+					last_ts = MAX(play_sessions.last_ts, excluded.last_ts)
+			`, sessKey, day, now)
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE play_sessions SET
+					day = CASE WHEN ? >= last_ts THEN ? ELSE day END,
+					last_ts = MAX(last_ts, ?)
+				WHERE k = ?
+			`, now, day, now, sessKey)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	playInc := int64(0)
@@ -468,6 +483,10 @@ func playbackStartMediaKey(reqURL *url.URL, body map[string]any) string {
 		return "source:" + cutString(id, 128)
 	}
 	return playbackMediaKey(reqURL)
+}
+
+func playbackSessionKey(nodeName, client, ip, userID, deviceID string) string {
+	return strings.Join([]string{nodeName, client, ip, userID, deviceID}, "|")
 }
 
 func playbackMediaKey(reqURL *url.URL) string {
