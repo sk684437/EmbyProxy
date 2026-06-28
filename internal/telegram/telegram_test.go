@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"embyproxy/internal/localtime"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/storage"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildReportText(t *testing.T) {
@@ -44,10 +46,11 @@ func TestBuildReportText(t *testing.T) {
 			nodeDisplay: map[string]string{"alpha": "朋友服"},
 			wantContains: []string{
 				"📊 Emby 播放日报 · 2026-06-08",
-				"▶ 播放 12 次 · 8 会话 · 2 节点",
+				"🕒 统计周期\n   2026-06-07 08:00 至 2026-06-08 08:00\n\n▶ 播放 12 次 · 8 会话 · 2 节点",
 				"入站 10.00 GB | 出站 9.00 GB",
-				"⚠️ 5xx: 1 次",
-				"📈 较昨日  播放 +5 · 会话 +3 · 流量 +5.00 GB",
+				"⚠️ 播放出错：1 次",
+				"📈 较前一日  播放 +5 · 会话 +3 · 播放出错 +1",
+				"入站 +5.00 GB | 出站 +5.00 GB",
 				"🏆 节点排行:",
 				"1. 朋友服 — 8 次 (66.7%)",
 				"2. beta — 4 次 (33.3%)",
@@ -56,10 +59,10 @@ func TestBuildReportText(t *testing.T) {
 				"2. Emby Theater — 4 次 (33.3%)",
 				"3. Unknown — 2 次 (16.7%)",
 			},
-			wantNotContains: []string{"302直链"},
+			wantNotContains: []string{"5xx", "302直链"},
 		},
 		{
-			name:  "empty day with yesterday",
+			name:  "empty day with previous activity",
 			day:   "2026-06-10",
 			today: summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
 			yesterday: summary{
@@ -74,19 +77,11 @@ func TestBuildReportText(t *testing.T) {
 			nodeDisplay: map[string]string{"alpha": "朋友服"},
 			wantContains: []string{
 				"📊 Emby 播放日报 · 2026-06-10",
-				"📭 今日无播放",
-				"📅 昨日回顾",
-				"▶ 播放 22 次 · 18 会话 · 2 节点",
-				"入站 10.00 GB | 出站 9.23 GB",
-				"⚠️ 5xx: 2 次",
-				"🏆 节点排行:",
-				"1. 朋友服 — 15 次 (68.2%)",
-				"2. beta — 7 次 (31.8%)",
-				"📱 客户端排行:",
-				"1. Infuse/8.0 — 14 次 (63.6%)",
-				"2. Emby Theater — 8 次 (36.4%)",
+				"🕒 统计周期\n   2026-06-09 08:00 至 2026-06-10 08:00\n\n📭 本周期无播放",
+				"📈 较前一日  播放 -22 · 会话 -18",
+				"入站 -10.00 GB | 出站 -9.23 GB",
 			},
-			wantNotContains: []string{"📈 较昨日", "302直链"},
+			wantNotContains: []string{"昨日", "前一日回顾", "22 次 · 18 会话", "播放出错", "节点排行", "客户端排行", "302直链"},
 		},
 		{
 			name: "normal day without errors or yesterday",
@@ -97,23 +92,62 @@ func TestBuildReportText(t *testing.T) {
 				NodeMap:   map[string]int64{"a": 5},
 				ClientMap: map[string]int64{"b": 5},
 			},
-			yesterday:       summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			yesterday: summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			wantContains: []string{
+				"📈 较前一日  播放 +5 · 会话 +3",
+				"入站 0B | 出站 0B",
+			},
 			wantNotContains: []string{"5xx", "较昨日"},
+		},
+		{
+			name: "normal day with only error delta",
+			day:  "2026-06-08",
+			today: summary{
+				Plays:         12,
+				Sessions:      8,
+				InboundBytes:  10_000_000_000,
+				OutboundBytes: 9_000_000_000,
+				Errors:        2,
+				NodeMap:       map[string]int64{"a": 12},
+				ClientMap:     map[string]int64{"b": 12},
+			},
+			yesterday: summary{
+				Plays:         12,
+				Sessions:      8,
+				InboundBytes:  10_000_000_000,
+				OutboundBytes: 9_000_000_000,
+				NodeMap:       map[string]int64{"a": 12},
+				ClientMap:     map[string]int64{"b": 12},
+			},
+			wantContains: []string{
+				"⚠️ 播放出错：2 次",
+				"📈 较前一日  播放 0 · 会话 0 · 播放出错 +2",
+				"入站 0B | 出站 0B",
+			},
+			wantNotContains: []string{"5xx", "无变化"},
 		},
 		{
 			name:            "empty day without yesterday",
 			day:             "2026-06-10",
 			today:           summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
 			yesterday:       summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
-			wantContains:    []string{"📭 今日无播放"},
-			wantNotContains: []string{"昨日"},
+			wantContains:    []string{"📭 本周期无播放"},
+			wantNotContains: []string{"昨日", "上一周期", "较前一日", "无变化"},
+		},
+		{
+			name:            "empty day ignores previous errors only",
+			day:             "2026-06-10",
+			today:           summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			yesterday:       summary{Errors: 2, NodeMap: map[string]int64{"a": 0}, ClientMap: map[string]int64{"b": 0}},
+			wantContains:    []string{"📭 本周期无播放"},
+			wantNotContains: []string{"较前一日", "无变化", "播放出错", "节点排行", "客户端排行"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			text := buildReportText(
-				tt.day,
+				testReportPeriod(tt.day),
 				tt.today,
 				tt.yesterday,
 				tt.nodeDisplay,
@@ -121,6 +155,39 @@ func TestBuildReportText(t *testing.T) {
 			assertContainsAll(t, text, tt.wantContains)
 			assertContainsNone(t, text, tt.wantNotContains)
 		})
+	}
+
+	t.Run("uses configured report window", func(t *testing.T) {
+		ctx := context.Background()
+		store := newTelegramTestStore(t)
+		if err := store.SaveTGConfig(ctx, storage.TGConfig{ReportTime: "08:00"}); err != nil {
+			t.Fatalf("SaveTGConfig() error = %v", err)
+		}
+
+		service := New(store, logging.New("silent", false))
+		now := time.Date(2026, 6, 28, 8, 30, 0, 0, localtime.Location()).UnixMilli()
+		text, err := service.BuildReport(ctx, now)
+		if err != nil {
+			t.Fatalf("BuildReport() error = %v", err)
+		}
+
+		assertContainsAll(t, text, []string{
+			"📊 Emby 播放日报 · 2026-06-28",
+			"🕒 统计周期\n   2026-06-27 08:00 至 2026-06-28 08:00\n\n",
+		})
+		assertContainsNone(t, text, []string{"对比周期", "北京时间"})
+	})
+}
+
+func testReportPeriod(day string) reportPeriod {
+	end, err := time.Parse("2006-01-02 15:04", day+" 08:00")
+	if err != nil {
+		panic(err)
+	}
+	start := end.AddDate(0, 0, -1)
+	return reportPeriod{
+		Day:          day,
+		CurrentRange: formatReportRange(start, end),
 	}
 }
 

@@ -67,9 +67,11 @@ func (s *Service) BuildReport(ctx context.Context, now int64) (string, error) {
 	tReportToday := time.Date(tNow.Year(), tNow.Month(), tNow.Day(), hh, mm, 0, 0, localtime.Location())
 
 	endTime := tReportToday.UnixMilli()
-	startTime := tReportToday.AddDate(0, 0, -1).UnixMilli()
+	tReportStart := tReportToday.AddDate(0, 0, -1)
+	tPreviousStart := tReportToday.AddDate(0, 0, -2)
+	startTime := tReportStart.UnixMilli()
 	yesterdayEndTime := startTime
-	yesterdayStartTime := tReportToday.AddDate(0, 0, -2).UnixMilli()
+	yesterdayStartTime := tPreviousStart.UnixMilli()
 
 	todayStats, _, _, err := s.store.GetRangeStats(ctx, startTime, endTime)
 	if err != nil {
@@ -93,8 +95,11 @@ func (s *Service) BuildReport(ctx context.Context, now int64) (string, error) {
 			nodeDisplay[strings.ToLower(node.Name)] = display
 		}
 	}
-	day := tReportToday.Format("2006-01-02")
-	return buildReportText(day, today, yesterday, nodeDisplay), nil
+	period := reportPeriod{
+		Day:          tReportToday.Format("2006-01-02"),
+		CurrentRange: formatReportRange(tReportStart, tReportToday),
+	}
+	return buildReportText(period, today, yesterday, nodeDisplay), nil
 }
 
 func (s *Service) CheckAndSendReport(ctx context.Context) error {
@@ -131,25 +136,28 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 	return nil
 }
 
-func buildReportText(day string, today, yesterday summary, nodeDisplay map[string]string) string {
+type reportPeriod struct {
+	Day          string
+	CurrentRange string
+}
+
+func buildReportText(period reportPeriod, today, yesterday summary, nodeDisplay map[string]string) string {
 	if today.Plays == 0 {
-		return buildEmptyDayReport(day, yesterday, nodeDisplay)
+		return buildEmptyDayReport(period, today, yesterday)
 	}
 	lines := []string{
-		reportHeaderPrefix + day,
+		reportHeaderPrefix + period.Day,
+		"",
+		"🕒 统计周期",
+		"   " + period.CurrentRange,
 		"",
 		fmt.Sprintf("▶ 播放 %d 次 · %d 会话 · %d 节点", today.Plays, today.Sessions, len(today.NodeMap)),
 	}
 	lines = append(lines, fmt.Sprintf("   入站 %s | 出站 %s", formatBytes(today.InboundBytes), formatBytes(today.OutboundBytes)))
 	if today.Errors > 0 {
-		lines = append(lines, fmt.Sprintf("   ⚠️ 5xx: %d 次", today.Errors))
+		lines = append(lines, fmt.Sprintf("   ⚠️ 播放出错：%d 次", today.Errors))
 	}
-	if yesterday.Plays > 0 {
-		lines = append(lines, "", fmt.Sprintf("📈 较昨日  播放 %s · 会话 %s · 流量 %s",
-			formatSignedInt(today.Plays-yesterday.Plays),
-			formatSignedInt(today.Sessions-yesterday.Sessions),
-			formatSignedBytes(today.OutboundBytes-yesterday.OutboundBytes)))
-	}
+	lines = appendComparison(lines, today, yesterday, true)
 	lines = append(lines, "", "🏆 节点排行:")
 	lines = append(lines, rankEntries(today.NodeMap, today.Plays, nodeDisplay)...)
 	lines = append(lines, "", "📱 客户端排行:")
@@ -157,29 +165,49 @@ func buildReportText(day string, today, yesterday summary, nodeDisplay map[strin
 	return strings.Join(lines, "\n")
 }
 
-func buildEmptyDayReport(day string, yesterday summary, nodeDisplay map[string]string) string {
+func buildEmptyDayReport(period reportPeriod, today, yesterday summary) string {
 	lines := []string{
-		reportHeaderPrefix + day,
+		reportHeaderPrefix + period.Day,
 		"",
-		"📭 今日无播放",
+		"🕒 统计周期",
+		"   " + period.CurrentRange,
+		"",
+		"📭 本周期无播放",
 	}
-	if yesterday.Plays > 0 {
-		lines = append(lines, "", "📅 昨日回顾")
-		lines = append(lines, fmt.Sprintf("▶ 播放 %d 次 · %d 会话 · %d 节点", yesterday.Plays, yesterday.Sessions, len(yesterday.NodeMap)))
-		lines = append(lines, fmt.Sprintf("   入站 %s | 出站 %s", formatBytes(yesterday.InboundBytes), formatBytes(yesterday.OutboundBytes)))
-		if yesterday.Errors > 0 {
-			lines = append(lines, fmt.Sprintf("   ⚠️ 5xx: %d 次", yesterday.Errors))
-		}
-		if len(yesterday.NodeMap) > 0 {
-			lines = append(lines, "", "🏆 节点排行:")
-			lines = append(lines, rankEntries(yesterday.NodeMap, yesterday.Plays, nodeDisplay)...)
-		}
-		if len(yesterday.ClientMap) > 0 {
-			lines = append(lines, "", "📱 客户端排行:")
-			lines = append(lines, rankEntries(yesterday.ClientMap, yesterday.Plays, nil)...)
-		}
+	if hasPlaybackActivity(yesterday) {
+		lines = appendComparison(lines, today, yesterday, false)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func hasPlaybackActivity(s summary) bool {
+	return s.Plays != 0 || s.Sessions != 0 || s.InboundBytes != 0 || s.OutboundBytes != 0
+}
+
+func appendComparison(lines []string, current, previous summary, includeErrors bool) []string {
+	lines = append(lines, "")
+	if current.Plays == previous.Plays &&
+		current.Sessions == previous.Sessions &&
+		current.InboundBytes == previous.InboundBytes &&
+		current.OutboundBytes == previous.OutboundBytes &&
+		(!includeErrors || current.Errors == previous.Errors) {
+		return append(lines, "📈 较前一日  无变化")
+	}
+	comparison := fmt.Sprintf("📈 较前一日  播放 %s · 会话 %s",
+		formatSignedInt(current.Plays-previous.Plays),
+		formatSignedInt(current.Sessions-previous.Sessions))
+	if includeErrors && current.Errors != previous.Errors {
+		comparison += fmt.Sprintf(" · 播放出错 %s", formatSignedInt(current.Errors-previous.Errors))
+	}
+	return append(lines,
+		comparison,
+		fmt.Sprintf("   入站 %s | 出站 %s",
+			formatSignedBytes(current.InboundBytes-previous.InboundBytes),
+			formatSignedBytes(current.OutboundBytes-previous.OutboundBytes)))
+}
+
+func formatReportRange(start, end time.Time) string {
+	return start.Format("2006-01-02 15:04") + " 至 " + end.Format("2006-01-02 15:04")
 }
 
 func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
