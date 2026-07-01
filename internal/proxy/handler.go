@@ -392,7 +392,7 @@ func (h *Handler) handleNode(ctx context.Context, r *http.Request, node storage.
 			SetAccessLogField(ctx, "responseReadyMs", responseReadyMs)
 			MarkAccessLogResponseBodyStart(ctx, time.Now())
 			logFields := responseReadyLogFields(ctx, res, map[string]any{"event": "upstreamReady", "id": requestID, "node": nodeName, "target": logging.FormatTarget(target), "status": status, "responseReadyMs": responseReadyMs})
-			h.log.Debug("proxy", "response ready", logFields)
+			h.logResponseReady("proxy", status, logFields)
 			setAccessLogTargetFields(ctx, logFields)
 			return res, nil
 		}
@@ -1294,6 +1294,17 @@ func (h *Handler) makeDirectCandidates(rawPath, rawQuery string) []string {
 func (h *Handler) closeBody(res *http.Response) {
 	if res != nil && res.Body != nil {
 		_ = res.Body.Close()
+	}
+}
+
+func (h *Handler) logResponseReady(scope string, status int, fields map[string]any) {
+	switch {
+	case status >= http.StatusInternalServerError:
+		h.log.Error(scope, "response ready", fields)
+	case status >= http.StatusBadRequest:
+		h.log.Warn(scope, "response ready", fields)
+	default:
+		h.log.Debug(scope, "response ready", fields)
 	}
 }
 

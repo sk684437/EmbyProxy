@@ -232,9 +232,20 @@ func requestMiddleware(log *logging.Logger, store *storage.Store, next http.Hand
 			meta["event"] = "requestFinished"
 			meta["method"] = r.Method
 			meta["uri"] = requestURI
-			log.Info("access", "request finished", meta)
+			logRequestFinished(log, sw.status, meta)
 		}
 	})
+}
+
+func logRequestFinished(log *logging.Logger, status int, meta map[string]any) {
+	switch {
+	case status >= http.StatusInternalServerError:
+		log.Error("access", "request finished", meta)
+	case status >= http.StatusBadRequest:
+		log.Warn("access", "request finished", meta)
+	default:
+		log.Info("access", "request finished", meta)
+	}
 }
 
 func trustsProxy(ctx context.Context, store *storage.Store) bool {
