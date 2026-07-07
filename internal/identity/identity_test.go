@@ -20,14 +20,14 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 	yamby := Snapshot{
 		Profile:       DefaultProfile,
 		ClientName:    "Yamby",
-		ClientVersion: "2.0.4.3",
+		ClientVersion: "2.0.4.6",
 		DeviceName:    "Android",
 		DeviceID:      testYambyDeviceID,
 	}
 	hillsWindows := Snapshot{
 		Profile:       "hills_windows",
 		ClientName:    "Hills Windows",
-		ClientVersion: "1.2.4",
+		ClientVersion: "1.3.1",
 		DeviceName:    "DESKTOP-TEST",
 		Language:      "zh-cn",
 		DeviceID:      testHillsWindowsID,
@@ -35,7 +35,7 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 	hillsAndroid := Snapshot{
 		Profile:       "hills_android",
 		ClientName:    "Hills",
-		ClientVersion: "1.7.1",
+		ClientVersion: "1.7.2",
 		DeviceName:    "diting",
 		Language:      "zh-cn",
 		DeviceID:      testHillsAndroidID,
@@ -50,13 +50,13 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 			name: "yamby rewrites emby auth without user id field",
 			raw:  `Emby UserId=user-from-auth,Client="Source Client",Device="Source Device",DeviceId="source-device-id",Version="0.0.0-test"`,
 			snap: yamby,
-			want: `Emby Client=Yamby,Device=Android,DeviceId=` + testYambyDeviceID + `,Version=2.0.4.3`,
+			want: `Emby Client=Yamby,Device=Android,DeviceId=` + testYambyDeviceID + `,Version=2.0.4.6`,
 		},
 		{
 			name: "yamby rewrites media browser auth without token field",
 			raw:  testSourceMediaBrowserAuth,
 			snap: yamby,
-			want: `Emby Client=Yamby,Device=Android,DeviceId=` + testYambyDeviceID + `,Version=2.0.4.3`,
+			want: `Emby Client=Yamby,Device=Android,DeviceId=` + testYambyDeviceID + `,Version=2.0.4.6`,
 		},
 		{
 			name: "keeps non emby bearer authorization",
@@ -74,13 +74,13 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 			name: "hills windows keeps quoted fields",
 			raw:  `Emby Client=Original, Device=SOURCE-PC, DeviceId=original, Version=1.0`,
 			snap: hillsWindows,
-			want: `Emby Client="Hills Windows", Device="DESKTOP-TEST", DeviceId="` + testHillsWindowsID + `", Version="1.2.4"`,
+			want: `Emby Client="Hills Windows", Device="DESKTOP-TEST", DeviceId="` + testHillsWindowsID + `", Version="1.3.1"`,
 		},
 		{
 			name: "hills android rewrites media browser auth without token field",
 			raw:  testSourceMediaBrowserAuth,
 			snap: hillsAndroid,
-			want: `Emby Client="Hills", Device="diting", DeviceId="` + testHillsAndroidID + `", Version="1.7.1"`,
+			want: `Emby Client="Hills", Device="diting", DeviceId="` + testHillsAndroidID + `", Version="1.7.2"`,
 		},
 	}
 
