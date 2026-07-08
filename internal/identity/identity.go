@@ -24,7 +24,6 @@ type Profile struct {
 	ClientName     string
 	ClientVersion  string
 	DeviceName     string
-	Language       string
 	DeviceIDLength int
 	DeviceIDFormat string
 	UserAgent      string
@@ -36,7 +35,6 @@ type Snapshot struct {
 	ClientName    string `json:"clientName"`
 	ClientVersion string `json:"clientVersion"`
 	DeviceName    string `json:"deviceName"`
-	Language      string `json:"language,omitempty"`
 	DeviceID      string `json:"deviceId"`
 	ShortID       string `json:"shortId"`
 	UserAgent     string `json:"userAgent"`
@@ -77,7 +75,6 @@ var Profiles = map[string]Profile{
 		ClientName:     "Hills",
 		ClientVersion:  "1.7.2",
 		DeviceName:     "diting",
-		Language:       "zh-cn",
 		DeviceIDLength: 16,
 		UserAgent:      "Hills/1.7.2 (android; 15)",
 	},
@@ -86,7 +83,6 @@ var Profiles = map[string]Profile{
 		Label:          "Hills Windows",
 		ClientName:     "Hills Windows",
 		ClientVersion:  "1.3.1",
-		Language:       "zh-cn",
 		DeviceIDLength: 32,
 		UserAgent:      "Hills Windows/1.3.1 (windows; 19041.vb_release.191206-1406)",
 	},
@@ -138,7 +134,6 @@ func (m *Manager) snapshotLocked(profile string) Snapshot {
 		ClientName:    selected.ClientName,
 		ClientVersion: selected.ClientVersion,
 		DeviceName:    state.DeviceName,
-		Language:      selected.Language,
 		DeviceID:      state.DeviceID,
 		ShortID:       shortID,
 		UserAgent:     selected.UserAgent,
@@ -267,7 +262,7 @@ func applyHillsQueryIdentityToURL(u *url.URL, headers http.Header, snap Snapshot
 	q.Set("X-Emby-Device-Name", snap.DeviceName)
 	q.Set("X-Emby-Device-Id", snap.DeviceID)
 	q.Set("X-Emby-Client-Version", snap.ClientVersion)
-	q.Set("X-Emby-Language", snap.Language)
+	q.Set("X-Emby-Language", hillsLanguageForURL(u))
 	if token != "" {
 		q.Set("X-Emby-Token", token)
 		if headers != nil {
@@ -275,6 +270,26 @@ func applyHillsQueryIdentityToURL(u *url.URL, headers http.Header, snap Snapshot
 		}
 	}
 	u.RawQuery = q.Encode()
+}
+
+func hillsLanguageForURL(u *url.URL) string {
+	if isUsersRootPath(u) {
+		return "en-us"
+	}
+	return "zh-cn"
+}
+
+func isUsersRootPath(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i, part := range parts {
+		if strings.EqualFold(part, "users") {
+			return i+2 == len(parts) && strings.TrimSpace(parts[i+1]) != ""
+		}
+	}
+	return false
 }
 
 func applyHillsResourceIdentityToURL(u *url.URL, headers http.Header, snap Snapshot) {

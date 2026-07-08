@@ -29,7 +29,6 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 		ClientName:    "Hills Windows",
 		ClientVersion: "1.3.1",
 		DeviceName:    "DESKTOP-TEST",
-		Language:      "zh-cn",
 		DeviceID:      testHillsWindowsID,
 	}
 	hillsAndroid := Snapshot{
@@ -37,7 +36,6 @@ func TestRewriteMediaBrowserAuthorization(t *testing.T) {
 		ClientName:    "Hills",
 		ClientVersion: "1.7.2",
 		DeviceName:    "diting",
-		Language:      "zh-cn",
 		DeviceID:      testHillsAndroidID,
 	}
 	tests := []struct {
@@ -570,12 +568,12 @@ func TestApplyToURLKeepsHillsQueryIdentityBehavior(t *testing.T) {
 	manager.ApplyToURL(u, headers, "hills_windows")
 
 	got := u.RawQuery
-	for _, want := range []string{"X-Emby-Authorization=", "Client%3D%22Hills+Windows%22", "X-Emby-Client=Hills+Windows", "X-Emby-Language=zh-cn", "X-Emby-Token=source-token"} {
+	for _, want := range []string{"X-Emby-Authorization=", "Client%3D%22Hills+Windows%22", "X-Emby-Client=Hills+Windows", "X-Emby-Language=en-us", "X-Emby-Token=source-token"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("RawQuery = %q, want to contain %q", got, want)
 		}
 	}
-	for _, reject := range []string{"Synthetic+Client", "SYNTHETIC-PC", "en-us"} {
+	for _, reject := range []string{"Synthetic+Client", "SYNTHETIC-PC"} {
 		if strings.Contains(got, reject) {
 			t.Fatalf("RawQuery = %q, want to reject %q", got, reject)
 		}
@@ -584,7 +582,7 @@ func TestApplyToURLKeepsHillsQueryIdentityBehavior(t *testing.T) {
 	for key, want := range map[string]string{
 		"X-Emby-Device-Name": hillsWindows.DeviceName,
 		"X-Emby-Device-Id":   hillsWindows.DeviceID,
-		"X-Emby-Language":    "zh-cn",
+		"X-Emby-Language":    "en-us",
 		"X-Emby-Token":       "source-token",
 	} {
 		if got := query.Get(key); got != want {
@@ -596,6 +594,25 @@ func TestApplyToURLKeepsHillsQueryIdentityBehavior(t *testing.T) {
 	}
 	if !strings.Contains(got, "tag=v1") {
 		t.Fatalf("RawQuery = %q, want to preserve non-identity query", got)
+	}
+}
+
+func TestApplyToURLKeepsHillsDefaultLanguageOutsideUsersRoot(t *testing.T) {
+	manager := NewManager(nil)
+	headers := http.Header{"X-Emby-Token": {"header-token"}}
+	u, err := url.Parse("https://example.test/emby/Users/1/Items?X-Emby-Language=en-us&tag=v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manager.ApplyToURL(u, headers, "hills_windows")
+
+	query := u.Query()
+	if got := query.Get("X-Emby-Language"); got != "zh-cn" {
+		t.Fatalf("X-Emby-Language = %q, want zh-cn", got)
+	}
+	if got := query.Get("tag"); got != "v1" {
+		t.Fatalf("tag = %q, want v1", got)
 	}
 }
 
@@ -614,7 +631,7 @@ func TestApplyToURLNormalizesHillsQueryIdentity(t *testing.T) {
 		"X-Emby-Device-Name":    snap.DeviceName,
 		"X-Emby-Device-Id":      snap.DeviceID,
 		"X-Emby-Client-Version": snap.ClientVersion,
-		"X-Emby-Language":       "zh-cn",
+		"X-Emby-Language":       "en-us",
 		"X-Emby-Token":          "header-token",
 		"DeviceId":              "bare-device",
 		"DeviceName":            "bare-name",
