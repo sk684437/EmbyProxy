@@ -509,7 +509,11 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		return h.handleMediaProxy(ctx, r, node, parsed, targetURL, body, env, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI, reqOrigin, clientIP)
 	}
 	outboundHeaders := cloneHeader(r.Header)
-	applyIdentityToURL(h.ids, targetURL, outboundHeaders, node)
+	if isStatic {
+		applyIdentityToResourceURL(h.ids, targetURL, outboundHeaders, node)
+	} else {
+		applyIdentityToURL(h.ids, targetURL, outboundHeaders, node)
+	}
 	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "proxy-target", "targetUrl": targetURL.String()})
 	headers := cloneHeader(outboundHeaders)
 	stripProxyMetadataHeaders(headers)

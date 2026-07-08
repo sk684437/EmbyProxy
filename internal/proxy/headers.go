@@ -158,6 +158,18 @@ func applyIdentityToURL(ids *identity.Manager, u *url.URL, headers http.Header, 
 	}
 }
 
+func applyIdentityToResourceURL(ids *identity.Manager, u *url.URL, headers http.Header, node storage.Node) {
+	if node.Impersonate {
+		ids.ApplyToResourceURL(u, headers, node.ImpersonateProfile)
+	}
+}
+
+func applyIdentityToDirectURL(ids *identity.Manager, u *url.URL, headers http.Header, node storage.Node) {
+	if node.Impersonate {
+		ids.ApplyToDirectURL(u, headers, node.ImpersonateProfile)
+	}
+}
+
 func buildCleanProxyHeaders(ids *identity.Manager, raw http.Header, targetURL *url.URL, node storage.Node, env config.ProxyEnv, streaming bool) http.Header {
 	h := cloneHeader(raw)
 	stripProxyMetadataHeaders(h)

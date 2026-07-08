@@ -90,7 +90,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 			continue
 		}
 		outboundHeaders := cloneHeader(r.Header)
-		applyIdentityToURL(h.ids, u, outboundHeaders, node)
+		applyIdentityToDirectURL(h.ids, u, outboundHeaders, node)
 		targetURL := u.String()
 		if protectDirect && !h.directURLAllowed(ctx, node, u, env) {
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-forbidden", "targetUrl": targetURL, "outboundHeaders": http.Header{}})

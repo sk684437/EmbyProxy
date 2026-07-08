@@ -207,6 +207,126 @@ func TestOutboundHeaderBuildersPreserveClientCompressionAndHopByHopHeaders(t *te
 	}
 }
 
+func TestOutboundHeaderBuildersNormalizeHillsHeadersAndKeepOrdinaryHeaders(t *testing.T) {
+	targetURL, err := url.Parse("https://upstream.example/emby/Items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := identity.NewManager(nil)
+	node := storage.Node{Impersonate: true, ImpersonateProfile: "hills_windows"}
+	raw := http.Header{
+		"Accept":                  {"application/json"},
+		"Accept-Encoding":         {"gzip, br"},
+		"Authorization":           {`Emby Token="source-token", Client="Original", Device="SOURCE-PC", DeviceId="source-device", Version="0.0.0-test"`},
+		"Range":                   {"bytes=0-"},
+		"User-Agent":              {"Original/0.0.0-test"},
+		"X-Emby-Client":           {"Original"},
+		"X-Emby-Client-Version":   {"0.0.0-test"},
+		"X-Emby-Device-Id":        {"source-device"},
+		"X-Emby-Device-Name":      {"SOURCE-PC"},
+		"X-MediaBrowser-Client":   {"Original"},
+		"X-MediaBrowser-DeviceId": {"source-media-device"},
+	}
+	tests := []struct {
+		name  string
+		build func(http.Header) http.Header
+	}{
+		{
+			name: "clean proxy",
+			build: func(raw http.Header) http.Header {
+				return buildCleanProxyHeaders(ids, raw, targetURL, node, config.ProxyEnv{}, true)
+			},
+		},
+		{
+			name: "direct",
+			build: func(raw http.Header) http.Header {
+				return buildDirectOutboundHeaders(ids, raw, targetURL, config.ProxyEnv{}, node, "normal")
+			},
+		},
+		{
+			name: "websocket",
+			build: func(raw http.Header) http.Header {
+				return buildWebSocketHeaders(ids, raw, targetURL, node)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := tt.build(raw)
+			snap := ids.Snapshot("hills_windows")
+			if got := headers.Get("User-Agent"); got != snap.UserAgent {
+				t.Fatalf("User-Agent = %q, want %q", got, snap.UserAgent)
+			}
+			if got := headers.Get("X-Emby-Authorization"); !strings.Contains(got, `Client="Hills Windows"`) || !strings.Contains(got, `DeviceId="`+snap.DeviceID+`"`) {
+				t.Fatalf("X-Emby-Authorization = %q, want Hills identity", got)
+			}
+			if got := headers.Get("X-Emby-Token"); got != "source-token" {
+				t.Fatalf("X-Emby-Token = %q, want source-token", got)
+			}
+			if got := headers.Get("Accept"); got != "application/json" {
+				t.Fatalf("Accept = %q, want application/json", got)
+			}
+			if got := headers.Get("Accept-Encoding"); got != "gzip, br" {
+				t.Fatalf("Accept-Encoding = %q, want gzip, br", got)
+			}
+			if tt.name != "websocket" {
+				if got := headers.Get("Range"); got != "bytes=0-" {
+					t.Fatalf("Range = %q, want bytes=0-", got)
+				}
+			}
+			assertHeaderKeysAbsent(t, headers,
+				"Authorization", "X-Authorization",
+				"X-Emby-Client", "X-MediaBrowser-Client",
+			)
+		})
+	}
+}
+
+func TestWebSocketHandshakeAddsHillsIdentityQuery(t *testing.T) {
+	base, err := url.Parse("wss://upstream.example/emby")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := identity.NewManager(nil)
+	node := storage.Node{Impersonate: true, ImpersonateProfile: "hills_windows"}
+	targetURL := resolveTargetURL(base, "/Sessions/123/WebSocket", "x_emby_device_id=source-device&X-Emby-Language=en-us&tag=v1")
+	outboundHeaders := http.Header{
+		"Authorization": {`Emby Token="source-token", Client="Original", Device="SOURCE-PC", DeviceId="source-device", Version="0.0.0-test"`},
+		"User-Agent":    {"Original/0.0.0-test"},
+	}
+
+	applyIdentityToURL(ids, targetURL, outboundHeaders, node)
+	headers := buildWebSocketHeaders(ids, outboundHeaders, targetURL, node)
+
+	snap := ids.Snapshot("hills_windows")
+	query := targetURL.Query()
+	if got := query.Get("X-Emby-Language"); got != "zh-cn" {
+		t.Fatalf("X-Emby-Language = %q, want zh-cn", got)
+	}
+	if got := query.Get("X-Emby-Token"); got != "source-token" {
+		t.Fatalf("X-Emby-Token = %q, want source-token", got)
+	}
+	if got := query.Get("tag"); got != "v1" {
+		t.Fatalf("tag = %q, want v1", got)
+	}
+	if got := query.Get("X-Emby-Authorization"); !strings.Contains(got, `Client="Hills Windows"`) || !strings.Contains(got, `DeviceId="`+snap.DeviceID+`"`) {
+		t.Fatalf("X-Emby-Authorization = %q, want Hills identity", got)
+	}
+	if query.Has("x_emby_device_id") {
+		t.Fatalf("x_emby_device_id query was not removed")
+	}
+	if got := headers.Get("Connection"); got != "Upgrade" {
+		t.Fatalf("Connection = %q, want Upgrade", got)
+	}
+	if got := headers.Get("Upgrade"); got != "websocket" {
+		t.Fatalf("Upgrade = %q, want websocket", got)
+	}
+	if got := headers.Get("X-Emby-Token"); got != "source-token" {
+		t.Fatalf("X-Emby-Token = %q, want source-token", got)
+	}
+}
+
 func assertHeaderKeysAbsent(t *testing.T, headers http.Header, absentKeys ...string) {
 	t.Helper()
 	for _, absentKey := range absentKeys {

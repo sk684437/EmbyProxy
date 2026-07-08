@@ -1089,6 +1089,120 @@ func TestHandleMediaProxyChoosesUpstreamClient(t *testing.T) {
 	}
 }
 
+func TestHandleMediaProxyAddsHillsIdentityToMediaAndImageTargets(t *testing.T) {
+	tests := []struct {
+		name              string
+		requestURI        string
+		targetURL         string
+		routePath         string
+		isPlayback        bool
+		isImage           bool
+		clientName        string
+		status            int
+		headers           http.Header
+		body              []byte
+		wantQueryIdentity bool
+	}{
+		{
+			name:       "media stream",
+			requestURI: "https://proxy.example/node/emby/Videos/1/stream.mp4?tag=v1",
+			targetURL:  "https://upstream.example/emby/Videos/1/stream.mp4?tag=v1&X_Emby_Device_Id=source-device",
+			routePath:  "/emby/Videos/1/stream.mp4",
+			isPlayback: true,
+			clientName: upstreamPoolPlaybackStream,
+			status:     http.StatusPartialContent,
+			headers: http.Header{
+				"Accept-Ranges": []string{"bytes"},
+				"Content-Range": []string{"bytes 0-4/5"},
+				"Content-Type":  []string{"video/mp4"},
+			},
+			body: []byte("video"),
+		},
+		{
+			name:       "image",
+			requestURI: "https://proxy.example/node/emby/Items/1/Images/Primary?tag=v1",
+			targetURL:  "https://upstream.example/emby/Items/1/Images/Primary?tag=v1&X-Emby-Language=en-us",
+			routePath:  "/emby/Items/1/Images/Primary",
+			isImage:    true,
+			clientName: upstreamPoolImageFollow,
+			status:     http.StatusOK,
+			headers: http.Header{
+				"Content-Type": []string{"image/jpeg"},
+			},
+			body: []byte("image"),
+		},
+		{
+			name:              "playback info",
+			requestURI:        "https://proxy.example/node/emby/Items/1/PlaybackInfo?tag=v1",
+			targetURL:         "https://upstream.example/emby/Items/1/PlaybackInfo?tag=v1&X_Emby_Device_Id=source-device",
+			routePath:         "/emby/Items/1/PlaybackInfo",
+			isPlayback:        true,
+			clientName:        upstreamPoolPlaybackAction,
+			status:            http.StatusOK,
+			headers:           http.Header{"Content-Type": []string{"application/json"}},
+			body:              []byte(`{"MediaSources":[]}`),
+			wantQueryIdentity: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithAccessLogFields(context.Background())
+			ids := identity.NewManager(nil)
+			var upstreamReq *http.Request
+			successClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				upstreamReq = req.Clone(req.Context())
+				upstreamReq.Header = cloneHeader(req.Header)
+				return bytesResponse(tt.status, tt.body, tt.headers), nil
+			})}
+			h := &Handler{
+				ids:                  ids,
+				log:                  logging.New("silent", false),
+				playbackActionClient: failRoundTripClient(t, "playback action client should not handle "+tt.name),
+				playbackStreamClient: failRoundTripClient(t, "playback stream client should not handle "+tt.name),
+				imageFollowClient:    failRoundTripClient(t, "image follow client should not handle "+tt.name),
+			}
+			switch tt.clientName {
+			case upstreamPoolPlaybackAction:
+				h.playbackActionClient = successClient
+			case upstreamPoolPlaybackStream:
+				h.playbackStreamClient = successClient
+			case upstreamPoolImageFollow:
+				h.imageFollowClient = successClient
+			default:
+				t.Fatalf("unsupported client %q", tt.clientName)
+			}
+			req := httptest.NewRequest(http.MethodGet, tt.requestURI, nil).WithContext(ctx)
+			req.Header.Set("X-Emby-Token", "header-token")
+			targetURL, err := url.Parse(tt.targetURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			node := storage.Node{Name: "node", Target: "https://upstream.example", Impersonate: true, ImpersonateProfile: "hills_android"}
+
+			res, err := h.handleMediaProxy(ctx, req, node, parsedRoute{Name: "node", Path: tt.routePath}, targetURL, nil, config.ProxyEnv{}, tt.isPlayback, tt.isImage, false, "", "127.0.0.1")
+			if err != nil {
+				t.Fatalf("handleMediaProxy() error = %v", err)
+			}
+			_, _ = io.Copy(io.Discard, res.Body)
+			_ = res.Body.Close()
+
+			if upstreamReq == nil {
+				t.Fatal("upstream request was not sent")
+			}
+			assertHillsOutboundHeaderIdentityApplied(t, ids, upstreamReq, "hills_android", "header-token")
+			if tt.wantQueryIdentity {
+				assertHillsOutboundQueryIdentityApplied(t, ids, upstreamReq, "hills_android", "header-token")
+			} else {
+				assertHillsIdentityQueryAbsent(t, upstreamReq)
+			}
+			if got := upstreamReq.URL.Query().Get("tag"); got != "v1" {
+				t.Fatalf("tag = %q, want v1", got)
+			}
+		})
+	}
+}
+
 func TestHandleNodeRoutesDirectExternalPlaybackActionToPlaybackActionClient(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	actionCalls := 0
@@ -1908,6 +2022,36 @@ func TestHandleNodeStripsClientIPHeadersFromForwardedRequest(t *testing.T) {
 	assertHeadersAbsent(t, upstreamHeaders, clientIPHeaderKeys...)
 }
 
+func TestHandleNodeAddsHillsIdentityToProxyTarget(t *testing.T) {
+	ctx := context.Background()
+	ids := identity.NewManager(nil)
+	var upstreamReq *http.Request
+	h := New(config.Config{}, newProxyTestStore(t), ids, logging.New("silent", false))
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		upstreamReq = req.Clone(req.Context())
+		upstreamReq.Header = cloneHeader(req.Header)
+		return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+	})}
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example", Impersonate: true, ImpersonateProfile: "hills_windows"}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/System/Ping?tag=v1&x_emby_device_id=source-device&X-Emby-Language=en-us", nil)
+	req.Header.Set("X-Emby-Token", "header-token")
+
+	res, err := h.handleNode(ctx, req, node, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/System/Ping"}, nil, config.ProxyEnv{})
+	if err != nil {
+		t.Fatalf("handleNode() error = %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	if upstreamReq == nil {
+		t.Fatal("upstream request was not sent")
+	}
+	assertHillsOutboundIdentityApplied(t, ids, upstreamReq, "hills_windows", "header-token")
+	if got := upstreamReq.URL.Query().Get("tag"); got != "v1" {
+		t.Fatalf("tag = %q, want v1", got)
+	}
+}
+
 func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
 	var upstreamHeaders http.Header
 	h := &Handler{
@@ -1931,6 +2075,42 @@ func TestHandleSTRMStripsClientIPHeadersFromSourceRequest(t *testing.T) {
 	_ = res.Body.Close()
 
 	assertHeadersAbsent(t, upstreamHeaders, clientIPHeaderKeys...)
+}
+
+func TestHandleSTRMAddsHillsIdentityToSourceRequest(t *testing.T) {
+	ids := identity.NewManager(nil)
+	var upstreamReq *http.Request
+	h := &Handler{
+		ids: ids,
+		playbackActionClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			upstreamReq = req.Clone(req.Context())
+			upstreamReq.Header = cloneHeader(req.Header)
+			return bytesResponse(http.StatusForbidden, []byte("forbidden"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+		})},
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/movie.strm", nil)
+	req.Header.Set("X-Emby-Token", "header-token")
+	sourceURL, err := url.Parse("https://upstream.example/movie.strm?X_MediaBrowser_Client=Original&DeviceId=source-device&tag=v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := storage.Node{Name: "node", Target: "https://upstream.example", Impersonate: true, ImpersonateProfile: "hills_android"}
+
+	res, err := h.handleSTRM(context.Background(), req, node, parsedRoute{Name: "node", Path: "/movie.strm"}, sourceURL, nil, config.ProxyEnv{})
+	if err != nil {
+		t.Fatalf("handleSTRM() error = %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	if upstreamReq == nil {
+		t.Fatal("STRM source request was not sent")
+	}
+	assertHillsOutboundHeaderIdentityApplied(t, ids, upstreamReq, "hills_android", "header-token")
+	assertHillsIdentityQueryAbsent(t, upstreamReq)
+	if got := upstreamReq.URL.Query().Get("tag"); got != "v1" {
+		t.Fatalf("tag = %q, want v1", got)
+	}
 }
 
 func TestHandleSTRMImpersonatesSourceRequestUserAgent(t *testing.T) {
@@ -2228,7 +2408,7 @@ func TestHandleDirectDoesNotAppendRequestQuery(t *testing.T) {
 	}
 }
 
-func TestHandleDirectMigratesYambyQueryAuthWithoutMutatingInboundHeaders(t *testing.T) {
+func TestHandleDirectPromotesYambyQueryAuthWithoutMutatingURLOrInboundHeaders(t *testing.T) {
 	ctx := context.Background()
 	rawCalls := 0
 	h := &Handler{
@@ -2240,8 +2420,8 @@ func TestHandleDirectMigratesYambyQueryAuthWithoutMutatingInboundHeaders(t *test
 			if req.Header.Get("X-Emby-Token") == "" {
 				t.Fatal("upstream X-Emby-Token header was not set")
 			}
-			if req.URL.Query().Has("x-emby-token") {
-				t.Fatal("upstream x-emby-token query was not removed")
+			if got := req.URL.Query().Get("x-emby-token"); got != "query-value" {
+				t.Fatalf("upstream x-emby-token query = %q, want preserved", got)
 			}
 			if got := req.URL.Query().Get("tag"); got != "v1" {
 				t.Fatal("ordinary upstream query parameter was not preserved")
@@ -2264,6 +2444,70 @@ func TestHandleDirectMigratesYambyQueryAuthWithoutMutatingInboundHeaders(t *test
 		t.Fatalf("raw direct calls = %d, want 1", rawCalls)
 	}
 	if req.Header.Get("X-Emby-Token") != "" {
+		t.Fatal("inbound request header was mutated")
+	}
+}
+
+func TestHandleDirectPreservesSignedQueryAndAddsHillsHeaderIdentity(t *testing.T) {
+	ctx := context.Background()
+	ids := identity.NewManager(nil)
+	var upstreamReq *http.Request
+	h := &Handler{
+		cfg: config.Config{Defaults: config.Defaults{MaxRetryBodyBytes: 32 * 1024 * 1024}},
+		ids: ids,
+		log: logging.New("silent", false),
+		rawDirectClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			upstreamReq = req.Clone(req.Context())
+			upstreamReq.Header = cloneHeader(req.Header)
+			return bytesResponse(http.StatusOK, []byte("ok"), http.Header{"Content-Type": []string{"text/plain"}}), nil
+		})},
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/emby/Items", nil)
+	req.Header.Set("X-Emby-Token", "header-token")
+	node := storage.Node{Name: "node", Target: "https://upstream.example", Impersonate: true, ImpersonateProfile: "hills_windows"}
+
+	res, err := h.handleDirect(ctx, req, `http://8.8.8.8/video.mkv?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=host&X-Amz-Signature=sig-value&token=signed-token&client=cdn-client&version=cdn-version&language=cdn-lang&authorization=Bearer%20direct-token&tag=v1`, config.ProxyEnv{ExternalAllowAny: true}, node, nil)
+	if err != nil {
+		t.Fatalf("handleDirect() error = %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusOK)
+	}
+	if upstreamReq == nil {
+		t.Fatal("direct upstream request was not sent")
+	}
+	snap := ids.Snapshot("hills_windows")
+	if got := upstreamReq.Header.Get("User-Agent"); got != snap.UserAgent {
+		t.Fatalf("User-Agent = %q, want %q", got, snap.UserAgent)
+	}
+	if got := upstreamReq.Header.Get("X-Emby-Authorization"); !strings.Contains(got, `Client="`+snap.ClientName+`"`) {
+		t.Fatalf("X-Emby-Authorization header = %q, want Hills identity", got)
+	}
+	if got := upstreamReq.Header.Get("X-Emby-Token"); got != "header-token" {
+		t.Fatalf("X-Emby-Token header = %q, want header-token", got)
+	}
+	for key, want := range map[string]string{
+		"X-Amz-Algorithm":     "AWS4-HMAC-SHA256",
+		"X-Amz-SignedHeaders": "host",
+		"X-Amz-Signature":     "sig-value",
+		"token":               "signed-token",
+		"client":              "cdn-client",
+		"version":             "cdn-version",
+		"language":            "cdn-lang",
+		"authorization":       "Bearer direct-token",
+		"tag":                 "v1",
+	} {
+		if got := upstreamReq.URL.Query().Get(key); got != want {
+			t.Fatalf("%s = %q, want %q; raw query: %s", key, got, want, upstreamReq.URL.RawQuery)
+		}
+	}
+	for _, key := range []string{"X-Emby-Authorization", "X-Emby-Client", "X-Emby-Client-Version", "X-Emby-Device-Name", "X-Emby-Device-Id", "X-Emby-Language", "X-Emby-Token"} {
+		if got := upstreamReq.URL.Query().Get(key); got != "" {
+			t.Fatalf("%s query = %q, want absent for direct target; raw query: %s", key, got, upstreamReq.URL.RawQuery)
+		}
+	}
+	if req.Header.Get("X-Emby-Token") != "header-token" {
 		t.Fatal("inbound request header was mutated")
 	}
 }
@@ -3232,6 +3476,74 @@ func assertAccessLogRangeFields(t *testing.T, ctx context.Context, wantRange, wa
 	if got := fields["contentRange"]; got != wantContentRange {
 		t.Fatalf("contentRange access log field = %v, want %s", got, wantContentRange)
 	}
+}
+
+func assertHillsOutboundIdentityApplied(t *testing.T, ids *identity.Manager, req *http.Request, profile, token string) {
+	t.Helper()
+	if req == nil || req.URL == nil {
+		t.Fatal("request URL is nil")
+	}
+	assertHillsOutboundQueryIdentityApplied(t, ids, req, profile, token)
+	assertHillsOutboundHeaderIdentityApplied(t, ids, req, profile, token)
+}
+
+func assertHillsOutboundQueryIdentityApplied(t *testing.T, ids *identity.Manager, req *http.Request, profile, token string) {
+	t.Helper()
+	if req == nil || req.URL == nil {
+		t.Fatal("request URL is nil")
+	}
+	snap := ids.Snapshot(profile)
+	query := req.URL.Query()
+	if got := query.Get("X-Emby-Language"); got != "zh-cn" {
+		t.Fatalf("X-Emby-Language query = %q, want zh-cn; raw query: %s", got, req.URL.RawQuery)
+	}
+	if got := query.Get("X-Emby-Token"); got != token {
+		t.Fatalf("X-Emby-Token query = %q, want %q; raw query: %s", got, token, req.URL.RawQuery)
+	}
+	if got := query.Get("X-Emby-Authorization"); !strings.Contains(got, `Client="`+snap.ClientName+`"`) {
+		t.Fatalf("X-Emby-Authorization query = %q, want Hills identity", got)
+	}
+	if query.Has("x_emby_device_id") || query.Has("X_Emby_Device_Id") || query.Has("X_MediaBrowser_Client") {
+		t.Fatalf("legacy identity query was not removed: %s", req.URL.RawQuery)
+	}
+}
+
+func assertHillsIdentityQueryAbsent(t *testing.T, req *http.Request) {
+	t.Helper()
+	if req == nil || req.URL == nil {
+		t.Fatal("request URL is nil")
+	}
+	query := req.URL.Query()
+	for _, key := range []string{
+		"X-Emby-Authorization", "X-Emby-Client", "X-Emby-Client-Version",
+		"X-Emby-Device-Name", "X-Emby-Device-Id", "X-Emby-Language", "X-Emby-Token",
+		"x_emby_device_id", "X_Emby_Device_Id", "X_MediaBrowser_Client",
+	} {
+		if query.Has(key) {
+			t.Fatalf("%s query = %q, want absent; raw query: %s", key, query.Get(key), req.URL.RawQuery)
+		}
+	}
+}
+
+func assertHillsOutboundHeaderIdentityApplied(t *testing.T, ids *identity.Manager, req *http.Request, profile, token string) {
+	t.Helper()
+	if req == nil {
+		t.Fatal("request is nil")
+	}
+	snap := ids.Snapshot(profile)
+	if got := req.Header.Get("User-Agent"); got != snap.UserAgent {
+		t.Fatalf("User-Agent = %q, want %q", got, snap.UserAgent)
+	}
+	if got := req.Header.Get("X-Emby-Authorization"); !strings.Contains(got, `Client="`+snap.ClientName+`"`) {
+		t.Fatalf("X-Emby-Authorization header = %q, want Hills identity", got)
+	}
+	if got := req.Header.Get("X-Emby-Token"); got != token {
+		t.Fatalf("X-Emby-Token header = %q, want %q", got, token)
+	}
+	assertHeadersAbsent(t, req.Header,
+		"Authorization", "X-Authorization",
+		"X-Emby-Client", "X-MediaBrowser-Client",
+	)
 }
 
 func assertHeadersAbsent(t *testing.T, headers http.Header, keys ...string) {

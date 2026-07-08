@@ -30,7 +30,7 @@ var errProxyRewriteBodyTooLarge = errors.New("rewritable upstream response body 
 
 func (h *Handler) handleSTRM(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, sourceURL *url.URL, body []byte, env config.ProxyEnv) (*http.Response, error) {
 	headers := cloneHeader(r.Header)
-	applyIdentityToURL(h.ids, sourceURL, headers, node)
+	applyIdentityToResourceURL(h.ids, sourceURL, headers, node)
 	stripProxyMetadataHeaders(headers)
 	headers.Del("Range")
 	headers.Del("If-Range")
@@ -137,8 +137,12 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 
 func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, targetURL *url.URL, body []byte, env config.ProxyEnv, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI bool, reqOrigin, clientIP string) (*http.Response, error) {
 	outboundHeaders := cloneHeader(r.Header)
-	applyIdentityToURL(h.ids, targetURL, outboundHeaders, node)
 	isStreamingMedia := isPlaybackStreamRequest(r, targetURL)
+	if isImageAPI || isAdditionalPartsAPI || isStreamingMedia {
+		applyIdentityToResourceURL(h.ids, targetURL, outboundHeaders, node)
+	} else {
+		applyIdentityToURL(h.ids, targetURL, outboundHeaders, node)
+	}
 	probeDirectExternalRedirect := node.DirectExternal && isPlaybackAPI && !isImageAPI && isStreamingMedia
 	hClean := buildCleanProxyHeaders(h.ids, outboundHeaders, targetURL, node, env, isStreamingMedia)
 	if targetURL.Query().Get("api_key") == "" {
