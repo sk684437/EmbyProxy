@@ -226,19 +226,31 @@ func TestApplyToHeadersRewritesEmbyAuthorization(t *testing.T) {
 	}
 }
 
-func TestApplyToHeadersPromotesYambyMediaBrowserToken(t *testing.T) {
+func TestApplyToHeadersPromotesMediaBrowserToken(t *testing.T) {
 	manager := NewManager(nil)
-	headers := http.Header{}
-	headers.Set("X-MediaBrowser-Token", "media-token")
-	headers.Set("X-MediaBrowser-Client", "Original")
-
-	manager.ApplyToHeaders(headers, "yamby")
-
-	if got := headers.Get("X-Emby-Token"); got != "media-token" {
-		t.Fatalf("X-Emby-Token = %q, want media-token", got)
+	tests := []struct {
+		name    string
+		profile string
+	}{
+		{name: "yamby", profile: "yamby"},
+		{name: "hills", profile: "hills_android"},
 	}
-	if got := headers.Get("X-MediaBrowser-Token"); got != "" {
-		t.Fatalf("X-MediaBrowser-Token = %q, want dropped after promotion", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := http.Header{}
+			headers.Set("X-MediaBrowser-Token", "media-token")
+			headers.Set("X-MediaBrowser-Client", "Original")
+
+			manager.ApplyToHeaders(headers, tt.profile)
+
+			if got := headers.Get("X-Emby-Token"); got != "media-token" {
+				t.Fatalf("X-Emby-Token = %q, want media-token", got)
+			}
+			if got := headers.Get("X-MediaBrowser-Token"); got != "" {
+				t.Fatalf("X-MediaBrowser-Token = %q, want dropped after promotion", got)
+			}
+		})
 	}
 }
 
@@ -331,22 +343,6 @@ func TestApplyToHeadersNormalizesHillsIdentityHeaders(t *testing.T) {
 	}
 }
 
-func TestApplyToHeadersPromotesHillsMediaBrowserToken(t *testing.T) {
-	manager := NewManager(nil)
-	headers := http.Header{}
-	headers.Set("X-MediaBrowser-Token", "media-token")
-	headers.Set("X-MediaBrowser-Client", "Original")
-
-	manager.ApplyToHeaders(headers, "hills_android")
-
-	if got := headers.Get("X-Emby-Token"); got != "media-token" {
-		t.Fatalf("X-Emby-Token = %q, want media-token", got)
-	}
-	if got := headers.Get("X-MediaBrowser-Token"); got != "" {
-		t.Fatalf("X-MediaBrowser-Token = %q, want dropped after promotion", got)
-	}
-}
-
 func TestApplyToURLMigratesYambyAllowedQueryAuth(t *testing.T) {
 	manager := NewManager(nil)
 	tests := []struct {
@@ -383,48 +379,47 @@ func TestApplyToURLMigratesYambyAllowedQueryAuth(t *testing.T) {
 	}
 }
 
-func TestApplyToURLUsesFirstYambyQueryAuthValue(t *testing.T) {
+func TestApplyToURLPromotesYambyQueryToken(t *testing.T) {
 	manager := NewManager(nil)
-	headers := http.Header{}
-	u := parseIdentityURL(t, "x-emby-token=first-value&x-emby-token=second-value")
-
-	manager.ApplyToURL(u, headers, "yamby")
-
-	if headers.Get("X-Emby-Token") != "first-value" {
-		t.Fatal("X-Emby-Token header behavior did not match expectation")
+	tests := []struct {
+		name     string
+		headers  http.Header
+		rawQuery string
+		want     string
+	}{
+		{
+			name:     "uses first query value",
+			headers:  http.Header{},
+			rawQuery: "x-emby-token=first-value&x-emby-token=second-value",
+			want:     "first-value",
+		},
+		{
+			name:     "keeps existing header",
+			headers:  http.Header{"X-Emby-Token": {"header-value"}},
+			rawQuery: "x-emby-token=query-value",
+			want:     "header-value",
+		},
+		{
+			name:     "fills empty existing header",
+			headers:  http.Header{"X-Emby-Token": {""}},
+			rawQuery: "x-emby-token=query-value",
+			want:     "query-value",
+		},
 	}
-	if u.Query().Has("x-emby-token") {
-		t.Fatal("x-emby-token query was not removed")
-	}
-}
 
-func TestApplyToURLKeepsExistingYambyHeader(t *testing.T) {
-	manager := NewManager(nil)
-	headers := http.Header{"X-Emby-Token": {"header-value"}}
-	u := parseIdentityURL(t, "x-emby-token=query-value")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := parseIdentityURL(t, tt.rawQuery)
 
-	manager.ApplyToURL(u, headers, "yamby")
+			manager.ApplyToURL(u, tt.headers, "yamby")
 
-	if headers.Get("X-Emby-Token") != "header-value" {
-		t.Fatal("existing X-Emby-Token header was overwritten")
-	}
-	if u.Query().Has("x-emby-token") {
-		t.Fatal("x-emby-token query was not removed")
-	}
-}
-
-func TestApplyToURLFillsEmptyExistingYambyHeader(t *testing.T) {
-	manager := NewManager(nil)
-	headers := http.Header{"X-Emby-Token": {""}}
-	u := parseIdentityURL(t, "x-emby-token=query-value")
-
-	manager.ApplyToURL(u, headers, "yamby")
-
-	if headers.Get("X-Emby-Token") != "query-value" {
-		t.Fatal("empty X-Emby-Token header was not filled from query")
-	}
-	if u.Query().Has("x-emby-token") {
-		t.Fatal("x-emby-token query was not removed")
+			if got := tt.headers.Get("X-Emby-Token"); got != tt.want {
+				t.Fatalf("X-Emby-Token = %q, want %q", got, tt.want)
+			}
+			if u.Query().Has("x-emby-token") {
+				t.Fatal("x-emby-token query was not removed")
+			}
+		})
 	}
 }
 

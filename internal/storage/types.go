@@ -14,7 +14,6 @@ import (
 type Node struct {
 	Name                string `json:"name"`
 	Target              string `json:"target"`
-	StreamTarget        string `json:"streamTarget,omitempty"`
 	Fav                 bool   `json:"fav"`
 	Rank                *int   `json:"rank,omitempty"`
 	Secret              string `json:"secret"`
@@ -119,7 +118,6 @@ type HostMatch struct {
 
 type packedNode struct {
 	Target              string `json:"t,omitempty"`
-	StreamTarget        string `json:"st,omitempty"`
 	Fav                 int    `json:"f,omitempty"`
 	Rank                *int   `json:"r,omitempty"`
 	Secret              string `json:"s,omitempty"`
@@ -139,7 +137,6 @@ type packedNode struct {
 func PackNode(node Node) (string, error) {
 	p := packedNode{
 		Target:             node.Target,
-		StreamTarget:       node.StreamTarget,
 		Rank:               node.Rank,
 		Secret:             node.Secret,
 		Tag:                node.Tag,
@@ -182,7 +179,6 @@ func UnpackNode(name, packed string) (Node, bool) {
 	return Node{
 		Name:                name,
 		Target:              p.Target,
-		StreamTarget:        p.StreamTarget,
 		Fav:                 p.Fav != 0,
 		Rank:                p.Rank,
 		Secret:              p.Secret,

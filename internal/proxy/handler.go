@@ -45,6 +45,8 @@ type Handler struct {
 	playbackStreamProbeClient *http.Client
 	imageFollowClient         *http.Client
 	rawDirectClient           *http.Client
+	rawLinkKeyMu              sync.Mutex
+	rawLinkKey                []byte
 }
 
 const (
@@ -107,6 +109,7 @@ func New(cfg config.Config, store *storage.Store, ids *identity.Manager, log *lo
 		playbackStreamProbeClient: newProxyHTTPClientWithTransport(false, playbackStreamTransport),
 		imageFollowClient:         newProxyHTTPClient(true),
 		rawDirectClient:           newRawHTTPClient(),
+		rawLinkKey:                newRawLinkKey(cfg.AdminToken),
 	}
 }
 
@@ -471,10 +474,11 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 			forwardPath = "/"
 		}
 	}
-	if node.StreamTarget == "" && strings.HasPrefix(forwardPath, "/__raw__/") {
-		raw := strings.TrimPrefix(forwardPath, "/__raw__/")
-		if decoded, err := url.PathUnescape(raw); err == nil {
-			raw = decoded
+	if forwardPath == "/__raw__" || strings.HasPrefix(forwardPath, "/__raw__/") {
+		selfPrefix := routePrefix(parsed.Name, node.Secret)
+		raw, rawLinkTrusted := h.signedRawURLFromQuery(r, selfPrefix)
+		if raw == "" && strings.HasPrefix(forwardPath, "/__raw__/") {
+			raw = strings.TrimPrefix(forwardPath, "/__raw__/")
 		}
 		u, err := url.Parse(raw)
 		if err != nil || u.Scheme == "" || u.Host == "" {
@@ -485,12 +489,13 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "raw-bad-protocol"})
 			return textResponse(http.StatusBadRequest, "Bad Request", nil), nil
 		}
-		if !h.rawHostAllowed(ctx, node, u, env) {
+		if !h.rawHostAllowedFor(ctx, node, u, env, rawLinkTrusted) {
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "raw-forbidden", "targetUrl": u.String()})
 			return localForbiddenResponse("raw", u.String()), nil
 		}
+		rawRequest := requestWithoutRawLinkSignature(r)
 		capture.SetMeta(r, map[string]any{"mode": "direct", "node": parsed.Name, "secret": node.Secret, "stage": "raw-direct", "targetUrl": u.String()})
-		return h.handleRawDirect(ctx, r, raw, env, node, body)
+		return h.handleRawDirect(ctx, rawRequest, raw, env, node, body, rawLinkTrusted)
 	}
 	targetURL := resolveTargetURL(base, forwardPath, r.URL.RawQuery)
 	if h.isSTRM(targetURL.Path) && !strmStreamPathRE.MatchString(targetURL.Path) {
@@ -1086,8 +1091,15 @@ func (h *Handler) defaultSystemConfig() storage.SystemConfig {
 }
 
 func (h *Handler) rawHostAllowed(ctx context.Context, node storage.Node, rawURL *url.URL, env config.ProxyEnv) bool {
+	return h.rawHostAllowedFor(ctx, node, rawURL, env, false)
+}
+
+func (h *Handler) rawHostAllowedFor(ctx context.Context, node storage.Node, rawURL *url.URL, env config.ProxyEnv, bypassExternalAuth bool) bool {
 	if rawURL == nil || rawHostBlocked(ctx, rawURL.Hostname()) {
 		return false
+	}
+	if bypassExternalAuth {
+		return true
 	}
 	if env.ExternalAllowAny {
 		return true

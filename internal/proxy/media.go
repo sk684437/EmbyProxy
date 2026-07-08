@@ -331,12 +331,19 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		}
 		finishImageCacheFill()
 	}
-	h.registerPlayback(r, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: res.StatusCode, RespHeader: headers, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method, RequestBody: body})
-	res.Header = headers
-	if isStreamingMedia && !isImageAPI {
-		markStreamResumeCandidate(res, "playback")
+	finalRes := res
+	if out, ok, err := h.rewriteMediaSourceResponse(ctx, r, res, headers, node, parsed, targetURL, targetURL, hClean); err != nil {
+		return nil, err
+	} else if ok {
+		finalRes = out
+	} else {
+		res.Header = headers
 	}
-	return res, nil
+	h.registerPlayback(r, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: finalRes.StatusCode, RespHeader: finalRes.Header, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method, RequestBody: body})
+	if isStreamingMedia && !isImageAPI {
+		markStreamResumeCandidate(finalRes, "playback")
+	}
+	return finalRes, nil
 }
 
 func isPlaybackStreamRequest(r *http.Request, targetURL *url.URL) bool {
@@ -479,11 +486,10 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 			return []byte(rewritten)
 		})
 	}
-	if res.StatusCode == http.StatusOK && strings.Contains(ct, "application/json") && strings.Contains(strings.ToLower(r.URL.RequestURI()), "/playbackinfo") {
-		return rewriteWithStage("playbackinfo-rewrite", func(raw []byte) []byte {
-			rewritten := h.rewriteBodyLinks(ctx, string(raw), schemeHost(r)+r.URL.RequestURI(), node, parsed.Name, node.Secret)
-			return []byte(rewritten)
-		})
+	if out, ok, err := h.rewriteMediaSourceResponse(ctx, r, res, headers, node, parsed, targetURL, base, currentHeaders); err != nil {
+		return nil, err
+	} else if ok {
+		return out, nil
 	}
 	if res.StatusCode == http.StatusOK && strings.Contains(ct, "application/json") && isSystemInfoPath(parsed.Path) {
 		return rewriteWithStage("systeminfo-rewrite", func(raw []byte) []byte {
@@ -496,6 +502,39 @@ func (h *Handler) finishGeneralResponse(ctx context.Context, r *http.Request, re
 		markStreamResumeCandidate(res, "stream")
 	}
 	return res, nil
+}
+
+func (h *Handler) rewriteMediaSourceResponse(ctx context.Context, r *http.Request, res *http.Response, headers http.Header, node storage.Node, parsed parsedRoute, targetURL, base *url.URL, currentHeaders http.Header) (*http.Response, bool, error) {
+	if res == nil || res.StatusCode != http.StatusOK || node.DirectExternal {
+		return res, false, nil
+	}
+	stage := mediaSourceJSONRewriteStage(parsed.Path)
+	if stage == "" || !strings.Contains(strings.ToLower(headers.Get("Content-Type")), "application/json") {
+		return res, false, nil
+	}
+	selfPrefix := routePrefix(parsed.Name, node.Secret)
+	capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": stage, "targetUrl": targetURL.String(), "outboundHeaders": currentHeaders})
+	origin := schemeHost(r)
+	out, err := rewriteProxyResponseBody(res, headers, func(raw []byte) []byte {
+		if rewritten, ok := rewriteMediaSourceJSONURLs(raw, origin, selfPrefix, base, false, func(value string) string {
+			return h.signedRawLink(origin, selfPrefix, value)
+		}); ok {
+			return rewritten
+		}
+		return raw
+	})
+	if err != nil {
+		capture.SetErrorMeta(r, stage, err, map[string]any{"meta": map[string]any{
+			"error":           err.Error(),
+			"errorClass":      "response-rewrite",
+			"upstreamStatus":  res.StatusCode,
+			"contentEncoding": strings.TrimSpace(headers.Get("Content-Encoding")),
+			"contentType":     strings.TrimSpace(headers.Get("Content-Type")),
+			"contentLength":   strings.TrimSpace(headers.Get("Content-Length")),
+		}})
+		return nil, false, err
+	}
+	return out, true, nil
 }
 
 func readProxyRewriteBody(body io.Reader) ([]byte, error) {
@@ -723,13 +762,105 @@ func (h *Handler) rewriteBodyLinks(ctx context.Context, text, requestURL string,
 			replacements[full] = origin + routePrefix(match.Name, match.Secret) + u.Path + queryAndHash(u)
 			continue
 		}
-		replacements[full] = origin + selfPrefix + "/__raw__/" + url.QueryEscape(full)
+		replacements[full] = h.signedRawLink(origin, selfPrefix, full)
 	}
 	out := text
 	for from, to := range replacements {
 		out = strings.ReplaceAll(out, from, to)
 	}
 	return out
+}
+
+func mediaSourceJSONRewriteStage(path string) string {
+	p := normalizedEmbyAPIPath(path)
+	if strings.Contains(p, "/playbackinfo") {
+		return "playbackinfo-rewrite"
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) == 4 && parts[0] == "users" && parts[2] == "items" && parts[1] != "" && parts[3] != "" {
+		return "mediasource-url-rewrite"
+	}
+	return ""
+}
+
+func rewriteMediaSourceJSONURLs(raw []byte, origin, selfPrefix string, base *url.URL, directExternal bool, rawLink func(string) string) ([]byte, bool) {
+	if len(raw) == 0 || directExternal {
+		return raw, false
+	}
+	var payload map[string]any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
+		return raw, false
+	}
+	sources, ok := payload["MediaSources"].([]any)
+	if !ok {
+		return raw, false
+	}
+	changed := false
+	for _, source := range sources {
+		item, ok := source.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"DirectStreamUrl", "TranscodingUrl", "StreamUrl"} {
+			if value, ok := item[key].(string); ok {
+				if rewritten := rewriteMediaSourceURL(value, origin, selfPrefix, base, rawLink); rewritten != value {
+					item[key] = rewritten
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return raw, false
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return raw, false
+	}
+	return out, true
+}
+
+func rewriteMediaSourceURL(raw, origin, selfPrefix string, base *url.URL, rawLink func(string) string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return raw
+	}
+	if strings.HasPrefix(value, "/") {
+		selfPrefixNoSlash := strings.TrimRight(selfPrefix, "/")
+		if value == selfPrefixNoSlash || strings.HasPrefix(value, selfPrefixNoSlash+"/") {
+			return raw
+		}
+		return raw
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return raw
+	}
+	selfPrefixNoSlash := strings.TrimRight(selfPrefix, "/")
+	if u.Scheme+"://"+u.Host == origin && (u.Path == selfPrefixNoSlash || strings.HasPrefix(u.Path, selfPrefixNoSlash+"/")) {
+		return u.Path + queryAndHash(u)
+	}
+	if base != nil && sameHost(value, base.String()) {
+		return u.Path + queryAndHash(u)
+	}
+	if rawLink != nil {
+		link := rawLink(value)
+		linkURL, err := url.Parse(link)
+		if err != nil {
+			return link
+		}
+		rawPath := strings.TrimRight(selfPrefix, "/") + "/__raw__"
+		if linkURL.Path == rawPath {
+			return "/__raw__" + queryAndHash(linkURL)
+		}
+		return linkURL.Path + queryAndHash(linkURL)
+	}
+	return "/__raw__/" + url.QueryEscape(value)
 }
 
 func isSystemInfoPath(path string) bool {

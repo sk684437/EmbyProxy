@@ -76,7 +76,6 @@ func ValidateNodeInput(input map[string]any) Result {
 	return Result{Node: storage.Node{
 		Name:                name,
 		Target:              target,
-		StreamTarget:        strings.TrimSpace(asString(input["streamTarget"])),
 		Fav:                 ToBool(input["fav"]),
 		Rank:                rank,
 		Secret:              secret,

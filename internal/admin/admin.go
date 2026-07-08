@@ -1104,7 +1104,6 @@ func exportNode(node storage.Node) map[string]any {
 	out := map[string]any{
 		"name":                node.Name,
 		"target":              node.Target,
-		"streamTarget":        node.StreamTarget,
 		"fav":                 node.Fav,
 		"secret":              node.Secret,
 		"tag":                 node.Tag,

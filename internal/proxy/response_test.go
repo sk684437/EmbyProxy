@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +76,113 @@ func failRoundTripClient(t *testing.T, message string) *http.Client {
 		t.Fatalf("%s: %s", message, req.URL.String())
 		return nil, nil
 	})}
+}
+
+func decodeJSONMap(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func assertSignedRawLink(t *testing.T, h *Handler, got, origin, selfPrefix, raw string) {
+	t.Helper()
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("raw link is invalid URL %q: %v", got, err)
+	}
+	originURL, err := url.Parse(origin)
+	if err != nil {
+		t.Fatalf("origin is invalid URL %q: %v", origin, err)
+	}
+	if u.Scheme != originURL.Scheme || u.Host != originURL.Host {
+		t.Fatalf("raw link origin = %s://%s, want %s://%s", u.Scheme, u.Host, originURL.Scheme, originURL.Host)
+	}
+	if wantPath := selfPrefix + "/__raw__"; u.Path != wantPath {
+		t.Fatalf("raw link path = %q, want %q", u.Path, wantPath)
+	}
+	q := u.Query()
+	payloadValues := q[rawLinkURLParam]
+	if len(payloadValues) != 1 {
+		t.Fatalf("raw link %s count = %d, want 1", rawLinkURLParam, len(payloadValues))
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(payloadValues[0])
+	if err != nil {
+		t.Fatalf("raw link payload is invalid base64url: %v", err)
+	}
+	if string(decoded) != raw {
+		t.Fatalf("raw link payload = %q, want %q", decoded, raw)
+	}
+	if len(q[rawLinkExpParam]) != 1 || len(q[rawLinkSigParam]) != 1 {
+		t.Fatalf("raw link signature query is incomplete: %q", u.RawQuery)
+	}
+	req := httptest.NewRequest(http.MethodGet, got, nil)
+	gotRaw, trusted := h.signedRawURLFromQuery(req, selfPrefix)
+	if !trusted || gotRaw != raw {
+		t.Fatalf("signedRawURLFromQuery() = raw %q trusted %v, want %q true", gotRaw, trusted, raw)
+	}
+	if stripped := stripRawLinkSignatureQuery(req.URL.RawQuery); stripped != "" {
+		t.Fatalf("raw link has unexpected non-signature query: %q", stripped)
+	}
+}
+
+func assertRelativeSignedRawLink(t *testing.T, h *Handler, got, selfPrefix, raw string) {
+	t.Helper()
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("raw link is invalid URL %q: %v", got, err)
+	}
+	if u.Scheme != "" || u.Host != "" {
+		t.Fatalf("raw link origin = %s://%s, want relative URL", u.Scheme, u.Host)
+	}
+	if wantPath := "/__raw__"; u.Path != wantPath {
+		t.Fatalf("raw link path = %q, want %q", u.Path, wantPath)
+	}
+	q := u.Query()
+	payloadValues := q[rawLinkURLParam]
+	if len(payloadValues) != 1 {
+		t.Fatalf("raw link %s count = %d, want 1", rawLinkURLParam, len(payloadValues))
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(payloadValues[0])
+	if err != nil {
+		t.Fatalf("raw link payload is invalid base64url: %v", err)
+	}
+	if string(decoded) != raw {
+		t.Fatalf("raw link payload = %q, want %q", decoded, raw)
+	}
+	if len(q[rawLinkExpParam]) != 1 || len(q[rawLinkSigParam]) != 1 {
+		t.Fatalf("raw link signature query is incomplete: %q", u.RawQuery)
+	}
+	req := httptest.NewRequest(http.MethodGet, got, nil)
+	gotRaw, trusted := h.signedRawURLFromQuery(req, selfPrefix)
+	if !trusted || gotRaw != raw {
+		t.Fatalf("signedRawURLFromQuery() = raw %q trusted %v, want %q true", gotRaw, trusted, raw)
+	}
+	if stripped := stripRawLinkSignatureQuery(req.URL.RawQuery); stripped != "" {
+		t.Fatalf("raw link has unexpected non-signature query: %q", stripped)
+	}
+}
+
+func newRawServeHTTPHarness(t *testing.T, cfg config.Config, roundTrip func(*http.Request) (*http.Response, error)) (*Handler, *int) {
+	t.Helper()
+	store := newProxyTestStore(t)
+	if err := store.SaveNode(context.Background(), "admin", storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}); err != nil {
+		t.Fatal(err)
+	}
+	rawCalls := 0
+	h := New(cfg, store, nil, logging.New("silent", false))
+	h.rawDirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rawCalls++
+		if roundTrip != nil {
+			return roundTrip(req)
+		}
+		return textResponse(http.StatusOK, "unexpected", nil), nil
+	})}
+	return h, &rawCalls
 }
 
 type trackedBody struct {
@@ -2542,6 +2650,145 @@ func TestHandleDirectStoresRangeFieldsForStreamingAccessLog(t *testing.T) {
 	assertAccessLogRangeFields(t, ctx, "bytes=4096-", "bytes 4096-8191/16384")
 }
 
+func TestServeHTTPManualRawURLRequiresExternalAllow(t *testing.T) {
+	h, rawCalls := newRawServeHTTPHarness(t, config.Config{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/__raw__/http%3A%2F%2F8.8.8.8%2Fvideo.mkv", nil)
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if *rawCalls != 0 {
+		t.Fatalf("raw direct calls = %d, want 0", *rawCalls)
+	}
+}
+
+func TestServeHTTPSignedRawURLBoundaries(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        string
+		extraQuery string
+		wantStatus int
+		wantCalls  int
+		check      func(t *testing.T, req *http.Request)
+	}{
+		{
+			name:       "bypasses external allow and strips signature query",
+			raw:        "http://8.8.8.8/video.mkv?token=x",
+			wantStatus: http.StatusOK,
+			wantCalls:  1,
+			check: func(t *testing.T, req *http.Request) {
+				t.Helper()
+				if got, want := req.URL.String(), "http://8.8.8.8/video.mkv?token=x"; got != want {
+					t.Fatalf("upstream raw URL = %q, want %q", got, want)
+				}
+				for _, key := range []string{rawLinkURLParam, rawLinkExpParam, rawLinkSigParam} {
+					if req.URL.Query().Has(key) {
+						t.Fatalf("upstream URL leaked proxy signature parameter %q: %s", key, req.URL.String())
+					}
+				}
+			},
+		},
+		{
+			name:       "preserves encoded upstream query",
+			raw:        "http://8.8.8.8/video.mkv?X-Amz-Credential=AKIA%2F20260708%2Fs3&X-Amz-Signature=sig-value",
+			wantStatus: http.StatusOK,
+			wantCalls:  1,
+			check: func(t *testing.T, req *http.Request) {
+				t.Helper()
+				if got, want := req.URL.String(), "http://8.8.8.8/video.mkv?X-Amz-Credential=AKIA%2F20260708%2Fs3&X-Amz-Signature=sig-value"; got != want {
+					t.Fatalf("upstream raw URL = %q, want %q", got, want)
+				}
+				if !strings.Contains(req.URL.RawQuery, "AKIA%2F20260708%2Fs3") {
+					t.Fatalf("upstream raw query lost encoded slashes: %s", req.URL.RawQuery)
+				}
+			},
+		},
+		{
+			name:       "extra proxy query requires external allow",
+			raw:        "http://8.8.8.8/video.mkv",
+			extraQuery: "&client-added=1",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "still blocks private target",
+			raw:        "http://127.0.0.1/private",
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamReqs := []*http.Request{}
+			h, rawCalls := newRawServeHTTPHarness(t, config.Config{AdminToken: "test-admin-token"}, func(req *http.Request) (*http.Response, error) {
+				upstreamReqs = append(upstreamReqs, req.Clone(req.Context()))
+				return textResponse(http.StatusOK, "ok", nil), nil
+			})
+			req := httptest.NewRequest(http.MethodGet, h.signedRawLink("https://proxy.example", "/node/secret", tt.raw)+tt.extraQuery, nil)
+			rec := httptest.NewRecorder()
+
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%q", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if *rawCalls != tt.wantCalls {
+				t.Fatalf("raw direct calls = %d, want %d", *rawCalls, tt.wantCalls)
+			}
+			if tt.check != nil {
+				if len(upstreamReqs) != 1 {
+					t.Fatalf("upstream request count = %d, want 1", len(upstreamReqs))
+				}
+				tt.check(t, upstreamReqs[0])
+			}
+		})
+	}
+}
+
+func TestServeHTTPSignedRawURLBypassAppliesToPublicRedirects(t *testing.T) {
+	calls := []string{}
+	h, _ := newRawServeHTTPHarness(t, config.Config{AdminToken: "test-admin-token"}, func(req *http.Request) (*http.Response, error) {
+		calls = append(calls, req.URL.String())
+		switch req.URL.Host {
+		case "8.8.8.8":
+			return textResponse(http.StatusFound, "", http.Header{"Location": []string{"http://8.8.4.4/final"}}), nil
+		case "8.8.4.4":
+			return textResponse(http.StatusOK, "ok", nil), nil
+		default:
+			t.Fatalf("unexpected direct target: %s", req.URL.String())
+			return nil, nil
+		}
+	})
+	req := httptest.NewRequest(http.MethodGet, h.signedRawLink("https://proxy.example", "/node/secret", "http://8.8.8.8/start"), nil)
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; calls=%v; body=%q", rec.Code, http.StatusOK, calls, rec.Body.String())
+	}
+	if len(calls) != 2 || calls[0] != "http://8.8.8.8/start" || calls[1] != "http://8.8.4.4/final" {
+		t.Fatalf("direct calls = %v, want start then final redirect", calls)
+	}
+}
+
+func TestRewriteBodyLinksSignsExternalRawLinks(t *testing.T) {
+	ctx := context.Background()
+	store := newProxyTestStore(t)
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}
+	h := New(config.Config{AdminToken: "test-admin-token"}, store, nil, logging.New("silent", false))
+	raw := "https://cdn.example/segments/1.ts?sig=abc"
+
+	out := h.rewriteBodyLinks(ctx, "#EXTM3U\n"+raw, "https://proxy.example/node/secret/playlist.m3u8", node, "node", "secret")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("rewritten manifest lines = %q", lines)
+	}
+	assertSignedRawLink(t, h, lines[1], "https://proxy.example", "/node/secret", raw)
+}
+
 func TestRetryableStatusReasonDetectsLocalForbiddenResponses(t *testing.T) {
 	res := localForbiddenResponse("direct", "https://115.example/video.mkv?sign=abc")
 
@@ -2665,6 +2912,154 @@ func TestFinishGeneralResponseDoesNotRewritePartialSystemInfo(t *testing.T) {
 	}
 	if got := out.Header.Get("Content-Range"); got != "bytes 0-39/40" {
 		t.Fatalf("Content-Range = %q, want original range", got)
+	}
+}
+
+func TestFinishGeneralResponseRewritesMediaSourceURLsInItemDetails(t *testing.T) {
+	ctx := context.Background()
+	store := newProxyTestStore(t)
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}
+	if err := store.SaveNode(ctx, "admin", node); err != nil {
+		t.Fatal(err)
+	}
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Users/u1/Items/201602?Fields=MediaSources,ExternalUrls", nil)
+	targetURL, err := url.Parse("https://upstream.example/emby/Users/u1/Items/201602?Fields=MediaSources,ExternalUrls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{
+		"Id":"201602",
+		"MediaSources":[{
+			"Id":"m1",
+			"Size":9223372036854775807,
+			"DirectStreamUrl":"https://upstream.example/videos/201602/original.mkv?api_key=abc&sign=1",
+			"TranscodingUrl":"https://upstream.example:443/Videos/201602/master.m3u8?MediaSourceId=m1",
+			"StreamUrl":"https://public.example/Videos/201602/stream.mkv?sig=abc"
+		},{
+			"Id":"m2",
+			"DirectStreamUrl":"https://cdn.example/video.mp4?token=x"
+		}],
+		"ExternalUrls":[{"Name":"IMDb","Url":"https://www.imdb.com/title/tt123"}]
+	}`)
+	res := bytesResponse(http.StatusOK, raw, http.Header{"Content-Type": []string{"application/json"}})
+
+	out, err := h.finishGeneralResponse(ctx, req, res, node, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/Users/u1/Items/201602"}, targetURL, targetURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+	if err != nil {
+		t.Fatalf("finishGeneralResponse() error = %v", err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte("9223372036854775807")) {
+		t.Fatalf("large numeric media source value was not preserved: %s", body)
+	}
+	payload := decodeJSONMap(t, body)
+	sources := payload["MediaSources"].([]any)
+	first := sources[0].(map[string]any)
+	if got, want := first["DirectStreamUrl"], "/videos/201602/original.mkv?api_key=abc&sign=1"; got != want {
+		t.Fatalf("DirectStreamUrl = %q, want %q", got, want)
+	}
+	if got, want := first["TranscodingUrl"], "/Videos/201602/master.m3u8?MediaSourceId=m1"; got != want {
+		t.Fatalf("TranscodingUrl = %q, want %q", got, want)
+	}
+	assertRelativeSignedRawLink(t, h, first["StreamUrl"].(string), "/node/secret", "https://public.example/Videos/201602/stream.mkv?sig=abc")
+	second := sources[1].(map[string]any)
+	assertRelativeSignedRawLink(t, h, second["DirectStreamUrl"].(string), "/node/secret", "https://cdn.example/video.mp4?token=x")
+	external := payload["ExternalUrls"].([]any)[0].(map[string]any)
+	if got, want := external["Url"], "https://www.imdb.com/title/tt123"; got != want {
+		t.Fatalf("ExternalUrls[0].Url = %q, want %q", got, want)
+	}
+}
+
+func TestFinishGeneralResponseRewritesMediaSourceURLsInPlaybackInfo(t *testing.T) {
+	ctx := context.Background()
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}
+	h := New(config.Config{}, newProxyTestStore(t), nil, logging.New("silent", false))
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Items/1/PlaybackInfo", nil)
+	targetURL, err := url.Parse("https://upstream.example/emby/Items/1/PlaybackInfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"MediaSources":[{"DirectStreamUrl":"https://upstream.example/videos/1/original.mkv","TranscodingUrl":"/videos/1/master.m3u8","StreamUrl":"https://unknown.example/stream.mkv"}]}`)
+	res := bytesResponse(http.StatusOK, raw, http.Header{"Content-Type": []string{"application/json"}})
+
+	out, err := h.finishGeneralResponse(ctx, req, res, node, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/Items/1/PlaybackInfo"}, targetURL, targetURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+	if err != nil {
+		t.Fatalf("finishGeneralResponse() error = %v", err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := decodeJSONMap(t, body)["MediaSources"].([]any)[0].(map[string]any)
+	if got, want := source["DirectStreamUrl"], "/videos/1/original.mkv"; got != want {
+		t.Fatalf("DirectStreamUrl = %q, want %q", got, want)
+	}
+	if got, want := source["TranscodingUrl"], "/videos/1/master.m3u8"; got != want {
+		t.Fatalf("TranscodingUrl = %q, want %q", got, want)
+	}
+	assertRelativeSignedRawLink(t, h, source["StreamUrl"].(string), "/node/secret", "https://unknown.example/stream.mkv")
+}
+
+func TestHandleMediaProxyRewritesPlaybackInfoMediaSourceURLs(t *testing.T) {
+	ctx := WithAccessLogFields(context.Background())
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example"}
+	h := New(config.Config{}, newProxyTestStore(t), nil, logging.New("silent", false))
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return bytesResponse(http.StatusOK, []byte(`{"MediaSources":[{"DirectStreamUrl":"https://upstream.example/videos/1/original.mkv","TranscodingUrl":"/videos/1/master.m3u8","StreamUrl":"https://cdn.example/video.mp4?token=x"}]}`), http.Header{"Content-Type": []string{"application/json"}}), nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Items/1/PlaybackInfo", nil).WithContext(ctx)
+	targetURL, err := url.Parse("https://upstream.example/emby/Items/1/PlaybackInfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := h.handleMediaProxy(ctx, req, node, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/Items/1/PlaybackInfo"}, targetURL, nil, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("handleMediaProxy() error = %v", err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := decodeJSONMap(t, body)["MediaSources"].([]any)[0].(map[string]any)
+	if got, want := source["DirectStreamUrl"], "/videos/1/original.mkv"; got != want {
+		t.Fatalf("DirectStreamUrl = %q, want %q", got, want)
+	}
+	if got, want := source["TranscodingUrl"], "/videos/1/master.m3u8"; got != want {
+		t.Fatalf("TranscodingUrl = %q, want %q", got, want)
+	}
+	assertRelativeSignedRawLink(t, h, source["StreamUrl"].(string), "/node/secret", "https://cdn.example/video.mp4?token=x")
+}
+
+func TestFinishGeneralResponseKeepsMediaSourceURLsWhenDirectExternalEnabled(t *testing.T) {
+	node := storage.Node{Name: "node", Secret: "secret", Target: "https://upstream.example", DirectExternal: true}
+	h := New(config.Config{}, newProxyTestStore(t), nil, logging.New("silent", false))
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/secret/emby/Items/1/PlaybackInfo", nil)
+	targetURL, err := url.Parse("https://upstream.example/emby/Items/1/PlaybackInfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawURL := "https://upstream.example/videos/1/original.mkv?sign=abc"
+	res := bytesResponse(http.StatusOK, []byte(`{"MediaSources":[{"DirectStreamUrl":"`+rawURL+`"}]}`), http.Header{"Content-Type": []string{"application/json"}})
+
+	out, err := h.finishGeneralResponse(context.Background(), req, res, node, parsedRoute{Name: "node", Secret: "secret", Path: "/emby/Items/1/PlaybackInfo"}, targetURL, targetURL, http.Header{}, config.ProxyEnv{}, "", false, false, false)
+	if err != nil {
+		t.Fatalf("finishGeneralResponse() error = %v", err)
+	}
+	defer out.Body.Close()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := decodeJSONMap(t, body)["MediaSources"].([]any)[0].(map[string]any)
+	if got := source["DirectStreamUrl"]; got != rawURL {
+		t.Fatalf("DirectStreamUrl = %q, want %q", got, rawURL)
 	}
 }
 

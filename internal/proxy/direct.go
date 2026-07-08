@@ -17,18 +17,18 @@ import (
 var errForbiddenDirectHost = errors.New("forbidden direct host")
 
 func (h *Handler) handleDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte) (*http.Response, error) {
-	return h.handleProtectedDirect(ctx, r, rawPath, env, node, body, false)
+	return h.handleProtectedDirect(ctx, r, rawPath, env, node, body, false, false)
 }
 
-func (h *Handler) handleRawDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte) (*http.Response, error) {
-	return h.handleProtectedDirect(ctx, r, rawPath, env, node, body, true)
+func (h *Handler) handleRawDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, bypassExternalAuth bool) (*http.Response, error) {
+	return h.handleProtectedDirect(ctx, r, rawPath, env, node, body, true, bypassExternalAuth)
 }
 
-func (h *Handler) handleProtectedDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, inheritRequestQuery bool) (*http.Response, error) {
-	return h.handleDirectWithClient(ctx, r, rawPath, env, node, body, h.protectedDirectClient(node, env), true, inheritRequestQuery)
+func (h *Handler) handleProtectedDirect(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, inheritRequestQuery bool, bypassExternalAuth bool) (*http.Response, error) {
+	return h.handleDirectWithClient(ctx, r, rawPath, env, node, body, h.protectedDirectClient(node, env, bypassExternalAuth), true, inheritRequestQuery, bypassExternalAuth)
 }
 
-func (h *Handler) protectedDirectClient(node storage.Node, env config.ProxyEnv) *http.Client {
+func (h *Handler) protectedDirectClient(node storage.Node, env config.ProxyEnv, bypassExternalAuth bool) *http.Client {
 	base := h.rawDirectClient
 	if base == nil {
 		base = newRawHTTPClient()
@@ -42,7 +42,7 @@ func (h *Handler) protectedDirectClient(node storage.Node, env config.ProxyEnv) 
 		Timeout:   base.Timeout,
 		Jar:       base.Jar,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if !h.directURLAllowed(req.Context(), node, req.URL, env) {
+			if !h.directURLAllowed(req.Context(), node, req.URL, env, bypassExternalAuth) {
 				return errForbiddenDirectHost
 			}
 			return nil
@@ -50,14 +50,14 @@ func (h *Handler) protectedDirectClient(node storage.Node, env config.ProxyEnv) 
 	}
 }
 
-func (h *Handler) directURLAllowed(ctx context.Context, node storage.Node, u *url.URL, env config.ProxyEnv) bool {
+func (h *Handler) directURLAllowed(ctx context.Context, node storage.Node, u *url.URL, env config.ProxyEnv, bypassExternalAuth bool) bool {
 	if u == nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return false
 	}
-	return h.rawHostAllowed(ctx, node, u, env)
+	return h.rawHostAllowedFor(ctx, node, u, env, bypassExternalAuth)
 }
 
-func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, client *http.Client, protectDirect bool, inheritRequestQuery bool) (*http.Response, error) {
+func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, rawPath string, env config.ProxyEnv, node storage.Node, body []byte, client *http.Client, protectDirect bool, inheritRequestQuery bool, bypassExternalAuth bool) (*http.Response, error) {
 	if client == nil {
 		client = h.defaultFollowClient
 	}
@@ -92,7 +92,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 		outboundHeaders := cloneHeader(r.Header)
 		applyIdentityToDirectURL(h.ids, u, outboundHeaders, node)
 		targetURL := u.String()
-		if protectDirect && !h.directURLAllowed(ctx, node, u, env) {
+		if protectDirect && !h.directURLAllowed(ctx, node, u, env, bypassExternalAuth) {
 			capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-forbidden", "targetUrl": targetURL, "outboundHeaders": http.Header{}})
 			lastErr = errForbiddenDirectHost
 			continue
@@ -167,11 +167,9 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 			continue
 		}
 		rh := cloneHeader(res.Header)
-		reqPath := r.URL.RequestURI()
-		rawIdx := strings.Index(reqPath, "/__raw__/")
 		selfPrefixForRaw := ""
-		if rawIdx >= 0 {
-			selfPrefixForRaw = reqPath[:rawIdx]
+		if inheritRequestQuery {
+			selfPrefixForRaw = rawRoutePrefixFromRequest(r)
 		}
 		rewriteSetCookieHeaders(rh, selfPrefixForRaw)
 		fillContentLengthFromContentRange(rh)
@@ -191,7 +189,7 @@ func (h *Handler) handleDirectWithClient(ctx context.Context, r *http.Request, r
 							h.closeBody(lastRes)
 							lastRes = nil
 							capture.SetMeta(r, map[string]any{"mode": "direct", "node": directNodeName(nodeName), "stage": "direct-location-follow", "targetUrl": abs.String()})
-							return h.handleDirectWithClient(ctx, r, abs.String(), env, node, body, client, protectDirect, inheritRequestQuery)
+							return h.handleDirectWithClient(ctx, r, abs.String(), env, node, body, client, protectDirect, inheritRequestQuery, bypassExternalAuth)
 						}
 						rh.Set("Location", abs.String())
 					}
