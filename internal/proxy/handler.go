@@ -587,12 +587,14 @@ func (h *Handler) handleOneTarget(ctx context.Context, r *http.Request, node sto
 		h2.Set("Referer", reqBase+"/")
 		currentHeaders = h2
 		capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "general-retry-compat-origin", "targetUrl": targetURL.String(), "outboundHeaders": h2})
+		h.closeBody(res)
 		res, err = h.doFetch(ctx, h.noRedirectClient, targetURL, r.Method, h2, body)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if res.StatusCode == http.StatusForbidden {
+		h.closeBody(res)
 		res, currentHeaders, err = h.retryGeneral403(ctx, r, node, parsed, targetURL, headers, body, env, base)
 		if err != nil {
 			return nil, err

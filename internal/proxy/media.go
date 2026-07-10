@@ -410,7 +410,7 @@ func (h *Handler) retryGeneral403(ctx context.Context, r *http.Request, node sto
 		return res, h3, err
 	}
 	for _, stage := range []string{"general-retry-origin", "general-retry-origin-repeat"} {
-		_ = res.Body.Close()
+		h.closeBody(res)
 		h4 := cloneHeader(h3)
 		stripProxyMetadataHeaders(h4)
 		h4.Set("Host", base.Host)

@@ -186,8 +186,9 @@ func newRawServeHTTPHarness(t *testing.T, cfg config.Config, roundTrip func(*htt
 }
 
 type trackedBody struct {
-	reader *strings.Reader
-	closed bool
+	reader    *strings.Reader
+	readCalls int
+	closed    bool
 }
 
 func newTrackedBody(value string) *trackedBody {
@@ -195,6 +196,7 @@ func newTrackedBody(value string) *trackedBody {
 }
 
 func (b *trackedBody) Read(p []byte) (int, error) {
+	b.readCalls++
 	if b.reader == nil {
 		return 0, io.EOF
 	}
@@ -969,6 +971,69 @@ func TestDoFetchDoesNotRetryHTTPAfterHTTPSError(t *testing.T) {
 	}
 	if got := strings.Join(schemes, ","); got != "https" {
 		t.Fatalf("schemes = %q, want https", got)
+	}
+}
+
+func TestHandleOneTargetClosesDiscardedGeneral403ResponsesWithoutReadingBodies(t *testing.T) {
+	store := newProxyTestStore(t)
+	bodies := []*trackedBody{
+		newTrackedBody("first forbidden"),
+		newTrackedBody("second forbidden"),
+		newTrackedBody("third forbidden"),
+		newTrackedBody("fourth forbidden"),
+		newTrackedBody("success"),
+	}
+	calls := 0
+	h := New(config.Config{CWD: t.TempDir()}, store, nil, logging.New("silent", false))
+	h.noRedirectClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if calls >= len(bodies) {
+			return nil, fmt.Errorf("unexpected upstream call %d", calls+1)
+		}
+		body := bodies[calls]
+		status := http.StatusForbidden
+		if calls == len(bodies)-1 {
+			status = http.StatusOK
+		}
+		calls++
+		return &http.Response{
+			StatusCode:    status,
+			Status:        fmt.Sprintf("%d %s", status, http.StatusText(status)),
+			Header:        http.Header{"Content-Type": []string{"text/plain"}},
+			Body:          body,
+			ContentLength: int64(body.reader.Len()),
+			Request:       req,
+		}, nil
+	})}
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/node/Users/AuthenticateByName", nil)
+	parsed := parsedRoute{URL: req.URL, Name: "node", Path: "/Users/AuthenticateByName"}
+	node := storage.Node{Name: "node", Target: "https://upstream.example"}
+
+	res, err := h.handleOneTarget(context.Background(), req, node, parsed, nil, config.ProxyEnv{})
+	if err != nil {
+		t.Fatalf("handleOneTarget() error = %v", err)
+	}
+	defer res.Body.Close()
+	if calls != len(bodies) {
+		t.Fatalf("upstream calls = %d, want %d", calls, len(bodies))
+	}
+	for i, body := range bodies[:len(bodies)-1] {
+		if !body.closed {
+			t.Fatalf("discarded body %d was not closed", i+1)
+		}
+		if body.readCalls != 0 {
+			t.Fatalf("discarded body %d read calls = %d, want 0", i+1, body.readCalls)
+		}
+	}
+	finalBody := bodies[len(bodies)-1]
+	if finalBody.closed {
+		t.Fatal("final response body was closed too early")
+	}
+	got, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(final response) error = %v", err)
+	}
+	if string(got) != "success" {
+		t.Fatalf("final response body = %q, want success", got)
 	}
 }
 
