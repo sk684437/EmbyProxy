@@ -98,6 +98,9 @@ func TestTGConfigBackfillsReportEnabledForLegacyEnabledConfig(t *testing.T) {
 	if !got.ReportEnabled {
 		t.Fatalf("ReportEnabled = false, want true for legacy enabled config")
 	}
+	if got.ServerRemark != "" {
+		t.Fatalf("ServerRemark = %q, want empty for legacy config", got.ServerRemark)
+	}
 }
 
 func TestTGConfigKeepsExplicitReportDisabled(t *testing.T) {

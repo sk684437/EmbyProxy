@@ -53,6 +53,12 @@ func TestServeAdminValidatesTokenConfig(t *testing.T) {
 	}
 }
 
+func TestAdminIndexIncludesTelegramRemark(t *testing.T) {
+	if !strings.Contains(indexHTML, `id="tg-serverRemark" maxlength="80"`) {
+		t.Fatal("indexHTML missing Telegram server remark input")
+	}
+}
+
 func TestListIncludesBuildInfo(t *testing.T) {
 	ctx := context.Background()
 	handler, closeStore := newConfigTestHandler(t)
@@ -616,6 +622,45 @@ func assertImageConfig(t *testing.T, got, want storage.SystemConfig) {
 		got.ImageCacheEnabled != want.ImageCacheEnabled ||
 		got.ImageCacheTTLDays != want.ImageCacheTTLDays {
 		t.Fatalf("image settings = %+v, want %+v", got, want)
+	}
+}
+
+func TestTGSetValidatesServerRemark(t *testing.T) {
+	tests := []struct {
+		name      string
+		remark    string
+		want      string
+		wantError string
+	}{
+		{name: "trims remark", remark: "  家庭服  ", want: "家庭服"},
+		{name: "rejects newline", remark: "家庭服\n备用", wantError: "服务器备注不能包含换行"},
+		{name: "rejects long remark", remark: strings.Repeat("服", telegramServerRemarkMaxRunes+1), wantError: "服务器备注不能超过 80 个字符"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			handler, closeStore := newConfigTestHandler(t)
+			defer closeStore()
+
+			res := handler.tgSet(ctx, map[string]any{"config": map[string]any{"serverRemark": tt.remark}})
+			if tt.wantError != "" {
+				if res["ok"] == true || res["error"] != tt.wantError {
+					t.Fatalf("tgSet() = %+v, want error %q", res, tt.wantError)
+				}
+				return
+			}
+			if res["ok"] != true {
+				t.Fatalf("tgSet() = %+v", res)
+			}
+			cfg, err := handler.store.GetTGConfig(ctx)
+			if err != nil {
+				t.Fatalf("GetTGConfig() error = %v", err)
+			}
+			if cfg.ServerRemark != tt.want {
+				t.Fatalf("ServerRemark = %q, want %q", cfg.ServerRemark, tt.want)
+			}
+		})
 	}
 }
 

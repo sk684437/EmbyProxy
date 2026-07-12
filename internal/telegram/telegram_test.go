@@ -2,16 +2,50 @@ package telegram
 
 import (
 	"context"
-	"embyproxy/internal/localtime"
-	"embyproxy/internal/logging"
-	"embyproxy/internal/storage"
+	"encoding/json"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"embyproxy/internal/localtime"
+	"embyproxy/internal/logging"
+	"embyproxy/internal/storage"
 )
+
+func TestSendAddsServerRemark(t *testing.T) {
+	tests := []struct {
+		name   string
+		remark string
+		want   string
+	}{
+		{name: "empty remark", want: "message"},
+		{name: "trimmed remark", remark: "  家庭服  ", want: "🏷️ 服务器：家庭服\n\nmessage"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &Service{http: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				var body struct {
+					Text string `json:"text"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatalf("decode request body error = %v", err)
+				}
+				if body.Text != tt.want {
+					t.Fatalf("telegram text = %q, want %q", body.Text, tt.want)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}}
+			cfg := storage.TGConfig{Token: "token", Chat: "chat", ServerRemark: tt.remark}
+			if !service.Send(context.Background(), cfg, "message") {
+				t.Fatal("Send() returned false")
+			}
+		})
+	}
+}
 
 func TestBuildReportText(t *testing.T) {
 	tests := []struct {

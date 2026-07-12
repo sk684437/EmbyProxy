@@ -26,16 +26,19 @@ func New(store *storage.Store, log *logging.Logger) *Service {
 	return &Service{store: store, log: log, http: &http.Client{Timeout: 12 * time.Second}}
 }
 
-func (s *Service) Send(ctx context.Context, token, chat, text string) bool {
-	if strings.TrimSpace(token) == "" || strings.TrimSpace(chat) == "" || strings.TrimSpace(text) == "" {
+func (s *Service) Send(ctx context.Context, cfg storage.TGConfig, text string) bool {
+	token := strings.TrimSpace(cfg.Token)
+	chat := strings.TrimSpace(cfg.Chat)
+	if token == "" || chat == "" || strings.TrimSpace(text) == "" {
 		return false
 	}
+	text = withServerRemark(cfg.ServerRemark, text)
 	body, _ := json.Marshal(map[string]any{
-		"chat_id":                  strings.TrimSpace(chat),
+		"chat_id":                  chat,
 		"text":                     text,
 		"disable_web_page_preview": true,
 	})
-	url := "https://api.telegram.org/bot" + strings.TrimSpace(token) + "/sendMessage"
+	url := "https://api.telegram.org/bot" + token + "/sendMessage"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return false
@@ -47,6 +50,14 @@ func (s *Service) Send(ctx context.Context, token, chat, text string) bool {
 	}
 	defer res.Body.Close()
 	return res.StatusCode >= 200 && res.StatusCode < 300
+}
+
+func withServerRemark(remark, text string) string {
+	remark = strings.TrimSpace(remark)
+	if remark == "" {
+		return text
+	}
+	return "🏷️ 服务器：" + remark + "\n\n" + text
 }
 
 const reportHeaderPrefix = "📊 Emby 播放日报 · "
@@ -127,7 +138,7 @@ func (s *Service) CheckAndSendReport(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !s.Send(ctx, cfg.Token, cfg.Chat, text) {
+	if !s.Send(ctx, cfg, text) {
 		s.log.Warn("telegram", "daily report send failed", map[string]any{"event": "dailyReportSendFailed", "day": day})
 		return nil
 	}
@@ -296,7 +307,7 @@ func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
 		if node.KeepaliveChangeOnly && prevDigest == digest {
 			continue
 		}
-		if !s.Send(ctx, cfg.Token, cfg.Chat, strings.Join(lines, "\n")) {
+		if !s.Send(ctx, cfg, strings.Join(lines, "\n")) {
 			s.log.Warn("telegram", "keepalive send failed", map[string]any{"event": "keepaliveSendFailed", "node": node.Name, "day": day})
 			continue
 		}

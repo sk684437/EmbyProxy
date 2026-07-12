@@ -986,6 +986,11 @@ tr:last-child td{border-bottom:0}
         <input type="text" id="tg-chat" placeholder="-1001234567890 或 @频道"/>
       </div>
 
+      <div class="form-group form-full">
+        <label for="tg-serverRemark">服务器备注 <span class="form-hint">可选，用于区分不同 EmbyProxy 实例</span></label>
+        <input type="text" id="tg-serverRemark" maxlength="80" placeholder="例如：家庭服、海外实例"/>
+      </div>
+
       <div class="form-section">每日日报</div>
 
       <div class="toggle-row form-full">
@@ -1865,6 +1870,7 @@ async function openTgModal() {
     document.getElementById('tg-enabled').checked = !!c.enabled;
     document.getElementById('tg-token').value = c.token || '';
     document.getElementById('tg-chat').value = c.chat || '';
+    document.getElementById('tg-serverRemark').value = c.serverRemark || '';
     document.getElementById('tg-reportEnabled').checked = c.reportEnabled === true;
     document.getElementById('tg-reportTime').value = c.reportTime || '08:00';
   }
@@ -1895,6 +1901,7 @@ async function saveTg() {
     enabled: document.getElementById('tg-enabled').checked,
     token: document.getElementById('tg-token').value.trim(),
     chat: document.getElementById('tg-chat').value.trim(),
+    serverRemark: document.getElementById('tg-serverRemark').value.trim(),
     reportEnabled: document.getElementById('tg-reportEnabled').checked,
     reportTime: document.getElementById('tg-reportTime').value,
   };

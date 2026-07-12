@@ -65,6 +65,7 @@ type trafficCaptureScan struct {
 }
 
 const trafficCaptureClearWriterBuffer = 256 * 1024
+const telegramServerRemarkMaxRunes = 80
 
 type Handler struct {
 	cfg        config.Config
@@ -329,7 +330,7 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		if err != nil {
 			return fail(err.Error()), http.StatusInternalServerError
 		}
-		return map[string]any{"ok": h.telegram.Send(ctx, cfg.Token, cfg.Chat, text)}, http.StatusOK
+		return map[string]any{"ok": h.telegram.Send(ctx, cfg, text)}, http.StatusOK
 	case "config.get":
 		cfg, err := h.store.GetSystemConfig(ctx, h.defaultSystemConfig())
 		if err != nil {
@@ -936,10 +937,18 @@ func (h *Handler) tgSet(ctx context.Context, body map[string]any) map[string]any
 	if reportTime == "" {
 		reportTime = "00:00"
 	}
+	serverRemark := strings.TrimSpace(asString(cfgMap["serverRemark"]))
+	if strings.ContainsAny(serverRemark, "\r\n") {
+		return fail("服务器备注不能包含换行")
+	}
+	if len([]rune(serverRemark)) > telegramServerRemarkMaxRunes {
+		return fail(fmt.Sprintf("服务器备注不能超过 %d 个字符", telegramServerRemarkMaxRunes))
+	}
 	cfg := storage.TGConfig{
 		Enabled:       validators.ToBool(cfgMap["enabled"]),
 		Token:         strings.TrimSpace(asString(cfgMap["token"])),
 		Chat:          strings.TrimSpace(asString(cfgMap["chat"])),
+		ServerRemark:  serverRemark,
 		ReportEnabled: boolValue(cfgMap, "reportEnabled", validators.ToBool(cfgMap["enabled"])),
 		ReportTime:    reportTime,
 	}
@@ -1091,7 +1100,7 @@ func (h *Handler) keepaliveTest(ctx context.Context, body map[string]any) (map[s
 		fmt.Sprintf("提前提醒:%d天", remindBeforeDays),
 		"提醒时间:北京时间 " + keepaliveAt,
 	}, "\n")
-	return map[string]any{"ok": h.telegram.Send(ctx, cfg.Token, cfg.Chat, text)}, http.StatusOK
+	return map[string]any{"ok": h.telegram.Send(ctx, cfg, text)}, http.StatusOK
 }
 
 func (h *Handler) reset(uid, name string) {

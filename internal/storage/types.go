@@ -35,6 +35,7 @@ type TGConfig struct {
 	Enabled       bool   `json:"enabled"`
 	Token         string `json:"token"`
 	Chat          string `json:"chat"`
+	ServerRemark  string `json:"serverRemark"`
 	ReportEnabled bool   `json:"reportEnabled"`
 	ReportTime    string `json:"reportTime"`
 }
