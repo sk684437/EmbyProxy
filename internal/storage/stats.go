@@ -336,7 +336,7 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 	}
 	cutoff := localtime.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors
+		SELECT day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at
 		FROM play_stats WHERE day >= ? ORDER BY day DESC, plays DESC
 	`, cutoff)
 	if err != nil {
@@ -346,10 +346,11 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 	out := []PlayStat{}
 	for rows.Next() {
 		var stat PlayStat
-		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
+		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors, &stat.LastActivityAt); err != nil {
 			return nil, err
 		}
 		stat.Bytes = stat.InboundBytes + stat.OutboundBytes
+		stat.LastActivity = localtime.FormatUnixMilli(stat.LastActivityAt, "2006-01-02 15:04:05")
 		out = append(out, stat)
 	}
 	return out, rows.Err()

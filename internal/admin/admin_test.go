@@ -80,6 +80,25 @@ func TestListIncludesBuildInfo(t *testing.T) {
 	}
 }
 
+func TestAdminIndexIncludesSortableStats(t *testing.T) {
+	wants := []string{
+		`data-stats-sort="day"`,
+		`data-stats-sort="lastActivityAt" aria-sort="descending"`,
+		`data-stats-sort="node"`,
+		`data-stats-sort="client"`,
+		`data-stats-sort="plays"`,
+		`data-stats-sort="sessions"`,
+		`data-stats-sort="inboundBytes"`,
+		`data-stats-sort="outboundBytes"`,
+		`let statsSortKey = 'lastActivityAt';`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(indexHTML, want) {
+			t.Fatalf("indexHTML missing %q", want)
+		}
+	}
+}
+
 func TestDispatchLogsListReturnsBufferedLogs(t *testing.T) {
 	ctx := context.Background()
 	handler, closeStore := newConfigTestHandler(t)

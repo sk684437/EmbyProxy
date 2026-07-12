@@ -669,6 +669,35 @@ func TestGetPlayStatsUsesUTC8CalendarWindow(t *testing.T) {
 	}
 }
 
+func TestGetPlayStatsReturnsLastActivity(t *testing.T) {
+	ctx := context.Background()
+	store := newStatsTestStore(t)
+	now := localtime.Now()
+	lastActivityAt := now.Add(-90 * time.Second).UnixMilli()
+
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO play_stats (day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at)
+		VALUES (?, ?, ?, ?, 0, 0, 0, ?, 0, ?)
+	`, now.Format("2006-01-02"), "alpha", "client", 2, 1, lastActivityAt); err != nil {
+		t.Fatalf("insert play stat error = %v", err)
+	}
+
+	stats, err := store.GetPlayStats(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetPlayStats() error = %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("GetPlayStats() len = %d, want 1: %+v", len(stats), stats)
+	}
+	if stats[0].LastActivityAt != lastActivityAt {
+		t.Fatalf("LastActivityAt = %d, want %d", stats[0].LastActivityAt, lastActivityAt)
+	}
+	wantText := localtime.FormatUnixMilli(lastActivityAt, "2006-01-02 15:04:05")
+	if stats[0].LastActivity != wantText {
+		t.Fatalf("LastActivity = %q, want %q", stats[0].LastActivity, wantText)
+	}
+}
+
 func TestInitSchemaDoesNotPromoteLegacyPlayStatsBytes(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")

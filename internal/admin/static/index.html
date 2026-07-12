@@ -177,10 +177,16 @@ main{min-width:0;min-height:0}
 .stat-block .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950;color:var(--ink-3)}
 .data-table{background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:30px;overflow:auto;box-shadow:0 18px 56px rgba(58,48,32,.08)}
 table{width:100%;border-collapse:collapse}
-#statsTable{min-width:980px}
+#statsTable{min-width:1160px}
 th,td{padding:15px 18px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
 th{background:var(--paper-2);color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950}
 td{color:var(--ink-2)}
+#statsTable th{padding:0}
+.stats-sort-button{width:100%;min-height:46px;padding:15px 18px;border:0;background:transparent;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;font-weight:inherit;display:flex;align-items:center;justify-content:flex-start;gap:7px;cursor:pointer;text-align:left;white-space:nowrap}
+.stats-sort-button:hover{color:var(--ink)}
+.stats-sort-button:focus-visible{outline:2px solid var(--pine);outline-offset:-3px}
+#statsTable th[aria-sort="ascending"] .stats-sort-button,#statsTable th[aria-sort="descending"] .stats-sort-button{color:var(--pine)}
+.stats-sort-indicator{display:inline-block;min-width:12px;font-size:10px;line-height:1}
 .table-empty{text-align:center;color:var(--ink-3)}
 tr:last-child td{border-bottom:0}
 .logs-deck{height:100%;min-height:0;display:grid;grid-template-rows:auto minmax(360px,1fr);gap:16px;min-width:0}
@@ -522,7 +528,16 @@ tr:last-child td{border-bottom:0}
           <div class="stats-grid" id="statsCards"></div>
           <div class="data-table">
             <table id="statsTable">
-              <thead><tr><th>日期</th><th>Emby 节点</th><th>客户端</th><th>播放次数</th><th>会话数</th><th>入站流量</th><th>出站流量</th></tr></thead>
+              <thead><tr>
+                <th data-stats-sort="day" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('day')"><span>日期</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
+                <th data-stats-sort="lastActivityAt" aria-sort="descending"><button type="button" class="stats-sort-button" onclick="setStatsSort('lastActivityAt')"><span>最近活动</span><span class="stats-sort-indicator" aria-hidden="true">▼</span></button></th>
+                <th data-stats-sort="node" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('node')"><span>Emby 节点</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
+                <th data-stats-sort="client" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('client')"><span>客户端</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
+                <th data-stats-sort="plays" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('plays')"><span>播放次数</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
+                <th data-stats-sort="sessions" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('sessions')"><span>会话数</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
+                <th data-stats-sort="inboundBytes" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('inboundBytes')"><span>入站流量</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
+                <th data-stats-sort="outboundBytes" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('outboundBytes')"><span>出站流量</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
+              </tr></thead>
               <tbody id="statsBody"></tbody>
             </table>
           </div>
@@ -1042,8 +1057,28 @@ let lastLogStreamId = 0;
 let logViewEpoch = 0;
 let logGapRefreshPending = false;
 let pendingLogCount = 0;
+let statsRows = [];
+let statsSortKey = 'lastActivityAt';
+let statsSortDirection = 'desc';
 const LOG_PAGE_LIMIT = 2000;
 const LOG_DOM_LIMIT = 4000;
+const STATS_SORT_DEFAULT_DIRECTIONS = {
+  day: 'desc',
+  lastActivityAt: 'desc',
+  node: 'asc',
+  client: 'asc',
+  plays: 'desc',
+  sessions: 'desc',
+  inboundBytes: 'desc',
+  outboundBytes: 'desc',
+};
+const STATS_SORT_FALLBACKS = [
+  ['day', 'desc'],
+  ['lastActivityAt', 'desc'],
+  ['node', 'asc'],
+  ['client', 'asc'],
+];
+const statsTextCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 
 document.getElementById('logConsole')?.addEventListener('scroll', e => {
   if (isAtBottom(e.currentTarget)) resetPendingLogCount();
@@ -1920,11 +1955,11 @@ async function loadStats() {
   const days = parseInt(document.getElementById('statsDays').value);
   const r = await api('stats.get', { days });
   if (!r.ok) { toast('加载统计失败', 'err'); return; }
-  const stats = r.stats || [];
+  statsRows = Array.isArray(r.stats) ? r.stats : [];
 
   let totalPlays = 0, totalSessions = 0, totalInboundBytes = 0, totalOutboundBytes = 0;
   const nodeSet = new Set(), clientSet = new Set();
-  for (const s of stats) {
+  for (const s of statsRows) {
     totalPlays += Number(s.plays || 0);
     totalSessions += Number(s.sessions || 0);
     totalInboundBytes += trafficInboundBytes(s);
@@ -1945,10 +1980,76 @@ async function loadStats() {
     <div class="stat-block"><div class="val">${nodeSet.size}</div><div class="lbl">活跃节点</div></div>
     <div class="stat-block"><div class="val">${clientSet.size}</div><div class="lbl">客户端种类</div></div>
   `;
+  renderStatsTable();
+}
+
+function setStatsSort(key) {
+  const defaultDirection = STATS_SORT_DEFAULT_DIRECTIONS[key];
+  if (!defaultDirection) return;
+  if (statsSortKey === key) {
+    statsSortDirection = statsSortDirection === 'asc' ? 'desc' : 'asc';
+  } else {
+    statsSortKey = key;
+    statsSortDirection = defaultDirection;
+  }
+  renderStatsTable();
+}
+
+function renderStatsTable() {
+  const stats = sortedStatsRows();
   const tbody = document.getElementById('statsBody');
   tbody.innerHTML = stats.length ? stats.map(s => `
-    <tr><td>${s.day}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
-  `).join('') : '<tr><td class="table-empty" colspan="7">暂无数据</td></tr>';
+    <tr><td>${esc(s.day)}</td><td>${esc(formatStatsActivity(s))}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
+  `).join('') : '<tr><td class="table-empty" colspan="8">暂无数据</td></tr>';
+  updateStatsSortHeaders();
+}
+
+function sortedStatsRows() {
+  return statsRows.map((row, index) => ({ row, index })).sort((left, right) => {
+    const primary = compareStatsField(left.row, right.row, statsSortKey);
+    if (primary !== 0) return applySortDirection(primary, statsSortDirection);
+    for (const [key, direction] of STATS_SORT_FALLBACKS) {
+      if (key === statsSortKey) continue;
+      const compared = compareStatsField(left.row, right.row, key);
+      if (compared !== 0) return applySortDirection(compared, direction);
+    }
+    return left.index - right.index;
+  }).map(item => item.row);
+}
+
+function compareStatsField(left, right, key) {
+  if (key === 'day' || key === 'node' || key === 'client') {
+    return statsTextCollator.compare(String(left?.[key] || ''), String(right?.[key] || ''));
+  }
+  if (key === 'inboundBytes') return compareStatsNumber(trafficInboundBytes(left), trafficInboundBytes(right));
+  if (key === 'outboundBytes') return compareStatsNumber(trafficOutboundBytes(left), trafficOutboundBytes(right));
+  return compareStatsNumber(Number(left?.[key] || 0), Number(right?.[key] || 0));
+}
+
+function compareStatsNumber(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function applySortDirection(compared, direction) {
+  return direction === 'asc' ? compared : -compared;
+}
+
+function updateStatsSortHeaders() {
+  document.querySelectorAll('#statsTable th[data-stats-sort]').forEach(th => {
+    const active = th.dataset.statsSort === statsSortKey;
+    th.setAttribute('aria-sort', active ? (statsSortDirection === 'asc' ? 'ascending' : 'descending') : 'none');
+    const indicator = th.querySelector('.stats-sort-indicator');
+    if (indicator) indicator.textContent = active ? (statsSortDirection === 'asc' ? '▲' : '▼') : '';
+  });
+}
+
+function formatStatsActivity(stat) {
+  const formatted = String(stat?.lastActivity || '').trim();
+  if (formatted) return formatted;
+  const timestamp = Number(stat?.lastActivityAt || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '--';
+  return new Date(timestamp).toLocaleString('zh-CN', { hour12: false });
 }
 
 function trafficInboundBytes(stat) {
