@@ -44,6 +44,9 @@ func main() {
 		log.Warn("startup", "console log history disabled", map[string]any{"event": "consoleLogHistoryDisabled", "error": err.Error()})
 	}
 	logBuildInfo(log)
+	if cfg.Admin2FADisabled {
+		log.Warn("security", "administrator 2FA emergency mode enabled", map[string]any{"event": "admin2FAEmergencyModeEnabled"})
+	}
 	if errText := auth.ValidateAdminToken(cfg.AdminToken); errText != "" {
 		log.Error("startup", "admin token config invalid", map[string]any{"event": "adminTokenConfigInvalid", "error": errText})
 		os.Exit(1)

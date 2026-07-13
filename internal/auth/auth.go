@@ -15,11 +15,13 @@ import (
 )
 
 type Result struct {
-	OK     bool
-	UID    string
-	Role   string
-	Status int
-	Error  string
+	OK         bool
+	UID        string
+	Role       string
+	Status     int
+	Error      string
+	SessionKey string
+	AuthMethod string
 }
 
 const AdminTokenNotConfigured = "ADMIN_TOKEN 未配置，请在 .env 或环境变量中设置后重启服务"
@@ -27,11 +29,35 @@ const AdminTokenDefault = "ADMIN_TOKEN 不能使用默认值，请在 .env 或�
 
 const defaultAdminToken = "change-me-please"
 
+const (
+	adminTokenFailureLimit = 3
+	totpFailureLimit       = 3
+	authFailureWindow      = 10 * time.Minute
+)
+
+const (
+	ErrorUnauthorized         = "UNAUTHORIZED"
+	ErrorInvalidCredentials   = "INVALID_CREDENTIALS"
+	ErrorTOTPRequired         = "TOTP_REQUIRED"
+	ErrorTooManyRequests      = "TOO_MANY_REQUESTS"
+	ErrorTwoFactorUnavailable = "TWO_FACTOR_UNAVAILABLE"
+	ErrorSessionRequired      = "SESSION_REQUIRED"
+	ErrorSetupExpired         = "SETUP_EXPIRED"
+	ErrorCrossSiteRequest     = "CROSS_SITE_REQUEST"
+)
+
 type Checker struct {
-	cfg   config.Config
-	store *storage.Store
-	mu    sync.Mutex
-	fails map[string]failRecord
+	cfg         config.Config
+	store       *storage.Store
+	authStateMu sync.RWMutex
+	mu          sync.Mutex
+	totpMu      sync.Mutex
+	tokenFails  failureRecords
+	totpFails   failureRecords
+	sessions    map[string]sessionRecord
+	setups      map[string]pendingSetup
+	now         func() time.Time
+	afterFunc   func(time.Duration, func())
 }
 
 type failRecord struct {
@@ -39,45 +65,180 @@ type failRecord struct {
 	TS time.Time
 }
 
+type failureRecords struct {
+	mu               sync.Mutex
+	entries          map[string]failRecord
+	cleanupScheduled bool
+}
+
 func NewChecker(cfg config.Config, store *storage.Store) *Checker {
-	return &Checker{cfg: cfg, store: store, fails: map[string]failRecord{}}
+	return &Checker{
+		cfg:   cfg,
+		store: store,
+		tokenFails: failureRecords{
+			entries: map[string]failRecord{},
+		},
+		totpFails: failureRecords{
+			entries: map[string]failRecord{},
+		},
+		sessions: map[string]sessionRecord{},
+		setups:   map[string]pendingSetup{},
+		now:      time.Now,
+		afterFunc: func(delay time.Duration, fn func()) {
+			time.AfterFunc(delay, fn)
+		},
+	}
 }
 
 func (c *Checker) Check(r *http.Request) Result {
-	ip := ClientIP(r, c.trustsProxy(r.Context()))
-	now := time.Now()
-	window := 10 * time.Minute
-	maxFail := 20
+	res, release := c.CheckWithStateGuard(r)
+	release()
+	return res
+}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if now.UnixNano()&63 == 0 {
-		for key, rec := range c.fails {
-			if now.Sub(rec.TS) > window {
-				delete(c.fails, key)
-			}
-		}
+// CheckWithStateGuard keeps successful token authorization stable until release is called.
+// The returned release function must always be called and is a no-op when no lock is held.
+func (c *Checker) CheckWithStateGuard(r *http.Request) (Result, func()) {
+	if res := c.checkSession(r); res.OK {
+		return res, noOpRelease
 	}
-	rec := c.fails[ip]
-	if rec.TS.IsZero() || now.Sub(rec.TS) > window {
-		rec = failRecord{TS: now}
-	}
+
 	got := ExtractToken(r)
 	admin := strings.TrimSpace(c.cfg.AdminToken)
 	if errText := ValidateAdminToken(admin); errText != "" {
-		return Result{Status: http.StatusInternalServerError, Error: errText}
+		return Result{Status: http.StatusInternalServerError, Error: errText}, noOpRelease
 	}
-	if got != "" && SafeEqual(got, admin) {
-		delete(c.fails, ip)
-		return Result{OK: true, UID: "admin", Role: "admin"}
+	if got == "" {
+		return Result{Status: http.StatusUnauthorized, Error: ErrorUnauthorized}, noOpRelease
+	}
+	failureKey := c.ClientIP(r)
+	if SafeEqual(got, admin) {
+		if !c.clearFailureIfAllowed(&c.tokenFails, failureKey, adminTokenFailureLimit, authFailureWindow) {
+			return Result{Status: http.StatusTooManyRequests, Error: ErrorTooManyRequests}, noOpRelease
+		}
+		if c.cfg.Admin2FADisabled {
+			return Result{OK: true, UID: "admin", Role: "admin", AuthMethod: "token"}, noOpRelease
+		}
+		c.authStateMu.RLock()
+		status, err := c.twoFactorStatusLocked(r.Context())
+		if err != nil {
+			c.authStateMu.RUnlock()
+			return Result{Status: http.StatusServiceUnavailable, Error: ErrorTwoFactorUnavailable}, noOpRelease
+		}
+		if status.Enforced {
+			c.authStateMu.RUnlock()
+			return Result{Status: http.StatusUnauthorized, Error: ErrorUnauthorized}, noOpRelease
+		}
+		return Result{OK: true, UID: "admin", Role: "admin", AuthMethod: "token"}, c.authStateMu.RUnlock
+	}
+	if c.recordFailure(&c.tokenFails, failureKey, adminTokenFailureLimit, authFailureWindow) {
+		return Result{Status: http.StatusTooManyRequests, Error: ErrorTooManyRequests}, noOpRelease
+	}
+	return Result{Status: http.StatusUnauthorized, Error: ErrorUnauthorized}, noOpRelease
+}
+
+func noOpRelease() {}
+
+func (c *Checker) ClientIP(r *http.Request) string {
+	if r == nil {
+		return "unknown"
+	}
+	return ClientIP(r, c.trustsProxy(r.Context()))
+}
+
+func (c *Checker) currentTime() time.Time {
+	if c != nil && c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+func (c *Checker) recordFailure(records *failureRecords, key string, maxFail int, window time.Duration) bool {
+	now := c.currentTime()
+	records.mu.Lock()
+	rec := records.entries[key]
+	if rec.TS.IsZero() || now.Sub(rec.TS) > window {
+		rec = failRecord{TS: now}
 	}
 	if rec.N >= maxFail {
-		return Result{Status: http.StatusTooManyRequests, Error: "TOO_MANY_REQUESTS"}
+		records.mu.Unlock()
+		return true
 	}
 	rec.N++
 	rec.TS = now
-	c.fails[ip] = rec
-	return Result{Status: http.StatusUnauthorized, Error: "UNAUTHORIZED"}
+	records.entries[key] = rec
+	shouldScheduleCleanup := !records.cleanupScheduled
+	if shouldScheduleCleanup {
+		records.cleanupScheduled = true
+	}
+	records.mu.Unlock()
+	if shouldScheduleCleanup {
+		c.scheduleFailureCleanup(records, window)
+	}
+	return false
+}
+
+func (c *Checker) clearFailure(records *failureRecords, key string) {
+	records.mu.Lock()
+	delete(records.entries, key)
+	records.mu.Unlock()
+}
+
+func (c *Checker) clearFailureIfAllowed(records *failureRecords, key string, maxFail int, window time.Duration) bool {
+	now := c.currentTime()
+	records.mu.Lock()
+	defer records.mu.Unlock()
+	rec, ok := records.entries[key]
+	if ok && now.Sub(rec.TS) > window {
+		delete(records.entries, key)
+		ok = false
+	}
+	if ok && rec.N >= maxFail {
+		return false
+	}
+	delete(records.entries, key)
+	return true
+}
+
+func (c *Checker) failureLimited(records *failureRecords, key string, maxFail int, window time.Duration) bool {
+	now := c.currentTime()
+	records.mu.Lock()
+	defer records.mu.Unlock()
+	rec, ok := records.entries[key]
+	if ok && now.Sub(rec.TS) > window {
+		delete(records.entries, key)
+		return false
+	}
+	return ok && rec.N >= maxFail
+}
+
+func (c *Checker) scheduleFailureCleanup(records *failureRecords, window time.Duration) {
+	afterFunc := c.afterFunc
+	if afterFunc == nil {
+		afterFunc = func(delay time.Duration, fn func()) {
+			time.AfterFunc(delay, fn)
+		}
+	}
+	afterFunc(window+time.Nanosecond, func() {
+		c.cleanupFailures(records, window)
+	})
+}
+
+func (c *Checker) cleanupFailures(records *failureRecords, window time.Duration) {
+	now := c.currentTime()
+	records.mu.Lock()
+	for key, rec := range records.entries {
+		if now.Sub(rec.TS) > window {
+			delete(records.entries, key)
+		}
+	}
+	if len(records.entries) == 0 {
+		records.cleanupScheduled = false
+		records.mu.Unlock()
+		return
+	}
+	records.mu.Unlock()
+	c.scheduleFailureCleanup(records, window)
 }
 
 func (c *Checker) trustsProxy(ctx context.Context) bool {

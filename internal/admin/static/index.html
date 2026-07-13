@@ -54,9 +54,11 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .login-box p{color:var(--ink-3);margin-bottom:32px}
 .login-box input{width:100%;height:56px;border:1px solid var(--line);background:var(--canvas-2);border-radius:18px;padding:0 18px;color:var(--ink);font-size:15px;transition:.16s}
 .login-box input:focus{border-color:var(--pine);background:#fff}
+.login-code{margin-top:12px}
 .login-box .primary-action{width:100%;height:56px;margin-top:14px}
 .login-err{display:none;margin-top:14px;border:1px solid rgba(168,59,50,.18);background:var(--red-wash);color:var(--red);border-radius:16px;padding:12px 14px;font-weight:800;font-size:13px}
 #app{display:none;min-height:100vh;width:100%}
+.emergency-banner{position:sticky;top:0;z-index:280;border-bottom:1px solid rgba(168,59,50,.24);background:#7d2823;color:#fff5f3;padding:11px 20px;text-align:center;font-size:13px;font-weight:900;box-shadow:0 12px 28px rgba(80,20,16,.18)}
 .shell{width:100%;min-height:100vh;display:grid;grid-template-columns:88px minmax(0,1fr)}
 .command-rail{position:sticky;top:0;height:100vh;padding:18px 12px;background:rgba(30,33,29,.92);display:flex;flex-direction:column;align-items:center;gap:18px;color:#fff;z-index:100}
 .rail-logo{width:54px;height:54px;border-radius:19px;background:#fff;color:var(--pine);display:grid;place-items:center}
@@ -315,6 +317,36 @@ tr:last-child td{border-bottom:0}
 .config-card-head span{border:1px solid rgba(36,89,77,.16);background:var(--pine-wash);color:var(--pine);border-radius:999px;padding:3px 8px;font-size:10px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
 .config-sheet .toggle-row{min-height:48px;border:1px solid var(--line);border-radius:16px;background:rgba(255,253,248,.78);padding:0 12px}
 .config-field-card.is-warning .config-card-head span{background:var(--amber-wash);border-color:rgba(189,106,52,.22);color:var(--amber)}
+.twofactor-card{--security-accent:#60776f;--security-wash:#edf2ef;position:relative;overflow:hidden;padding:0;background:linear-gradient(145deg,rgba(255,253,248,.98),rgba(244,240,231,.86));border-color:rgba(96,119,111,.28);box-shadow:0 14px 34px rgba(58,48,32,.06)}
+.twofactor-card::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;background:linear-gradient(90deg,var(--security-accent),color-mix(in srgb,var(--security-accent) 42%,transparent))}
+.twofactor-card[data-state="enabled"]{--security-accent:var(--green);--security-wash:var(--green-wash);border-color:rgba(35,117,71,.24)}
+.twofactor-card[data-state="emergency"]{--security-accent:var(--amber);--security-wash:var(--amber-wash);border-color:rgba(189,106,52,.28)}
+.twofactor-card .config-card-head{padding:18px 18px 0;align-items:flex-start}
+.twofactor-heading{display:grid;gap:4px}
+.twofactor-heading small{color:var(--ink-3);font-size:10px;font-weight:950;letter-spacing:.16em;text-transform:uppercase}
+.twofactor-card .config-card-head h4{font-size:17px;letter-spacing:-.045em}
+.twofactor-card #twoFactorBadge{display:inline-flex;align-items:center;gap:7px;border-color:color-mix(in srgb,var(--security-accent) 22%,transparent);background:var(--security-wash);color:var(--security-accent);padding:5px 10px;letter-spacing:.05em;text-transform:none}
+.twofactor-card #twoFactorBadge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px color-mix(in srgb,var(--security-accent) 12%,transparent)}
+.twofactor-body{margin:14px;padding:16px;border:1px solid color-mix(in srgb,var(--security-accent) 18%,var(--line));border-radius:18px;background:linear-gradient(135deg,var(--security-wash),rgba(255,253,248,.90));display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:14px;align-items:center}
+.twofactor-icon{width:52px;height:52px;border-radius:17px;background:var(--paper);border:1px solid color-mix(in srgb,var(--security-accent) 22%,transparent);color:var(--security-accent);display:grid;place-items:center;box-shadow:0 10px 24px color-mix(in srgb,var(--security-accent) 10%,transparent)}
+.twofactor-icon svg{width:28px;height:28px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.security-state{min-width:0;display:grid;gap:4px}
+.security-state b{color:var(--ink);font-size:18px;line-height:1.2;letter-spacing:-.04em}
+.security-state p{max-width:580px;color:var(--ink-3);font-size:12px;line-height:1.65}
+.security-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.security-actions .btn{min-width:104px;background:rgba(255,253,248,.84)}
+.security-actions .btn-primary{background:var(--security-accent);border-color:var(--security-accent);color:#fff;box-shadow:0 9px 20px color-mix(in srgb,var(--security-accent) 18%,transparent)}
+.security-actions .btn-primary:hover{background:color-mix(in srgb,var(--security-accent) 84%,#000);border-color:color-mix(in srgb,var(--security-accent) 84%,#000);color:#fff}
+.twofactor-qr{width:256px;max-width:100%;aspect-ratio:1;border:1px solid var(--line);border-radius:20px;background:#fff;padding:10px;display:block;margin:0 auto}
+.manual-secret{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:16px;background:var(--paper-2);padding:10px 12px;min-width:0}
+.manual-secret code{flex:1;min-width:0;overflow-wrap:anywhere;color:var(--ink);font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace;font-size:12px}
+.twofactor-note{border:1px solid rgba(189,106,52,.22);border-radius:16px;background:var(--amber-wash);color:var(--amber);padding:11px 13px;font-size:12px;font-weight:850;line-height:1.6}
+@media (max-width:720px){
+  .twofactor-body{grid-template-columns:46px minmax(0,1fr);padding:14px}
+  .twofactor-icon{width:46px;height:46px;border-radius:15px}
+  .security-actions{grid-column:1/-1;justify-content:stretch}
+  .security-actions .btn{flex:1}
+}
 #toastRoot{position:fixed;right:24px;bottom:24px;z-index:9999;display:grid;gap:10px}
 .toast{max-width:380px;border-radius:18px;background:var(--paper);border:1px solid var(--line);border-left:6px solid var(--pine);box-shadow:0 20px 54px rgba(58,48,32,.16);padding:13px 16px;color:var(--ink);font-weight:900;animation:toastIn .18s ease}
 .toast.ok{border-left-color:var(--green)}
@@ -414,21 +446,25 @@ tr:last-child td{border-bottom:0}
       </div>
       <div class="auth-tiles">
         <div class="auth-tile"><b>Route</b><span>媒体路由</span></div>
-        <div class="auth-tile"><b>Guard</b><span>Token 认证</span></div>
+        <div class="auth-tile"><b>Guard</b><span>Token / 2FA</span></div>
         <div class="auth-tile"><b>Signal</b><span>播放统计</span></div>
       </div>
     </section>
     <section class="login-box">
       <h2>管理员登录</h2>
-      <p>输入管理员 Token 后进入节点、通知与播放统计管理</p>
+      <p id="loginHint">输入管理员 Token 后进入节点、通知与播放统计管理</p>
       <input type="password" id="tokenInput" placeholder="使用管理员 Token 登录" autocomplete="current-password"/>
-      <button class="primary-action" onclick="doLogin()">登录</button>
+      <div class="login-code" id="totpLoginWrap" hidden>
+        <input type="text" id="totpInput" placeholder="输入 6 位动态验证码" autocomplete="one-time-code" inputmode="numeric" maxlength="6"/>
+      </div>
+      <button class="primary-action" id="loginButton" onclick="doLogin()">登录</button>
       <div class="login-err" id="loginErr">Token 错误，请重试</div>
     </section>
   </div>
 </div>
 
 <div id="app">
+  <div class="emergency-banner" id="emergencyBanner" hidden>管理员 2FA 当前被环境变量临时停用。恢复或重新绑定后，请移除 ADMIN_2FA_DISABLED 并重启服务。</div>
   <div class="shell">
     <aside class="command-rail">
       <div class="rail-logo" aria-label="Emby">
@@ -886,6 +922,32 @@ tr:last-child td{border-bottom:0}
             </div>
           </div>
           <div class="config-fields">
+            <div class="config-field-card twofactor-card" id="twoFactorCard" data-state="disabled">
+              <div class="config-card-head">
+                <div class="twofactor-heading">
+                  <small>Account Security</small>
+                  <h4>管理员双重验证</h4>
+                </div>
+                <span id="twoFactorBadge">未开启</span>
+              </div>
+              <div class="twofactor-body">
+                <div class="twofactor-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M12 3 19 6v5c0 4.4-2.7 8-7 10-4.3-2-7-5.6-7-10V6l7-3Z"></path>
+                    <rect x="9" y="11" width="6" height="5" rx="1.2"></rect>
+                    <path d="M10.5 11V9.8a1.5 1.5 0 0 1 3 0V11"></path>
+                  </svg>
+                </div>
+                <div class="security-state">
+                  <b id="twoFactorStatusTitle">正在读取状态</b>
+                  <p id="twoFactorStatusText">请稍候…</p>
+                </div>
+                <div class="security-actions">
+                  <button type="button" class="btn btn-primary" id="twoFactorSetupBtn" onclick="openTwoFactorSetup()">立即开启</button>
+                  <button type="button" class="btn btn-danger" id="twoFactorDisableBtn" onclick="openTwoFactorDisable()" hidden>关闭 2FA</button>
+                </div>
+              </div>
+            </div>
             <div class="config-field-card">
               <div class="config-card-head">
                 <h4>真实 IP 识别</h4>
@@ -1027,10 +1089,62 @@ tr:last-child td{border-bottom:0}
   </div>
 </div>
 
+<div class="sheet-layer" id="twoFactorModal" style="display:none" onclick="if(event.target===this)closeTwoFactorModal()">
+  <div class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h2 id="twoFactorModalTitle">开启双重验证</h2>
+        <p id="twoFactorModalSubtitle">重新验证管理员身份后生成绑定二维码</p>
+      </div>
+      <button class="sheet-close" onclick="closeTwoFactorModal()">×</button>
+    </div>
+    <div id="twoFactorReauthStep">
+      <div class="form-group form-spaced">
+        <label for="twoFactorAdminToken">管理员 Token</label>
+        <input type="password" id="twoFactorAdminToken" autocomplete="current-password" placeholder="重新输入 ADMIN_TOKEN"/>
+      </div>
+      <div class="form-group form-spaced" id="twoFactorCurrentCodeWrap">
+        <label for="twoFactorCurrentCode">当前动态验证码</label>
+        <input type="text" id="twoFactorCurrentCode" autocomplete="one-time-code" inputmode="numeric" maxlength="6" placeholder="输入当前 6 位验证码"/>
+      </div>
+      <div class="twofactor-note" id="twoFactorEmergencyNote" hidden>当前处于紧急模式，无需旧验证码；操作完成后仍需移除环境变量并重启服务。</div>
+      <div class="form-actions">
+        <button class="btn" onclick="closeTwoFactorModal()">取消</button>
+        <button class="primary-action" id="twoFactorContinueBtn" onclick="submitTwoFactorReauth()">生成二维码</button>
+      </div>
+    </div>
+    <div id="twoFactorEnrollStep" hidden>
+      <img class="twofactor-qr" id="twoFactorQRCode" alt="管理员双重验证二维码"/>
+      <div class="form-group form-spaced" style="margin-top:18px">
+        <label>无法扫描时手动输入</label>
+        <div class="manual-secret">
+          <code id="twoFactorManualKey"></code>
+          <button type="button" class="copy-button" onclick="copyText(document.getElementById('twoFactorManualKey').textContent)">复制</button>
+        </div>
+      </div>
+      <div class="form-group form-spaced">
+        <label for="twoFactorNewCode">新验证器生成的动态验证码</label>
+        <input type="text" id="twoFactorNewCode" autocomplete="one-time-code" inputmode="numeric" maxlength="6" placeholder="输入 6 位验证码确认绑定"/>
+      </div>
+      <div class="twofactor-note">二维码密钥只在本次绑定期间显示，有效期 10 分钟。确认成功前不会替换现有绑定。</div>
+      <div class="form-actions">
+        <button class="btn" onclick="closeTwoFactorModal()">取消</button>
+        <button class="primary-action" id="twoFactorConfirmBtn" onclick="confirmTwoFactorSetup()">确认绑定</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="toastRoot"></div>
 
 <script>
-let TOKEN = localStorage.getItem('ep_token') || '';
+let SAVED_TOKEN = localStorage.getItem('ep_token') || '';
+let authGeneration = 0;
+let loginInFlight = false;
+let AUTH_STATUS = null;
+let TWO_FACTOR_ACTION = 'setup';
+let TWO_FACTOR_SETUP_ID = '';
+let twoFactorFlowGeneration = 0;
 let allNodes = [];
 let editingNode = null;
 let selectedNodes = new Set();
@@ -1091,31 +1205,168 @@ const EYE_ICONS = {
   closed: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 10.6a3 3 0 0 0 4.1 4.1"></path><path d="M9.5 5.5A10.6 10.6 0 0 1 12 5c6 0 9.5 7 9.5 7a16.6 16.6 0 0 1-2.4 3.2"></path><path d="M6.2 6.8C3.8 8.6 2.5 12 2.5 12s3.5 7 9.5 7c1.3 0 2.5-.3 3.6-.8"></path></svg>',
 };
 
-window.onload = () => {
-  if (TOKEN) initApp();
-};
+window.onload = () => restoreSession();
+
+async function authFetch(path, options = {}) {
+  try {
+    const response = await fetch(path, { ...options, credentials: 'same-origin' });
+    let data;
+    try {
+      data = await response.json();
+    } catch (_) {
+      data = { ok: false, error: 'INVALID_RESPONSE' };
+    }
+    data._status = response.status;
+    return data;
+  } catch (e) {
+    return { ok: false, error: e.message || 'NETWORK_ERROR', _status: 0 };
+  }
+}
+
+async function restoreSession() {
+  const generation = ++authGeneration;
+  const r = await authFetch('/admin/auth/status');
+  if (generation !== authGeneration) return;
+  if (r.ok && r.authenticated) {
+    applyAuthStatus(r.twoFactor);
+    initApp();
+    return;
+  }
+  if (SAVED_TOKEN) {
+    const saved = SAVED_TOKEN;
+    const auto = await authFetch('/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: saved, code: '' }),
+    });
+    if (generation !== authGeneration) return;
+    if (auto.ok) {
+      applyAuthStatus(auto.twoFactor);
+      initApp();
+      return;
+    }
+    if (auto.error === 'TOTP_REQUIRED') {
+      clearSavedToken();
+      document.getElementById('tokenInput').value = saved;
+      document.getElementById('totpLoginWrap').hidden = false;
+      document.getElementById('loginHint').textContent = '已检测到 2FA，请输入验证器生成的 6 位动态验证码';
+      showLoginError('请输入动态验证码');
+      document.getElementById('totpInput').focus();
+      return;
+    }
+    clearSavedToken();
+  }
+  showLogin();
+}
 
 async function doLogin() {
-  const tok = document.getElementById('tokenInput').value.trim();
-  if (!tok) return;
-  const r = await api('list', {}, tok);
-  if (r.ok) {
-    TOKEN = tok;
-    localStorage.setItem('ep_token', TOKEN);
-    initApp();
-  } else {
-    document.getElementById('loginErr').style.display = 'block';
+  if (loginInFlight) return;
+  const tokenInput = document.getElementById('tokenInput');
+  const codeInput = document.getElementById('totpInput');
+  const token = tokenInput.value.trim();
+  const code = codeInput.value.trim();
+  if (!token) {
+    showLoginError('请输入管理员 Token');
+    return;
+  }
+  const button = document.getElementById('loginButton');
+  loginInFlight = true;
+  button.disabled = true;
+  const generation = ++authGeneration;
+  try {
+    const r = await authFetch('/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, code }),
+    });
+    if (generation !== authGeneration) return;
+    if (r.ok) {
+      persistTokenForStatus(token, r.twoFactor);
+      tokenInput.value = '';
+      codeInput.value = '';
+      document.getElementById('totpLoginWrap').hidden = true;
+      document.getElementById('loginErr').style.display = 'none';
+      applyAuthStatus(r.twoFactor);
+      initApp();
+      return;
+    }
+    if (r.error === 'TOTP_REQUIRED') {
+      clearSavedToken();
+      document.getElementById('totpLoginWrap').hidden = false;
+      document.getElementById('loginHint').textContent = 'Token 已通过，请输入验证器生成的 6 位动态验证码';
+      showLoginError('请输入动态验证码');
+      codeInput.focus();
+      return;
+    }
+    if (r.twoFactor?.configured) clearSavedToken();
+    showLoginError(authErrorMessage(r.error));
+  } finally {
+    loginInFlight = false;
+    button.disabled = false;
   }
 }
 
 document.getElementById('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('totpInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
-function doLogout() {
-  localStorage.removeItem('ep_token');
-  TOKEN = '';
+async function doLogout() {
+  const r = await authFetch('/admin/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  if (!r.ok) {
+    toast('退出登录失败: ' + authErrorMessage(r.error), 'err');
+    return;
+  }
+  authGeneration++;
+  clearSavedToken();
+  AUTH_STATUS = null;
+  showLogin();
+}
+
+function showLogin(message = '') {
   stopLogRealtime();
+  resetProtectedUI();
   document.getElementById('app').style.display = 'none';
   document.getElementById('loginWrap').style.display = 'grid';
+  document.getElementById('totpLoginWrap').hidden = true;
+  document.getElementById('totpInput').value = '';
+  if (!document.getElementById('tokenInput').value && SAVED_TOKEN) document.getElementById('tokenInput').value = SAVED_TOKEN;
+  document.getElementById('loginHint').textContent = '输入管理员 Token 后进入节点、通知与播放统计管理';
+  if (message) showLoginError(message);
+  else document.getElementById('loginErr').style.display = 'none';
+}
+
+function resetProtectedUI() {
+  document.querySelectorAll('.sheet-layer').forEach(layer => { layer.style.display = 'none'; });
+  editingNode = null;
+  twoFactorFlowGeneration++;
+  TWO_FACTOR_SETUP_ID = '';
+  clearNodeForm();
+  ['importJson', 'tg-token', 'tg-chat', 'tg-serverRemark', 'twoFactorAdminToken', 'twoFactorCurrentCode', 'twoFactorNewCode'].forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.value = '';
+  });
+  document.getElementById('twoFactorQRCode')?.removeAttribute('src');
+  const manualKey = document.getElementById('twoFactorManualKey');
+  if (manualKey) manualKey.textContent = '';
+}
+
+function showLoginError(message) {
+  const error = document.getElementById('loginErr');
+  error.textContent = message;
+  error.style.display = 'block';
+}
+
+function authErrorMessage(error) {
+  const messages = {
+    INVALID_CREDENTIALS: 'Token 或动态验证码错误，请重试',
+    TOTP_REQUIRED: '请输入动态验证码',
+    UNAUTHORIZED: '登录会话无效，请重新登录',
+    TOO_MANY_REQUESTS: '失败次数过多，请稍后再试',
+    TWO_FACTOR_UNAVAILABLE: '2FA 配置无法读取，请设置 ADMIN_2FA_DISABLED=true 并重启后恢复',
+    CROSS_SITE_REQUEST: '请求来源校验失败，请从当前管理页面重试',
+    SESSION_REQUIRED: '该操作需要重新登录',
+    SETUP_EXPIRED: '绑定二维码已过期，请重新生成',
+  };
+  return messages[error] || '登录失败，请重试';
 }
 
 function initApp() {
@@ -1126,17 +1377,100 @@ function initApp() {
   loadNodes();
 }
 
-async function api(action, data = {}, tok = TOKEN) {
-  try {
-    const r = await fetch('/admin/api', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
-      body: JSON.stringify({ action, ...data }),
-    });
-    return await r.json();
-  } catch (e) {
-    return { ok: false, error: e.message };
+async function api(action, data = {}) {
+  const generation = authGeneration;
+  const r = await authFetch('/admin/api', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, ...data }),
+  });
+
+  if (generation !== authGeneration) return { ok: false, error: '', _status: 401, _stale: true };
+  if (handleSessionAuthFailure(r, generation)) return { ok: false, error: '', _status: 401, _stale: true };
+  return r;
+}
+
+function handleSessionAuthFailure(r, generation) {
+  if (generation !== authGeneration || r?._status !== 401 || (r.error !== 'UNAUTHORIZED' && r.error !== 'SESSION_REQUIRED')) return false;
+  authGeneration++;
+  AUTH_STATUS = null;
+  showLogin('登录会话已过期，请重新登录');
+  return true;
+}
+
+function applyAuthStatus(twoFactor) {
+  AUTH_STATUS = {
+    configured: !!twoFactor?.configured,
+    enforced: !!twoFactor?.enforced,
+    emergencyDisabled: !!twoFactor?.emergencyDisabled,
+    enrolledAt: Number(twoFactor?.enrolledAt || 0),
+  };
+  if (AUTH_STATUS.configured) clearSavedToken();
+  document.getElementById('emergencyBanner').hidden = !AUTH_STATUS.emergencyDisabled;
+  renderTwoFactorStatus();
+}
+
+function acceptRotatedSession(twoFactor) {
+  authGeneration++;
+  applyAuthStatus(twoFactor);
+}
+
+function persistTokenForStatus(token, twoFactor) {
+  if (twoFactor?.configured) {
+    clearSavedToken();
+    return;
   }
+  SAVED_TOKEN = String(token || '').trim();
+  if (SAVED_TOKEN) localStorage.setItem('ep_token', SAVED_TOKEN);
+}
+
+function clearSavedToken() {
+  SAVED_TOKEN = '';
+  localStorage.removeItem('ep_token');
+}
+
+function renderTwoFactorStatus() {
+  const card = document.getElementById('twoFactorCard');
+  const title = document.getElementById('twoFactorStatusTitle');
+  const text = document.getElementById('twoFactorStatusText');
+  const badge = document.getElementById('twoFactorBadge');
+  const setupButton = document.getElementById('twoFactorSetupBtn');
+  const disableButton = document.getElementById('twoFactorDisableBtn');
+  if (!title || !AUTH_STATUS) return;
+  if (AUTH_STATUS.configured && AUTH_STATUS.emergencyDisabled) {
+    card.dataset.state = 'emergency';
+    title.textContent = '双重验证已临时停用';
+    text.textContent = '当前只验证管理员 Token。可重新绑定或关闭 2FA，完成后请移除环境变量并重启。';
+    badge.textContent = '紧急停用';
+  } else if (AUTH_STATUS.configured) {
+    card.dataset.state = 'enabled';
+    title.textContent = '双重验证保护中';
+    const enrolled = AUTH_STATUS.enrolledAt ? new Date(AUTH_STATUS.enrolledAt).toLocaleString('zh-CN') : '未知时间';
+    text.textContent = `所有管理入口均要求动态验证码，绑定时间：${enrolled}`;
+    badge.textContent = '已开启';
+  } else {
+    card.dataset.state = 'disabled';
+    title.textContent = '为后台增加第二道保护';
+    text.textContent = AUTH_STATUS.emergencyDisabled
+      ? '紧急停用变量已生效，但当前没有已保存的 2FA 绑定。'
+      : '开启后，登录时除管理员 Token 外，还需要验证器生成的 6 位动态验证码。';
+    badge.textContent = '未开启';
+  }
+  setupButton.textContent = AUTH_STATUS.configured ? '重新绑定' : '立即开启';
+  disableButton.hidden = !AUTH_STATUS.configured;
+}
+
+async function refreshAuthStatus(showToast = false) {
+  const generation = authGeneration;
+  const r = await authFetch('/admin/auth/status');
+  if (generation !== authGeneration) return false;
+  if (!r.ok) {
+    if (handleSessionAuthFailure(r, generation)) return false;
+    else if (showToast) toast('读取 2FA 状态失败: ' + authErrorMessage(r.error), 'err');
+    return false;
+  }
+  applyAuthStatus(r.twoFactor);
+  return true;
 }
 
 function switchTab(name, btn) {
@@ -1699,30 +2033,193 @@ function safeLogLevel(value) {
   return ['silent', 'error', 'warn', 'info', 'debug'].includes(level) ? level : 'info';
 }
 
+function openTwoFactorSetup() {
+  if (!AUTH_STATUS) return;
+  twoFactorFlowGeneration++;
+  TWO_FACTOR_ACTION = 'setup';
+  TWO_FACTOR_SETUP_ID = '';
+  document.getElementById('twoFactorModalTitle').textContent = AUTH_STATUS.configured ? '重新绑定双重验证' : '开启双重验证';
+  document.getElementById('twoFactorModalSubtitle').textContent = AUTH_STATUS.configured
+    ? '先验证当前管理员身份，再扫描新的二维码替换原绑定'
+    : '验证管理员身份后生成绑定二维码';
+  document.getElementById('twoFactorContinueBtn').textContent = '生成二维码';
+  prepareTwoFactorReauthForm();
+  showModal('twoFactorModal');
+  document.getElementById('twoFactorAdminToken').focus();
+}
+
+function openTwoFactorDisable() {
+  if (!AUTH_STATUS?.configured) return;
+  twoFactorFlowGeneration++;
+  TWO_FACTOR_ACTION = 'disable';
+  TWO_FACTOR_SETUP_ID = '';
+  document.getElementById('twoFactorModalTitle').textContent = '关闭双重验证';
+  document.getElementById('twoFactorModalSubtitle').textContent = '关闭后，管理入口将恢复为仅验证管理员 Token';
+  document.getElementById('twoFactorContinueBtn').textContent = '确认关闭';
+  prepareTwoFactorReauthForm();
+  showModal('twoFactorModal');
+  document.getElementById('twoFactorAdminToken').focus();
+}
+
+function prepareTwoFactorReauthForm() {
+  const needsCurrentCode = !!AUTH_STATUS?.configured && !AUTH_STATUS?.emergencyDisabled;
+  document.getElementById('twoFactorContinueBtn').disabled = false;
+  document.getElementById('twoFactorConfirmBtn').disabled = false;
+  document.getElementById('twoFactorAdminToken').value = '';
+  document.getElementById('twoFactorCurrentCode').value = '';
+  document.getElementById('twoFactorNewCode').value = '';
+  document.getElementById('twoFactorCurrentCodeWrap').hidden = !needsCurrentCode;
+  document.getElementById('twoFactorEmergencyNote').hidden = !AUTH_STATUS?.emergencyDisabled;
+  document.getElementById('twoFactorReauthStep').hidden = false;
+  document.getElementById('twoFactorEnrollStep').hidden = true;
+  document.getElementById('twoFactorQRCode').removeAttribute('src');
+  document.getElementById('twoFactorManualKey').textContent = '';
+}
+
+function closeTwoFactorModal() {
+  twoFactorFlowGeneration++;
+  TWO_FACTOR_SETUP_ID = '';
+  document.getElementById('twoFactorAdminToken').value = '';
+  document.getElementById('twoFactorCurrentCode').value = '';
+  document.getElementById('twoFactorNewCode').value = '';
+  document.getElementById('twoFactorQRCode').removeAttribute('src');
+  document.getElementById('twoFactorManualKey').textContent = '';
+  hideModal('twoFactorModal');
+}
+
+async function submitTwoFactorReauth() {
+  const token = document.getElementById('twoFactorAdminToken').value.trim();
+  const currentCode = document.getElementById('twoFactorCurrentCode').value.trim();
+  const needsCurrentCode = !!AUTH_STATUS?.configured && !AUTH_STATUS?.emergencyDisabled;
+  if (!token) {
+    toast('请输入管理员 Token', 'err');
+    return;
+  }
+  if (needsCurrentCode && !currentCode) {
+    toast('请输入当前动态验证码', 'err');
+    return;
+  }
+  const button = document.getElementById('twoFactorContinueBtn');
+  button.disabled = true;
+  const generation = authGeneration;
+  const flowGeneration = twoFactorFlowGeneration;
+  if (TWO_FACTOR_ACTION === 'disable') {
+    if (!confirm('确定关闭管理员双重验证？关闭后将只验证 ADMIN_TOKEN。')) {
+      button.disabled = false;
+      return;
+    }
+    const r = await authFetch('/admin/auth/2fa/disable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, currentCode }),
+    });
+    if (generation !== authGeneration) return;
+    if (handleSessionAuthFailure(r, generation)) return;
+    if (r.ok) {
+      persistTokenForStatus(token, r.twoFactor);
+      acceptRotatedSession(r.twoFactor);
+    }
+    if (flowGeneration !== twoFactorFlowGeneration) {
+      if (r.ok) closeTwoFactorModal();
+      return;
+    }
+    button.disabled = false;
+    if (!r.ok) {
+      toast('关闭 2FA 失败: ' + authErrorMessage(r.error), 'err');
+      return;
+    }
+    closeTwoFactorModal();
+    toast('管理员双重验证已关闭', 'ok');
+    return;
+  }
+  const r = await authFetch('/admin/auth/2fa/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, currentCode }),
+  });
+  if (generation !== authGeneration) return;
+  if (handleSessionAuthFailure(r, generation)) return;
+  if (flowGeneration !== twoFactorFlowGeneration) return;
+  button.disabled = false;
+  if (!r.ok || !r.setup) {
+    toast('生成绑定二维码失败: ' + authErrorMessage(r.error), 'err');
+    return;
+  }
+  TWO_FACTOR_SETUP_ID = r.setup.setupId || '';
+  document.getElementById('twoFactorQRCode').src = r.setup.qrCodeDataUrl || '';
+  document.getElementById('twoFactorManualKey').textContent = r.setup.manualKey || '';
+  document.getElementById('twoFactorAdminToken').value = '';
+  document.getElementById('twoFactorCurrentCode').value = '';
+  document.getElementById('twoFactorReauthStep').hidden = true;
+  document.getElementById('twoFactorEnrollStep').hidden = false;
+  document.getElementById('twoFactorNewCode').focus();
+}
+
+async function confirmTwoFactorSetup() {
+  const code = document.getElementById('twoFactorNewCode').value.trim();
+  if (!TWO_FACTOR_SETUP_ID) {
+    toast('绑定二维码已失效，请重新生成', 'err');
+    return;
+  }
+  if (!code) {
+    toast('请输入新验证器生成的动态验证码', 'err');
+    return;
+  }
+  const button = document.getElementById('twoFactorConfirmBtn');
+  button.disabled = true;
+  const generation = authGeneration;
+  const flowGeneration = twoFactorFlowGeneration;
+  const r = await authFetch('/admin/auth/2fa/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setupId: TWO_FACTOR_SETUP_ID, code }),
+  });
+  if (generation !== authGeneration) return;
+  if (handleSessionAuthFailure(r, generation)) return;
+  if (r.ok) acceptRotatedSession(r.twoFactor);
+  if (flowGeneration !== twoFactorFlowGeneration) {
+    if (r.ok) closeTwoFactorModal();
+    return;
+  }
+  button.disabled = false;
+  if (!r.ok) {
+    toast('确认绑定失败: ' + authErrorMessage(r.error), 'err');
+    if (r.error === 'SETUP_EXPIRED') prepareTwoFactorReauthForm();
+    return;
+  }
+  closeTwoFactorModal();
+  toast(AUTH_STATUS.emergencyDisabled
+    ? '新绑定已保存，请移除 ADMIN_2FA_DISABLED 并重启服务'
+    : '管理员双重验证已开启', 'ok');
+}
+
 async function openConfigModal() {
   renderImageCacheStats(null);
+  if (!await refreshAuthStatus(false)) return;
   const r = await api('config.get');
-  if (r.ok && r.config) {
-    const c = r.config;
-    document.getElementById('cfg-logLevel').value = safeLogLevel(c.logLevel);
-    document.getElementById('cfg-logAccess').checked = c.logAccess !== false;
-    document.getElementById('cfg-capyStripEmby').checked = flagEnabled(c.capyStripEmby);
-    document.getElementById('cfg-emosCompat').checked = !!c.emosCompat;
-    document.getElementById('cfg-emosMatchHosts').value = formatCommaList(c.emosMatchHosts);
-    document.getElementById('cfg-emosProxyId').value = c.emosProxyId || '';
-    document.getElementById('cfg-emosProxyName').value = c.emosProxyName || '';
-    document.getElementById('cfg-imageProxyLimitEnabled').checked = c.imageProxyLimitEnabled === true;
-    document.getElementById('cfg-imageProxyMaxConcurrent').value = c.imageProxyMaxConcurrent ?? 4;
-    document.getElementById('cfg-imageProxyRequestIntervalMs').value = c.imageProxyRequestIntervalMs ?? 250;
-    document.getElementById('cfg-imageCacheEnabled').checked = c.imageCacheEnabled === true;
-    document.getElementById('cfg-imageCacheTtlDays').value = c.imageCacheTtlDays ?? 30;
-    document.getElementById('cfg-corsAllowOrigin').value = formatCORSAllowOrigin(c.corsAllowOrigin);
-    document.getElementById('cfg-externalAllowHosts').value = formatExternalAllowHosts(c.externalAllowHosts);
-    document.getElementById('cfg-externalAllowAny').checked = !!c.externalAllowAny;
-    document.getElementById('cfg-trustProxy').checked = c.trustProxy !== false;
-    document.getElementById('cfg-trafficCaptureEnabled').checked = !!c.trafficCaptureEnabled;
-    document.getElementById('cfg-trafficCaptureFile').value = c.trafficCaptureFile || './data/traffic-captures.jsonl';
+  if (!r.ok || !r.config) {
+    if (r._status !== 401) toast('读取系统配置失败: ' + (r.error || '响应无效'), 'err');
+    return;
   }
+  const c = r.config;
+  document.getElementById('cfg-logLevel').value = safeLogLevel(c.logLevel);
+  document.getElementById('cfg-logAccess').checked = c.logAccess !== false;
+  document.getElementById('cfg-capyStripEmby').checked = flagEnabled(c.capyStripEmby);
+  document.getElementById('cfg-emosCompat').checked = !!c.emosCompat;
+  document.getElementById('cfg-emosMatchHosts').value = formatCommaList(c.emosMatchHosts);
+  document.getElementById('cfg-emosProxyId').value = c.emosProxyId || '';
+  document.getElementById('cfg-emosProxyName').value = c.emosProxyName || '';
+  document.getElementById('cfg-imageProxyLimitEnabled').checked = c.imageProxyLimitEnabled === true;
+  document.getElementById('cfg-imageProxyMaxConcurrent').value = c.imageProxyMaxConcurrent ?? 4;
+  document.getElementById('cfg-imageProxyRequestIntervalMs').value = c.imageProxyRequestIntervalMs ?? 250;
+  document.getElementById('cfg-imageCacheEnabled').checked = c.imageCacheEnabled === true;
+  document.getElementById('cfg-imageCacheTtlDays').value = c.imageCacheTtlDays ?? 30;
+  document.getElementById('cfg-corsAllowOrigin').value = formatCORSAllowOrigin(c.corsAllowOrigin);
+  document.getElementById('cfg-externalAllowHosts').value = formatExternalAllowHosts(c.externalAllowHosts);
+  document.getElementById('cfg-externalAllowAny').checked = !!c.externalAllowAny;
+  document.getElementById('cfg-trustProxy').checked = c.trustProxy !== false;
+  document.getElementById('cfg-trafficCaptureEnabled').checked = !!c.trafficCaptureEnabled;
+  document.getElementById('cfg-trafficCaptureFile').value = c.trafficCaptureFile || './data/traffic-captures.jsonl';
   showModal('configModal');
   const panel = document.querySelector('#configForm .config-panel');
   if (panel) panel.scrollTop = 0;
@@ -1900,15 +2397,17 @@ async function saveConfig() {
 
 async function openTgModal() {
   const r = await api('tg.get');
-  if (r.ok && r.config) {
-    const c = r.config;
-    document.getElementById('tg-enabled').checked = !!c.enabled;
-    document.getElementById('tg-token').value = c.token || '';
-    document.getElementById('tg-chat').value = c.chat || '';
-    document.getElementById('tg-serverRemark').value = c.serverRemark || '';
-    document.getElementById('tg-reportEnabled').checked = c.reportEnabled === true;
-    document.getElementById('tg-reportTime').value = c.reportTime || '08:00';
+  if (!r.ok || !r.config) {
+    if (r._status !== 401) toast('读取 TG 配置失败: ' + (r.error || '响应无效'), 'err');
+    return;
   }
+  const c = r.config;
+  document.getElementById('tg-enabled').checked = !!c.enabled;
+  document.getElementById('tg-token').value = c.token || '';
+  document.getElementById('tg-chat').value = c.chat || '';
+  document.getElementById('tg-serverRemark').value = c.serverRemark || '';
+  document.getElementById('tg-reportEnabled').checked = c.reportEnabled === true;
+  document.getElementById('tg-reportTime').value = c.reportTime || '08:00';
   syncTgNotificationControls();
   showModal('tgModal');
 }
@@ -2352,15 +2851,24 @@ async function startLogStream() {
     return;
   }
   const token = ++logStreamToken;
+  const generation = authGeneration;
   const controller = new AbortController();
   logStreamController = controller;
   logGapRefreshPending = false;
   setLogStreamStatus('连接中', 'paused');
   try {
     const response = await fetch('/admin/logs/stream', {
-      headers: { 'Authorization': 'Bearer ' + TOKEN },
+      credentials: 'same-origin',
       signal: controller.signal,
     });
+    if (generation !== authGeneration) {
+      controller.abort();
+      return;
+    }
+    if (response.status === 401) {
+      handleSessionAuthFailure({ _status: 401, error: 'UNAUTHORIZED' }, generation);
+      return;
+    }
     if (!response.ok || !response.body) throw new Error('日志流不可用');
     setLogStreamStatus('同步中', 'stream');
     const streamEpoch = logViewEpoch;

@@ -19,11 +19,12 @@ type Defaults struct {
 }
 
 type Config struct {
-	CWD        string
-	DBPath     string
-	Port       int
-	AdminToken string
-	Defaults   Defaults
+	CWD              string
+	DBPath           string
+	Port             int
+	AdminToken       string
+	Admin2FADisabled bool
+	Defaults         Defaults
 }
 
 type ProxyEnv struct {
@@ -44,10 +45,11 @@ func Load() (Config, error) {
 	}
 	_ = loadDotEnv(filepath.Join(cwd, ".env"))
 	cfg := Config{
-		CWD:        cwd,
-		DBPath:     envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
-		Port:       envInt("PORT", 8787),
-		AdminToken: os.Getenv("ADMIN_TOKEN"),
+		CWD:              cwd,
+		DBPath:           envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
+		Port:             envInt("PORT", 8787),
+		AdminToken:       os.Getenv("ADMIN_TOKEN"),
+		Admin2FADisabled: envBool("ADMIN_2FA_DISABLED", false),
 		Defaults: Defaults{
 			CacheTTL:           10000,
 			ListCacheTTL:       180000,

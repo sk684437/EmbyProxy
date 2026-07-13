@@ -159,7 +159,7 @@ func TestStreamLogsSendsInitialComment(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/admin/logs/stream", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 
-	handler.streamLogs(rec, req)
+	handler.streamLogs(rec, req, auth.Result{OK: true})
 
 	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)

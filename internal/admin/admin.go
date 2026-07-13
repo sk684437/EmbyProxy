@@ -104,18 +104,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveIndex(w, r)
 		return
 	}
+	if strings.HasPrefix(path, "/admin/auth") {
+		h.handleAuth(w, r, path)
+		return
+	}
 	capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-auth"})
+	if r.Method == http.MethodPost && !validAdminOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": auth.ErrorCrossSiteRequest})
+		return
+	}
+	if h.checker == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "INTERNAL_ERROR"})
+		return
+	}
 	res := h.checker.Check(r)
 	if !res.OK {
 		writeJSON(w, res.Status, map[string]any{"error": res.Error})
 		return
 	}
 	if r.Method == http.MethodGet && path == "/admin/logs/stream" {
-		h.streamLogs(w, r)
+		h.streamLogs(w, r, res)
 		return
 	}
 	if r.Method == http.MethodPost && path == "/admin/api" {
-		h.handleAPI(w, r, res.UID)
+		h.handleAuthorizedAPI(w, r)
 		return
 	}
 	http.NotFound(w, r)
@@ -126,7 +138,161 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(indexHTML))
 }
 
-func (h *Handler) streamLogs(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleAuth(w http.ResponseWriter, r *http.Request, path string) {
+	capture.Suppress(r)
+	capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-auth", "adminAction": strings.TrimPrefix(path, "/admin/")})
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodPost && !validAdminOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": auth.ErrorCrossSiteRequest})
+		return
+	}
+	if h.checker == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "INTERNAL_ERROR"})
+		return
+	}
+	switch {
+	case r.Method == http.MethodPost && path == "/admin/auth/login":
+		var body struct {
+			Token string `json:"token"`
+			Code  string `json:"code"`
+		}
+		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		session, status, res := h.checker.Login(r, body.Token, body.Code)
+		if !res.OK {
+			writeJSON(w, res.Status, map[string]any{"ok": false, "error": res.Error, "twoFactor": status})
+			return
+		}
+		auth.SetSessionCookie(w, r, session)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":               true,
+			"authenticated":    true,
+			"sessionExpiresAt": session.ExpiresAt.UnixMilli(),
+			"twoFactor":        status,
+		})
+	case r.Method == http.MethodPost && path == "/admin/auth/logout":
+		h.checker.Logout(r)
+		auth.ClearSessionCookie(w, r)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case r.Method == http.MethodGet && path == "/admin/auth/status":
+		res := h.checker.Check(r)
+		if !res.OK {
+			writeJSON(w, res.Status, map[string]any{"ok": false, "authenticated": false, "error": res.Error})
+			return
+		}
+		status, err := h.checker.TwoFactorStatus(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "authenticated": true, "error": auth.ErrorTwoFactorUnavailable})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "authenticated": true, "twoFactor": status})
+	case r.Method == http.MethodPost && path == "/admin/auth/2fa/setup":
+		res := h.checker.Check(r)
+		if !res.OK {
+			writeJSON(w, res.Status, map[string]any{"ok": false, "error": res.Error})
+			return
+		}
+		var body struct {
+			Token       string `json:"token"`
+			CurrentCode string `json:"currentCode"`
+		}
+		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		setup, op := h.checker.BeginTwoFactorSetup(r, res.SessionKey, body.Token, body.CurrentCode, r.Host)
+		if !op.OK {
+			writeJSON(w, op.Status, map[string]any{"ok": false, "error": op.Error})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "setup": setup})
+	case r.Method == http.MethodPost && path == "/admin/auth/2fa/confirm":
+		res := h.checker.Check(r)
+		if !res.OK {
+			writeJSON(w, res.Status, map[string]any{"ok": false, "error": res.Error})
+			return
+		}
+		var body struct {
+			SetupID string `json:"setupId"`
+			Code    string `json:"code"`
+		}
+		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		session, status, op := h.checker.ConfirmTwoFactorSetup(r, res.SessionKey, body.SetupID, body.Code)
+		if !op.OK {
+			writeJSON(w, op.Status, map[string]any{"ok": false, "error": op.Error})
+			return
+		}
+		auth.SetSessionCookie(w, r, session)
+		h.logSecurityEvent("admin2FAConfigured", "administrator 2FA configured", r)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "twoFactor": status, "sessionExpiresAt": session.ExpiresAt.UnixMilli()})
+	case r.Method == http.MethodPost && path == "/admin/auth/2fa/disable":
+		res := h.checker.Check(r)
+		if !res.OK {
+			writeJSON(w, res.Status, map[string]any{"ok": false, "error": res.Error})
+			return
+		}
+		var body struct {
+			Token       string `json:"token"`
+			CurrentCode string `json:"currentCode"`
+		}
+		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		session, status, op := h.checker.DisableTwoFactor(r, res.SessionKey, body.Token, body.CurrentCode)
+		if !op.OK {
+			writeJSON(w, op.Status, map[string]any{"ok": false, "error": op.Error})
+			return
+		}
+		auth.SetSessionCookie(w, r, session)
+		h.logSecurityEvent("admin2FADisabled", "administrator 2FA disabled", r)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "twoFactor": status, "sessionExpiresAt": session.ExpiresAt.UnixMilli()})
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func decodeAuthJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(dst); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "请求 JSON 无效"})
+		return false
+	}
+	return true
+}
+
+func validAdminOrigin(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || u.Scheme == "" {
+		return false
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https") {
+		scheme = "https"
+	}
+	return strings.EqualFold(u.Scheme, scheme) && strings.EqualFold(u.Host, r.Host)
+}
+
+func (h *Handler) logSecurityEvent(event, message string, r *http.Request) {
+	if h == nil || h.log == nil {
+		return
+	}
+	h.log.Info("security", message, map[string]any{"event": event, "ip": h.checker.ClientIP(r)})
+}
+
+func (h *Handler) streamLogs(w http.ResponseWriter, r *http.Request, initialAuth auth.Result) {
 	capture.Suppress(r)
 	requestlog.SuppressAccessLog(r.Context())
 	flusher, ok := w.(http.Flusher)
@@ -154,6 +320,9 @@ func (h *Handler) streamLogs(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
+			if !h.logStreamAuthorizationValid(r, initialAuth) {
+				return
+			}
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
 				return
 			}
@@ -166,12 +335,29 @@ func (h *Handler) streamLogs(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
+			if !h.logStreamAuthorizationValid(r, initialAuth) {
+				return
+			}
 			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 				return
 			}
 			flusher.Flush()
 		}
 	}
+}
+
+func (h *Handler) logStreamAuthorizationValid(r *http.Request, initial auth.Result) bool {
+	if h == nil || h.checker == nil || !initial.OK {
+		return false
+	}
+	current := h.checker.Check(r)
+	if !current.OK || current.AuthMethod != initial.AuthMethod {
+		return false
+	}
+	if initial.AuthMethod == "session" {
+		return initial.SessionKey != "" && current.SessionKey == initial.SessionKey
+	}
+	return initial.AuthMethod == "token"
 }
 
 func (h *Handler) serveAdminTokenError(w http.ResponseWriter, errText string) {
@@ -202,12 +388,46 @@ code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#9d2f2a}
 }
 
 func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) {
+	body, action, ok := h.decodeAPIRequest(w, r)
+	if !ok {
+		return
+	}
+	if uid == "" {
+		uid = "admin"
+	}
+	result, status := h.dispatch(r.Context(), uid, action, body)
+	writeJSON(w, status, result)
+}
+
+func (h *Handler) handleAuthorizedAPI(w http.ResponseWriter, r *http.Request) {
+	body, action, ok := h.decodeAPIRequest(w, r)
+	if !ok {
+		return
+	}
+	res, releaseAuthState := h.checker.CheckWithStateGuard(r)
+	if !res.OK {
+		releaseAuthState()
+		writeJSON(w, res.Status, map[string]any{"error": res.Error})
+		return
+	}
+	uid := res.UID
+	if uid == "" {
+		uid = "admin"
+	}
+	result, status := func() (map[string]any, int) {
+		defer releaseAuthState()
+		return h.dispatch(r.Context(), uid, action, body)
+	}()
+	writeJSON(w, status, result)
+}
+
+func (h *Handler) decodeAPIRequest(w http.ResponseWriter, r *http.Request) (map[string]any, string, bool) {
 	ctx := r.Context()
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "请求 JSON 无效"})
-		return
+		return nil, "", false
 	}
 	capture.RememberParsedBody(r, body)
 	action := strings.TrimSpace(asString(body["action"]))
@@ -219,11 +439,7 @@ func (h *Handler) handleAPI(w http.ResponseWriter, r *http.Request, uid string) 
 		capture.Suppress(r)
 	}
 	capture.SetMeta(r, map[string]any{"mode": "admin", "adminAction": action, "stage": "admin-api"})
-	if uid == "" {
-		uid = "admin"
-	}
-	result, status := h.dispatch(ctx, uid, action, body)
-	writeJSON(w, status, result)
+	return body, action, true
 }
 
 func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[string]any) (map[string]any, int) {

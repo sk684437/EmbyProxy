@@ -6,6 +6,39 @@ import (
 	"testing"
 )
 
+func TestAdmin2FAConfigCRUDAndCorruption(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if _, configured, err := store.GetAdmin2FAConfig(ctx); err != nil || configured {
+		t.Fatalf("initial config = configured %v, err %v", configured, err)
+	}
+	want := Admin2FAConfig{Version: 1, Salt: "salt", Nonce: "nonce", Ciphertext: "cipher", EnrolledAt: 1234, LastUsedStep: 42}
+	if err := store.SaveAdmin2FAConfig(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	got, configured, err := store.GetAdmin2FAConfig(ctx)
+	if err != nil || !configured || got != want {
+		t.Fatalf("stored config = %+v, configured %v, err %v", got, configured, err)
+	}
+	if err := store.KV().Put(ctx, admin2FAConfigKey, "{broken"); err != nil {
+		t.Fatal(err)
+	}
+	if _, configured, err := store.GetAdmin2FAConfig(ctx); err == nil || !configured {
+		t.Fatalf("corrupt config = configured %v, err %v", configured, err)
+	}
+	if err := store.DeleteAdmin2FAConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, configured, err := store.GetAdmin2FAConfig(ctx); err != nil || configured {
+		t.Fatalf("deleted config = configured %v, err %v", configured, err)
+	}
+}
+
 func TestDefaultSystemConfigDoesNotTrustProxyHeaders(t *testing.T) {
 	if DefaultSystemConfig().TrustProxy {
 		t.Fatal("TrustProxy default should be false")
