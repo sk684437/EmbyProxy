@@ -123,11 +123,26 @@ func (s *Store) InitSchema(ctx context.Context) error {
 			day TEXT NOT NULL,
 			last_ts INTEGER NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS playback_states (
+			k TEXT PRIMARY KEY,
+			node TEXT NOT NULL,
+			client TEXT NOT NULL,
+			mode TEXT NOT NULL,
+			item_key TEXT NOT NULL,
+			last_event_ts INTEGER NOT NULL,
+			last_position_ticks INTEGER NOT NULL DEFAULT 0,
+			has_position INTEGER NOT NULL DEFAULT 0,
+			is_paused INTEGER NOT NULL DEFAULT 0,
+			closed INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_playback_states_updated_at ON playback_states(updated_at);
 		CREATE TABLE IF NOT EXISTS play_stats (
 			day TEXT NOT NULL,
 			node TEXT NOT NULL,
 			client TEXT NOT NULL,
 			plays INTEGER DEFAULT 0,
+			playback_ms INTEGER DEFAULT 0,
 			bytes INTEGER DEFAULT 0,
 			inbound_bytes INTEGER DEFAULT 0,
 			outbound_bytes INTEGER DEFAULT 0,
@@ -142,6 +157,7 @@ func (s *Store) InitSchema(ctx context.Context) error {
 			client TEXT NOT NULL,
 			mode TEXT NOT NULL,
 			plays INTEGER DEFAULT 0,
+			playback_ms INTEGER DEFAULT 0,
 			bytes INTEGER DEFAULT 0,
 			inbound_bytes INTEGER DEFAULT 0,
 			outbound_bytes INTEGER DEFAULT 0,
@@ -154,22 +170,35 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.ensurePlayStatsTrafficColumns(ctx)
+	return s.ensurePlaybackStatColumns(ctx)
 }
 
-func (s *Store) ensurePlayStatsTrafficColumns(ctx context.Context) error {
-	cols, err := s.tableColumns(ctx, "play_stats")
-	if err != nil {
-		return err
-	}
-	if !cols["inbound_bytes"] {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE play_stats ADD COLUMN inbound_bytes INTEGER DEFAULT 0`); err != nil {
+func (s *Store) ensurePlaybackStatColumns(ctx context.Context) error {
+	for table, columns := range map[string][]string{
+		"play_stats": {
+			"playback_ms INTEGER DEFAULT 0",
+			"inbound_bytes INTEGER DEFAULT 0",
+			"outbound_bytes INTEGER DEFAULT 0",
+		},
+		"play_buckets": {
+			"playback_ms INTEGER DEFAULT 0",
+		},
+		"playback_states": {
+			"closed INTEGER DEFAULT 0",
+		},
+	} {
+		cols, err := s.tableColumns(ctx, table)
+		if err != nil {
 			return err
 		}
-	}
-	if !cols["outbound_bytes"] {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE play_stats ADD COLUMN outbound_bytes INTEGER DEFAULT 0`); err != nil {
-			return err
+		for _, column := range columns {
+			name := strings.Fields(column)[0]
+			if cols[name] {
+				continue
+			}
+			if _, err := s.db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

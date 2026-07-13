@@ -91,6 +91,7 @@ type PlayStat struct {
 	Node           string `json:"node"`
 	Client         string `json:"client"`
 	Plays          int64  `json:"plays"`
+	PlaybackMillis int64  `json:"playbackMillis"`
 	Bytes          int64  `json:"bytes"`
 	InboundBytes   int64  `json:"inboundBytes"`
 	OutboundBytes  int64  `json:"outboundBytes"`

@@ -2148,6 +2148,211 @@ func TestHandleMediaProxyThrottlesProgressWithOptionalEmbyPrefix(t *testing.T) {
 	}
 }
 
+func TestServeHTTPLogsThrottledPlaybackProgressDuration(t *testing.T) {
+	store := newProxyTestStore(t)
+	if err := store.SaveNode(context.Background(), "admin", storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://upstream.example",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := New(config.Config{Defaults: config.Defaults{ProgressThrottleMS: 5000}}, store, nil, logging.New("silent", false))
+	actionCalls := 0
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		actionCalls++
+		return textResponse(http.StatusNoContent, "", nil), nil
+	})}
+
+	sendPlaybackAction := func(path, body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/secret"+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "throttle-duration-client")
+		req.Header.Set("X-Emby-Device-Id", "device-1")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("%s status = %d, want %d; body = %s", path, rr.Code, http.StatusNoContent, rr.Body.String())
+		}
+	}
+
+	sendPlaybackAction("/emby/Sessions/Playing", `{"ItemId":"item-1","PlaySessionId":"play-session-1","PositionTicks":0,"IsPaused":true}`)
+	time.Sleep(10 * time.Millisecond)
+	sendPlaybackAction("/emby/Sessions/Playing/Progress", `{"ItemId":"item-1","PlaySessionId":"play-session-1","PositionTicks":0,"IsPaused":false}`)
+	time.Sleep(50 * time.Millisecond)
+	sendPlaybackAction("/emby/Sessions/Playing/Progress", `{"ItemId":"item-1","PlaySessionId":"play-session-1","PositionTicks":300000,"IsPaused":false}`)
+
+	if actionCalls != 2 {
+		t.Fatalf("playback action upstream calls = %d, want 2", actionCalls)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var lastPlaybackMillis int64
+	for {
+		stats, err := h.store.GetTodayStats(context.Background())
+		if err != nil {
+			t.Fatalf("GetTodayStats() error = %v", err)
+		}
+		for _, row := range stats.Today {
+			if row.Node == "node" && row.Client == "throttle-duration-client" {
+				lastPlaybackMillis = row.PlaybackMillis
+				if row.PlaybackMillis > 0 {
+					return
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("playback millis = %d, want throttled progress to add playback duration", lastPlaybackMillis)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestServeHTTPTracksConcurrentPlaybackSessionsWithoutQuerySessionID(t *testing.T) {
+	store := newProxyTestStore(t)
+	if err := store.SaveNode(context.Background(), "admin", storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://upstream.example",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := New(config.Config{Defaults: config.Defaults{ProgressThrottleMS: 5000}}, store, nil, logging.New("silent", false))
+	actionCalls := 0
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		actionCalls++
+		return textResponse(http.StatusNoContent, "", nil), nil
+	})}
+	send := func(path, playSessionID string, positionTicks int64) {
+		t.Helper()
+		body := fmt.Sprintf(
+			`{"ItemId":"item-%s","PlaySessionId":"%s","PositionTicks":%d,"IsPaused":false}`,
+			playSessionID,
+			playSessionID,
+			positionTicks,
+		)
+		req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/secret"+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "concurrent-duration-client")
+		req.Header.Set("X-Emby-Device-Id", "shared-device")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("%s %s status = %d, want %d; body = %s", path, playSessionID, rr.Code, http.StatusNoContent, rr.Body.String())
+		}
+	}
+
+	send("/emby/Sessions/Playing", "play-1", 0)
+	send("/emby/Sessions/Playing", "play-2", 0)
+	send("/emby/Sessions/Playing/Progress", "play-1", 300_000)
+	send("/emby/Sessions/Playing/Progress", "play-2", 400_000)
+
+	if actionCalls != 3 {
+		t.Fatalf("playback action upstream calls = %d, want 3 with the second Progress throttled", actionCalls)
+	}
+	var states int
+	var positions int64
+	if err := store.DB().QueryRowContext(context.Background(), `
+		SELECT COUNT(*), COALESCE(SUM(last_position_ticks), 0)
+		FROM playback_states WHERE closed = 0
+	`).Scan(&states, &positions); err != nil {
+		t.Fatalf("query playback states error = %v", err)
+	}
+	if states != 2 || positions != 700_000 {
+		t.Fatalf("playback states = %d positions = %d; want 2 and 700000", states, positions)
+	}
+}
+
+func TestServeHTTPClosesPlaybackStateWithTargetPathWhenStoppedUpstreamFails(t *testing.T) {
+	store := newProxyTestStore(t)
+	if err := store.SaveNode(context.Background(), "admin", storage.Node{
+		Name:   "node",
+		Secret: "secret",
+		Target: "https://upstream.example/proxy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	assertState := func(wantPosition int64, wantClosed int) {
+		t.Helper()
+		var position int64
+		var closed int
+		if err := store.DB().QueryRowContext(context.Background(), `
+			SELECT last_position_ticks, closed
+			FROM playback_states
+			WHERE k = 'node|play|play-session-1'
+		`).Scan(&position, &closed); err != nil {
+			t.Fatalf("query playback state error = %v", err)
+		}
+		if position != wantPosition || closed != wantClosed {
+			t.Fatalf("playback state position = %d closed = %d; want %d and %d", position, closed, wantPosition, wantClosed)
+		}
+	}
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/proxy/emby/Sessions/Playing" {
+			t.Fatalf("upstream playing path = %q, want %q", req.URL.Path, "/proxy/emby/Sessions/Playing")
+		}
+		assertState(0, 0)
+		return textResponse(http.StatusNoContent, "", nil), nil
+	})}
+	send := func(path, body string, wantStatus int) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/secret"+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "failed-stop-client")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != wantStatus {
+			t.Fatalf("%s status = %d, want %d; body = %s", path, rr.Code, wantStatus, rr.Body.String())
+		}
+	}
+
+	send("/emby/Sessions/Playing", `{"ItemId":"item-1","PlaySessionId":"play-session-1","PositionTicks":0,"IsPaused":false}`, http.StatusNoContent)
+	time.Sleep(10 * time.Millisecond)
+	h.playbackActionClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/proxy/emby/Sessions/Playing/Stopped" {
+			t.Fatalf("upstream stopped path = %q, want %q", req.URL.Path, "/proxy/emby/Sessions/Playing/Stopped")
+		}
+		assertState(1_000_000, 1)
+		return nil, errors.New("upstream stopped failure")
+	})}
+	send("/emby/Sessions/Playing/Stopped", `{"ItemId":"item-1","PlaySessionId":"play-session-1","PositionTicks":1000000,"IsPaused":false}`, http.StatusBadGateway)
+	assertState(1_000_000, 1)
+}
+
+func TestHandleMediaProxyRecordsStoppedWithCanceledRequestContext(t *testing.T) {
+	store := newProxyTestStore(t)
+	h := New(config.Config{}, store, nil, logging.New("silent", false))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	body := []byte(`{"ItemId":"item-1","PlaySessionId":"play-session-1","PositionTicks":1000000,"IsPaused":false}`)
+	req := httptest.NewRequest(http.MethodPost, "https://proxy.example/node/emby/Sessions/Playing/Stopped", bytes.NewReader(body)).WithContext(ctx)
+	req.Header.Set("User-Agent", "canceled-stop-client")
+	targetURL, err := url.Parse("https://upstream.example/emby/Sessions/Playing/Stopped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.handleMediaProxy(ctx, req, storage.Node{Name: "node", Target: "https://upstream.example"}, parsedRoute{Name: "node", Path: "/emby/Sessions/Playing/Stopped"}, targetURL, body, config.ProxyEnv{}, true, false, false, "", "127.0.0.1")
+	if err == nil {
+		if res != nil && res.Body != nil {
+			_ = res.Body.Close()
+		}
+		t.Fatal("handleMediaProxy() error = nil, want canceled upstream request")
+	}
+
+	var closed int
+	if err := store.DB().QueryRowContext(context.Background(), `SELECT closed FROM playback_states`).Scan(&closed); err != nil {
+		t.Fatalf("query playback state error = %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed = %d, want 1", closed)
+	}
+}
+
 func TestResponseReadyLogFieldsUsesResponseTarget(t *testing.T) {
 	ctx := WithAccessLogFields(context.Background())
 	SetAccessLogField(ctx, "responseReadyMs", int64(68))

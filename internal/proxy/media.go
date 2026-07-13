@@ -136,6 +136,10 @@ func (h *Handler) tryAuthAPI(ctx context.Context, r *http.Request, node storage.
 }
 
 func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node storage.Node, parsed parsedRoute, targetURL *url.URL, body []byte, env config.ProxyEnv, isPlaybackAPI, isImageAPI, isAdditionalPartsAPI bool, reqOrigin, clientIP string) (*http.Response, error) {
+	playbackOccurredAt := playbackRequestOccurredAt(r.Context())
+	if r.Method == http.MethodPost && isSessionsPlayingLifecyclePath(parsed.Path) {
+		h.recordPlaybackState(ctx, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, IsPlayback: true, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method, RequestBody: body, OccurredAt: playbackOccurredAt, PlaybackStateOnly: true})
+	}
 	outboundHeaders := cloneHeader(r.Header)
 	isStreamingMedia := isPlaybackStreamRequest(r, targetURL)
 	if isImageAPI || isAdditionalPartsAPI || isStreamingMedia {
@@ -167,6 +171,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 		key := clientIP + "|" + deviceID + "|" + sessionID
 		if _, ok := h.progressThrottle.Get(key); ok {
 			capture.SetMeta(r, map[string]any{"mode": "proxy", "node": parsed.Name, "secret": node.Secret, "stage": "progress-throttle", "targetUrl": targetURL.String(), "outboundHeaders": hClean})
+			h.registerPlayback(r, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: http.StatusNoContent, IsPlayback: true, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method, RequestBody: body, OccurredAt: playbackOccurredAt})
 			return textResponse(http.StatusNoContent, "", http.Header{"Cache-Control": []string{"no-store"}}), nil
 		}
 		h.progressThrottle.Set(key, 1, time.Duration(h.cfg.Defaults.ProgressThrottleMS)*time.Millisecond)
@@ -267,7 +272,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 			playbackTargetURL = strings.TrimSpace(out.Header.Get("Location"))
 		}
 		capture.SetMeta(r, map[string]any{"mode": mode, "stage": stage, "targetUrl": playbackTargetURL})
-		h.registerPlayback(r, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: out.StatusCode, RespHeader: out.Header, IsPlayback: true, Mode: mode, RequestURL: r.URL.RequestURI(), Method: r.Method, RequestBody: body})
+		h.registerPlayback(r, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: out.StatusCode, RespHeader: out.Header, IsPlayback: true, Mode: mode, RequestURL: r.URL.RequestURI(), Method: r.Method, RequestBody: body, OccurredAt: playbackOccurredAt})
 		return out, nil
 	}
 	if isImageAPI && res.StatusCode == http.StatusForbidden {
@@ -339,7 +344,7 @@ func (h *Handler) handleMediaProxy(ctx context.Context, r *http.Request, node st
 	} else {
 		res.Header = headers
 	}
-	h.registerPlayback(r, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: finalRes.StatusCode, RespHeader: finalRes.Header, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method, RequestBody: body})
+	h.registerPlayback(r, storage.PlaybackInput{Node: node, RequestIP: clientIP, Headers: r.Header, Status: finalRes.StatusCode, RespHeader: finalRes.Header, IsPlayback: isPlaybackAPI || isStreamingMedia, Mode: "proxy", RequestURL: r.URL.RequestURI(), Method: r.Method, RequestBody: body, OccurredAt: playbackOccurredAt})
 	if isStreamingMedia && !isImageAPI {
 		markStreamResumeCandidate(finalRes, "playback")
 	}

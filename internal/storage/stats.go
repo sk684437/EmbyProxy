@@ -39,13 +39,43 @@ type PlaybackInput struct {
 	TrafficOnly   bool
 	InboundBytes  int64
 	OutboundBytes int64
+
+	PlaybackStateOnly bool
 }
 
 const (
 	playbackAsyncQueueSize    = 4096
 	playbackAsyncWriteTimeout = 5 * time.Second
 	playbackBucketMillis      = int64(time.Minute / time.Millisecond)
+	// Longer gaps are discarded instead of capped so suspended clients never add inferred playback time.
+	playbackMaxIntervalMillis = int64(40 * time.Second / time.Millisecond)
 )
+
+type playbackState struct {
+	Node              string
+	Client            string
+	Mode              string
+	ItemKey           string
+	LastEventTS       int64
+	LastPositionTicks int64
+	HasPosition       bool
+	IsPaused          bool
+	Closed            bool
+}
+
+type playbackStateUpdate struct {
+	Key           string
+	Event         string
+	Node          string
+	Client        string
+	Mode          string
+	ItemKey       string
+	OccurredAt    int64
+	PositionTicks int64
+	HasPosition   bool
+	IsPaused      bool
+	HasPaused     bool
+}
 
 type sqlExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
@@ -149,6 +179,10 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	if client == "" {
 		client = "Unknown"
 	}
+	mode := strings.TrimSpace(in.Mode)
+	if mode == "" {
+		mode = "proxy"
+	}
 	ip := strings.TrimSpace(strings.Split(in.RequestIP, ",")[0])
 	if ip == "" {
 		ip = "unknown"
@@ -159,6 +193,11 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 	deviceID := cutString(headerOrQueryOrBody(in.Headers, reqURL, bodyValues, "X-Emby-Device-Id", "X-MediaBrowser-Device-Id", "DeviceId", "deviceId", "device_id"), 64)
 	sessionID := cutString(headerOrQueryOrBody(in.Headers, reqURL, bodyValues, "X-Emby-Session-Id", "SessionId", "sessionId", "session_id"), 64)
 	playSessionID := cutString(headerOrQueryOrBody(in.Headers, reqURL, bodyValues, "PlaySessionId", "playSessionId", "play_session_id"), 128)
+	mediaKey := playbackStartMediaKey(reqURL, bodyValues)
+	positionTicks, hasPosition := bodyInt64(bodyValues, "PositionTicks", "positionTicks", "position_ticks")
+	isPaused, hasPaused := bodyBool(bodyValues, "IsPaused", "isPaused", "is_paused")
+	stateKey := playbackStateKey(nodeName, client, ip, userID, deviceID, sessionID, playSessionID, mediaKey)
+	playbackAction := method == http.MethodPost && sessionEvent != "" && playbackStatusSuccessful(in.Status)
 
 	sessInc := int64(0)
 	if countable {
@@ -170,6 +209,26 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		return err
 	}
 	defer tx.Rollback()
+	if in.PlaybackStateOnly {
+		if playbackAction && stateKey != "" {
+			if err := updatePlaybackState(ctx, tx, playbackStateUpdate{
+				Key:           stateKey,
+				Event:         sessionEvent,
+				Node:          nodeName,
+				Client:        client,
+				Mode:          mode,
+				ItemKey:       mediaKey,
+				OccurredAt:    now,
+				PositionTicks: positionTicks,
+				HasPosition:   hasPosition,
+				IsPaused:      isPaused,
+				HasPaused:     hasPaused,
+			}); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO keepalive_state (node, anchor_ts, last_play_ts) VALUES (?, ?, ?)
@@ -210,10 +269,26 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 			}
 		}
 	}
+	if playbackAction && stateKey != "" {
+		if err := updatePlaybackState(ctx, tx, playbackStateUpdate{
+			Key:           stateKey,
+			Event:         sessionEvent,
+			Node:          nodeName,
+			Client:        client,
+			Mode:          mode,
+			ItemKey:       mediaKey,
+			OccurredAt:    now,
+			PositionTicks: positionTicks,
+			HasPosition:   hasPosition,
+			IsPaused:      isPaused,
+			HasPaused:     hasPaused,
+		}); err != nil {
+			return err
+		}
+	}
 	playInc := int64(0)
 	if countable {
 		playInc = 1
-		mediaKey := playbackStartMediaKey(reqURL, bodyValues)
 		playKey := strings.Join([]string{day, nodeName, client, ip, userID, deviceID, sessionID, playSessionID, mediaKey}, "|")
 		var lastTS int64
 		err := tx.QueryRowContext(ctx, `SELECT last_ts FROM play_events WHERE k = ?`, playKey).Scan(&lastTS)
@@ -246,11 +321,7 @@ func (s *Store) LogPlayback(ctx context.Context, in PlaybackInput) error {
 		`, day, nodeName, client, playInc, sessInc, errInc, now); err != nil {
 			return err
 		}
-		mode := in.Mode
-		if mode == "" {
-			mode = "proxy"
-		}
-		if err := upsertPlayBucket(ctx, tx, now, nodeName, client, mode, playInc, 0, 0, 0, sessInc, errInc); err != nil {
+		if err := upsertPlayBucket(ctx, tx, now, nodeName, client, mode, playInc, 0, 0, 0, 0, sessInc, errInc); err != nil {
 			return err
 		}
 	}
@@ -320,7 +391,7 @@ func (s *Store) LogPlaybackTraffic(ctx context.Context, in PlaybackInput) error 
 	if err != nil {
 		return err
 	}
-	return upsertPlayBucket(ctx, s.db, now, nodeName, client, "proxy", 0, totalBytes, inboundBytes, outboundBytes, 0, 0)
+	return upsertPlayBucket(ctx, s.db, now, nodeName, client, "proxy", 0, 0, totalBytes, inboundBytes, outboundBytes, 0, 0)
 }
 
 func playbackOccurredAt(in PlaybackInput) int64 {
@@ -336,7 +407,7 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 	}
 	cutoff := localtime.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at
+		SELECT day, node, client, plays, playback_ms, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at
 		FROM play_stats WHERE day >= ? ORDER BY day DESC, plays DESC
 	`, cutoff)
 	if err != nil {
@@ -346,7 +417,7 @@ func (s *Store) GetPlayStats(ctx context.Context, days int) ([]PlayStat, error) 
 	out := []PlayStat{}
 	for rows.Next() {
 		var stat PlayStat
-		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors, &stat.LastActivityAt); err != nil {
+		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.PlaybackMillis, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors, &stat.LastActivityAt); err != nil {
 			return nil, err
 		}
 		stat.Bytes = stat.InboundBytes + stat.OutboundBytes
@@ -372,7 +443,7 @@ func (s *Store) GetTodayStats(ctx context.Context) (TodayStats, error) {
 }
 
 func (s *Store) getStatsForDay(ctx context.Context, day string) ([]PlayStat, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT day, node, client, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors FROM play_stats WHERE day = ?`, day)
+	rows, err := s.db.QueryContext(ctx, `SELECT day, node, client, plays, playback_ms, bytes, inbound_bytes, outbound_bytes, sessions, errors FROM play_stats WHERE day = ?`, day)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +451,7 @@ func (s *Store) getStatsForDay(ctx context.Context, day string) ([]PlayStat, err
 	out := []PlayStat{}
 	for rows.Next() {
 		var stat PlayStat
-		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
+		if err := rows.Scan(&stat.Day, &stat.Node, &stat.Client, &stat.Plays, &stat.PlaybackMillis, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
 			return nil, err
 		}
 		stat.Bytes = stat.InboundBytes + stat.OutboundBytes
@@ -490,6 +561,237 @@ func playbackSessionKey(nodeName, client, ip, userID, deviceID string) string {
 	return strings.Join([]string{nodeName, client, ip, userID, deviceID}, "|")
 }
 
+func playbackStateKey(nodeName, client, ip, userID, deviceID, sessionID, playSessionID, mediaKey string) string {
+	if playSessionID != "" {
+		return strings.Join([]string{nodeName, "play", playSessionID}, "|")
+	}
+	if sessionID != "" {
+		return strings.Join([]string{nodeName, "session", sessionID, deviceID, mediaKey}, "|")
+	}
+	if deviceID != "" && mediaKey != "" {
+		return strings.Join([]string{nodeName, "device", deviceID, userID, mediaKey}, "|")
+	}
+	if mediaKey != "" {
+		return strings.Join([]string{nodeName, "fallback", client, ip, userID, mediaKey}, "|")
+	}
+	return ""
+}
+
+func updatePlaybackState(ctx context.Context, tx *sql.Tx, in playbackStateUpdate) error {
+	var state playbackState
+	var hasPosition, isPaused, closed int
+	err := tx.QueryRowContext(ctx, `
+		SELECT node, client, mode, item_key, last_event_ts, last_position_ticks, has_position, is_paused, closed
+		FROM playback_states WHERE k = ?
+	`, in.Key).Scan(
+		&state.Node,
+		&state.Client,
+		&state.Mode,
+		&state.ItemKey,
+		&state.LastEventTS,
+		&state.LastPositionTicks,
+		&hasPosition,
+		&isPaused,
+		&closed,
+	)
+	if err == sql.ErrNoRows {
+		if in.Event == "stopped" {
+			return upsertPlaybackState(ctx, tx, playbackState{
+				Node:              in.Node,
+				Client:            in.Client,
+				Mode:              in.Mode,
+				ItemKey:           in.ItemKey,
+				LastEventTS:       in.OccurredAt,
+				LastPositionTicks: in.PositionTicks,
+				HasPosition:       in.HasPosition,
+				IsPaused:          in.HasPaused && in.IsPaused,
+				Closed:            true,
+			}, in.Key)
+		}
+		paused := false
+		if in.HasPaused {
+			paused = in.IsPaused
+		}
+		return upsertPlaybackState(ctx, tx, playbackState{
+			Node:              in.Node,
+			Client:            in.Client,
+			Mode:              in.Mode,
+			ItemKey:           in.ItemKey,
+			LastEventTS:       in.OccurredAt,
+			LastPositionTicks: in.PositionTicks,
+			HasPosition:       in.HasPosition,
+			IsPaused:          paused,
+		}, in.Key)
+	}
+	if err != nil {
+		return err
+	}
+	state.HasPosition = hasPosition != 0
+	state.IsPaused = isPaused != 0
+	state.Closed = closed != 0
+	if in.Event == "playing" {
+		if in.OccurredAt <= state.LastEventTS {
+			return nil
+		}
+		paused := false
+		if in.HasPaused {
+			paused = in.IsPaused
+		}
+		return upsertPlaybackState(ctx, tx, playbackState{
+			Node:              in.Node,
+			Client:            in.Client,
+			Mode:              in.Mode,
+			ItemKey:           in.ItemKey,
+			LastEventTS:       in.OccurredAt,
+			LastPositionTicks: in.PositionTicks,
+			HasPosition:       in.HasPosition,
+			IsPaused:          paused,
+		}, in.Key)
+	}
+	if state.Closed || in.OccurredAt < state.LastEventTS {
+		return nil
+	}
+	if in.OccurredAt == state.LastEventTS {
+		if in.Event != "stopped" {
+			return nil
+		}
+		state.Closed = true
+		return upsertPlaybackState(ctx, tx, state, in.Key)
+	}
+	if state.ItemKey != "" && in.ItemKey != "" && state.ItemKey != in.ItemKey {
+		if in.Event == "stopped" {
+			state.LastEventTS = in.OccurredAt
+			state.Closed = true
+			return upsertPlaybackState(ctx, tx, state, in.Key)
+		}
+		paused := state.IsPaused
+		if in.HasPaused {
+			paused = in.IsPaused
+		}
+		return upsertPlaybackState(ctx, tx, playbackState{
+			Node:              in.Node,
+			Client:            in.Client,
+			Mode:              in.Mode,
+			ItemKey:           in.ItemKey,
+			LastEventTS:       in.OccurredAt,
+			LastPositionTicks: in.PositionTicks,
+			HasPosition:       in.HasPosition,
+			IsPaused:          paused,
+		}, in.Key)
+	}
+
+	intervalMillis := in.OccurredAt - state.LastEventTS
+	positionChanged := state.HasPosition && in.HasPosition && state.LastPositionTicks != in.PositionTicks
+	if intervalMillis <= playbackMaxIntervalMillis && !state.IsPaused && positionChanged {
+		if err := addPlaybackDuration(ctx, tx, state.LastEventTS, in.OccurredAt, state.Node, state.Client, state.Mode); err != nil {
+			return err
+		}
+	}
+	if in.Event == "stopped" {
+		state.LastEventTS = in.OccurredAt
+		if in.ItemKey != "" {
+			state.ItemKey = in.ItemKey
+		}
+		if in.HasPosition {
+			state.LastPositionTicks = in.PositionTicks
+			state.HasPosition = true
+		}
+		if in.HasPaused {
+			state.IsPaused = in.IsPaused
+		}
+		state.Closed = true
+		return upsertPlaybackState(ctx, tx, state, in.Key)
+	}
+
+	if in.ItemKey != "" {
+		state.ItemKey = in.ItemKey
+	}
+	state.LastEventTS = in.OccurredAt
+	if in.HasPosition {
+		state.LastPositionTicks = in.PositionTicks
+		state.HasPosition = true
+	}
+	if in.HasPaused {
+		state.IsPaused = in.IsPaused
+	}
+	return upsertPlaybackState(ctx, tx, state, in.Key)
+}
+
+func upsertPlaybackState(ctx context.Context, tx *sql.Tx, state playbackState, key string) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO playback_states (
+			k, node, client, mode, item_key, last_event_ts, last_position_ticks, has_position, is_paused, closed, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(k) DO UPDATE SET
+			node = excluded.node,
+			client = excluded.client,
+			mode = excluded.mode,
+			item_key = excluded.item_key,
+			last_event_ts = excluded.last_event_ts,
+			last_position_ticks = excluded.last_position_ticks,
+			has_position = excluded.has_position,
+			is_paused = excluded.is_paused,
+			closed = excluded.closed,
+			updated_at = excluded.updated_at
+	`, key, state.Node, state.Client, state.Mode, state.ItemKey, state.LastEventTS, state.LastPositionTicks, boolInt(state.HasPosition), boolInt(state.IsPaused), boolInt(state.Closed), state.LastEventTS)
+	return err
+}
+
+func addPlaybackDuration(ctx context.Context, tx *sql.Tx, startTime, endTime int64, node, client, mode string) error {
+	type dayDuration struct {
+		playbackMillis int64
+		activityAt     int64
+	}
+	daily := make(map[string]dayDuration, 2)
+	dayOrder := make([]string, 0, 2)
+	for cursor := startTime; cursor < endTime; {
+		next := playbackBucketStart(cursor) + playbackBucketMillis
+		if next > endTime {
+			next = endTime
+		}
+		playbackMillis := next - cursor
+		day := BeijingDate(cursor)
+		activityAt := next
+		if BeijingDate(activityAt) != day {
+			activityAt--
+		}
+		total, exists := daily[day]
+		if !exists {
+			dayOrder = append(dayOrder, day)
+		}
+		total.playbackMillis += playbackMillis
+		if activityAt > total.activityAt {
+			total.activityAt = activityAt
+		}
+		daily[day] = total
+		if err := upsertPlayBucket(ctx, tx, cursor, node, client, mode, 0, playbackMillis, 0, 0, 0, 0, 0); err != nil {
+			return err
+		}
+		cursor = next
+	}
+	for _, day := range dayOrder {
+		total := daily[day]
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO play_stats (
+				day, node, client, plays, playback_ms, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at
+			) VALUES (?, ?, ?, 0, ?, 0, 0, 0, 0, 0, ?)
+			ON CONFLICT(day, node, client) DO UPDATE SET
+				playback_ms = playback_ms + excluded.playback_ms,
+				updated_at = MAX(play_stats.updated_at, excluded.updated_at)
+		`, day, node, client, total.playbackMillis, total.activityAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func playbackMediaKey(reqURL *url.URL) string {
 	if reqURL == nil {
 		return ""
@@ -556,6 +858,36 @@ func bodyValue(body map[string]any, names ...string) string {
 	return ""
 }
 
+func bodyInt64(body map[string]any, names ...string) (int64, bool) {
+	value := bodyValue(body, names...)
+	if value == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func bodyBool(body map[string]any, names ...string) (bool, bool) {
+	value := bodyValue(body, names...)
+	if value == "" {
+		return false, false
+	}
+	switch value {
+	case "1":
+		return true, true
+	case "0":
+		return false, true
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, false
+	}
+	return parsed, true
+}
+
 func jsonScalarString(value any) string {
 	switch v := value.(type) {
 	case string:
@@ -619,7 +951,7 @@ func cutString(value string, max int) string {
 
 func (s *Store) GetRangeStats(ctx context.Context, startTime, endTime int64) ([]PlayStat, int64, int64, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT node, client, SUM(plays), SUM(bytes), SUM(inbound_bytes), SUM(outbound_bytes), SUM(sessions), SUM(errors)
+		SELECT node, client, SUM(plays), SUM(playback_ms), SUM(bytes), SUM(inbound_bytes), SUM(outbound_bytes), SUM(sessions), SUM(errors)
 		FROM play_buckets
 		WHERE bucket_start >= ? AND bucket_start < ?
 		GROUP BY node, client
@@ -632,7 +964,7 @@ func (s *Store) GetRangeStats(ctx context.Context, startTime, endTime int64) ([]
 	out := []PlayStat{}
 	for rows.Next() {
 		var stat PlayStat
-		if err := rows.Scan(&stat.Node, &stat.Client, &stat.Plays, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
+		if err := rows.Scan(&stat.Node, &stat.Client, &stat.Plays, &stat.PlaybackMillis, &stat.Bytes, &stat.InboundBytes, &stat.OutboundBytes, &stat.Sessions, &stat.Errors); err != nil {
 			return nil, 0, 0, err
 		}
 		stat.Bytes = stat.InboundBytes + stat.OutboundBytes
@@ -671,20 +1003,30 @@ func (s *Store) PrunePlayBuckets(ctx context.Context, keepDays int) error {
 	return err
 }
 
-func upsertPlayBucket(ctx context.Context, exec sqlExecer, occurredAt int64, node, client, mode string, plays, bytes, inboundBytes, outboundBytes, sessions, errors int64) error {
+func (s *Store) PrunePlaybackStates(ctx context.Context, maxAge time.Duration) error {
+	if maxAge <= 0 {
+		maxAge = 24 * time.Hour
+	}
+	cutoff := time.Now().Add(-maxAge).UnixMilli()
+	_, err := s.db.ExecContext(ctx, `DELETE FROM playback_states WHERE updated_at < ?`, cutoff)
+	return err
+}
+
+func upsertPlayBucket(ctx context.Context, exec sqlExecer, occurredAt int64, node, client, mode string, plays, playbackMillis, bytes, inboundBytes, outboundBytes, sessions, errors int64) error {
 	bucketStart := playbackBucketStart(occurredAt)
 	_, err := exec.ExecContext(ctx, `
-		INSERT INTO play_buckets (bucket_start, node, client, mode, plays, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO play_buckets (bucket_start, node, client, mode, plays, playback_ms, bytes, inbound_bytes, outbound_bytes, sessions, errors, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(bucket_start, node, client, mode) DO UPDATE SET
 			plays = plays + excluded.plays,
+			playback_ms = playback_ms + excluded.playback_ms,
 			bytes = bytes + excluded.bytes,
 			inbound_bytes = inbound_bytes + excluded.inbound_bytes,
 			outbound_bytes = outbound_bytes + excluded.outbound_bytes,
 			sessions = sessions + excluded.sessions,
 			errors = errors + excluded.errors,
 			updated_at = MAX(play_buckets.updated_at, excluded.updated_at)
-	`, bucketStart, node, client, mode, plays, bytes, inboundBytes, outboundBytes, sessions, errors, occurredAt)
+	`, bucketStart, node, client, mode, plays, playbackMillis, bytes, inboundBytes, outboundBytes, sessions, errors, occurredAt)
 	return err
 }
 

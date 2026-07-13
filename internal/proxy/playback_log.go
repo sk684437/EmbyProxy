@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"sync"
+	"time"
 
 	"embyproxy/internal/storage"
 )
@@ -10,9 +11,10 @@ import (
 type playbackLogStateKey struct{}
 
 type playbackLogState struct {
-	mu  sync.Mutex
-	in  storage.PlaybackInput
-	has bool
+	mu         sync.Mutex
+	in         storage.PlaybackInput
+	has        bool
+	occurredAt int64
 }
 
 func withPlaybackLogState(ctx context.Context) context.Context {
@@ -22,7 +24,15 @@ func withPlaybackLogState(ctx context.Context) context.Context {
 	if _, ok := ctx.Value(playbackLogStateKey{}).(*playbackLogState); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, playbackLogStateKey{}, &playbackLogState{})
+	return context.WithValue(ctx, playbackLogStateKey{}, &playbackLogState{occurredAt: time.Now().UnixMilli()})
+}
+
+func playbackRequestOccurredAt(ctx context.Context) int64 {
+	state, ok := ctx.Value(playbackLogStateKey{}).(*playbackLogState)
+	if !ok || state.occurredAt <= 0 {
+		return time.Now().UnixMilli()
+	}
+	return state.occurredAt
 }
 
 func registerPlaybackLog(ctx context.Context, in storage.PlaybackInput) bool {

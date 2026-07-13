@@ -153,7 +153,7 @@ type reportPeriod struct {
 }
 
 func buildReportText(period reportPeriod, today, yesterday summary, nodeDisplay map[string]string) string {
-	if today.Plays == 0 {
+	if today.Plays == 0 && today.PlaybackMillis == 0 {
 		return buildEmptyDayReport(period, today, yesterday)
 	}
 	lines := []string{
@@ -164,15 +164,20 @@ func buildReportText(period reportPeriod, today, yesterday summary, nodeDisplay 
 		"",
 		fmt.Sprintf("▶ 播放 %d 次 · %d 会话 · %d 节点", today.Plays, today.Sessions, len(today.NodeMap)),
 	}
+	lines = append(lines, fmt.Sprintf("   播放时长 %s", formatPlaybackDuration(today.PlaybackMillis)))
 	lines = append(lines, fmt.Sprintf("   入站 %s | 出站 %s", formatBytes(today.InboundBytes), formatBytes(today.OutboundBytes)))
 	if today.Errors > 0 {
 		lines = append(lines, fmt.Sprintf("   ⚠️ 播放出错：%d 次", today.Errors))
 	}
 	lines = appendComparison(lines, today, yesterday, true)
-	lines = append(lines, "", "🏆 节点排行:")
-	lines = append(lines, rankEntries(today.NodeMap, today.Plays, nodeDisplay)...)
-	lines = append(lines, "", "📱 客户端排行:")
-	lines = append(lines, rankEntries(today.ClientMap, today.Plays, nil)...)
+	if entries := rankEntries(today.NodeMap, today.Plays, nodeDisplay); len(entries) > 0 {
+		lines = append(lines, "", "🏆 节点排行:")
+		lines = append(lines, entries...)
+	}
+	if entries := rankEntries(today.ClientMap, today.Plays, nil); len(entries) > 0 {
+		lines = append(lines, "", "📱 客户端排行:")
+		lines = append(lines, entries...)
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -192,12 +197,13 @@ func buildEmptyDayReport(period reportPeriod, today, yesterday summary) string {
 }
 
 func hasPlaybackActivity(s summary) bool {
-	return s.Plays != 0 || s.Sessions != 0 || s.InboundBytes != 0 || s.OutboundBytes != 0
+	return s.Plays != 0 || s.PlaybackMillis != 0 || s.Sessions != 0 || s.InboundBytes != 0 || s.OutboundBytes != 0
 }
 
 func appendComparison(lines []string, current, previous summary, includeErrors bool) []string {
 	lines = append(lines, "")
 	if current.Plays == previous.Plays &&
+		current.PlaybackMillis == previous.PlaybackMillis &&
 		current.Sessions == previous.Sessions &&
 		current.InboundBytes == previous.InboundBytes &&
 		current.OutboundBytes == previous.OutboundBytes &&
@@ -212,6 +218,7 @@ func appendComparison(lines []string, current, previous summary, includeErrors b
 	}
 	return append(lines,
 		comparison,
+		fmt.Sprintf("   播放时长 %s", formatSignedPlaybackDuration(current.PlaybackMillis-previous.PlaybackMillis)),
 		fmt.Sprintf("   入站 %s | 出站 %s",
 			formatSignedBytes(current.InboundBytes-previous.InboundBytes),
 			formatSignedBytes(current.OutboundBytes-previous.OutboundBytes)))
@@ -320,19 +327,21 @@ func (s *Service) CheckKeepaliveAndNotify(ctx context.Context) error {
 }
 
 type summary struct {
-	Plays         int64
-	InboundBytes  int64
-	OutboundBytes int64
-	Sessions      int64
-	Errors        int64
-	NodeMap       map[string]int64
-	ClientMap     map[string]int64
+	Plays          int64
+	PlaybackMillis int64
+	InboundBytes   int64
+	OutboundBytes  int64
+	Sessions       int64
+	Errors         int64
+	NodeMap        map[string]int64
+	ClientMap      map[string]int64
 }
 
 func summarize(rows []storage.PlayStat) summary {
 	out := summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}}
 	for _, row := range rows {
 		out.Plays += row.Plays
+		out.PlaybackMillis += row.PlaybackMillis
 		out.InboundBytes += row.InboundBytes
 		out.OutboundBytes += row.OutboundBytes
 		out.Sessions += row.Sessions
@@ -353,7 +362,13 @@ func rankEntries(values map[string]int64, total int64, display map[string]string
 	}
 	pairs := make([]pair, 0, len(values))
 	for key, value := range values {
+		if value <= 0 {
+			continue
+		}
 		pairs = append(pairs, pair{Key: key, Value: value})
+	}
+	if len(pairs) == 0 {
+		return nil
 	}
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].Value > pairs[j].Value })
 	if len(pairs) > 99 {
@@ -405,6 +420,39 @@ func formatSignedBytes(value int64) string {
 		value = -value
 	}
 	return prefix + formatBytes(value)
+}
+
+func formatPlaybackDuration(milliseconds int64) string {
+	if milliseconds <= 0 {
+		return "0 秒"
+	}
+	totalSeconds := milliseconds / int64(time.Second/time.Millisecond)
+	days := totalSeconds / 86400
+	hours := totalSeconds % 86400 / 3600
+	minutes := totalSeconds % 3600 / 60
+	seconds := totalSeconds % 60
+	if days > 0 {
+		return fmt.Sprintf("%d 天 %d 小时", days, hours)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%d 小时 %d 分", hours, minutes)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%d 分 %d 秒", minutes, seconds)
+	}
+	return fmt.Sprintf("%d 秒", seconds)
+}
+
+func formatSignedPlaybackDuration(milliseconds int64) string {
+	if milliseconds == 0 {
+		return "0 秒"
+	}
+	prefix := "+"
+	if milliseconds < 0 {
+		prefix = "-"
+		milliseconds = -milliseconds
+	}
+	return prefix + formatPlaybackDuration(milliseconds)
 }
 
 func formatSignedInt(value int64) string {

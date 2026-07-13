@@ -179,7 +179,7 @@ main{min-width:0;min-height:0}
 .stat-block .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950;color:var(--ink-3)}
 .data-table{background:var(--paper);border:1px solid rgba(255,253,248,.88);border-radius:30px;overflow:auto;box-shadow:0 18px 56px rgba(58,48,32,.08)}
 table{width:100%;border-collapse:collapse}
-#statsTable{min-width:1160px}
+#statsTable{min-width:1320px}
 th,td{padding:15px 18px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
 th{background:var(--paper-2);color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:950}
 td{color:var(--ink-2)}
@@ -565,6 +565,7 @@ tr:last-child td{border-bottom:0}
                 <th data-stats-sort="client" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('client')"><span>客户端</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
                 <th data-stats-sort="plays" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('plays')"><span>播放次数</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
                 <th data-stats-sort="sessions" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('sessions')"><span>会话数</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
+                <th data-stats-sort="playbackMillis" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('playbackMillis')"><span>播放时长</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
                 <th data-stats-sort="inboundBytes" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('inboundBytes')"><span>入站流量</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
                 <th data-stats-sort="outboundBytes" aria-sort="none"><button type="button" class="stats-sort-button" onclick="setStatsSort('outboundBytes')"><span>出站流量</span><span class="stats-sort-indicator" aria-hidden="true"></span></button></th>
               </tr></thead>
@@ -1174,6 +1175,7 @@ const STATS_SORT_DEFAULT_DIRECTIONS = {
   client: 'asc',
   plays: 'desc',
   sessions: 'desc',
+  playbackMillis: 'desc',
   inboundBytes: 'desc',
   outboundBytes: 'desc',
 };
@@ -2443,11 +2445,12 @@ async function loadStats() {
   if (!r.ok) { toast('加载统计失败', 'err'); return; }
   statsRows = Array.isArray(r.stats) ? r.stats : [];
 
-  let totalPlays = 0, totalSessions = 0, totalInboundBytes = 0, totalOutboundBytes = 0;
+  let totalPlays = 0, totalSessions = 0, totalPlaybackMillis = 0, totalInboundBytes = 0, totalOutboundBytes = 0;
   const nodeSet = new Set(), clientSet = new Set();
   for (const s of statsRows) {
     totalPlays += Number(s.plays || 0);
     totalSessions += Number(s.sessions || 0);
+    totalPlaybackMillis += statsPlaybackMillis(s);
     totalInboundBytes += trafficInboundBytes(s);
     totalOutboundBytes += trafficOutboundBytes(s);
     nodeSet.add(s.node);
@@ -2461,6 +2464,7 @@ async function loadStats() {
   document.getElementById('statsCards').innerHTML = `
     <div class="stat-block"><div class="val">${totalPlays}</div><div class="lbl">总播放次数</div></div>
     <div class="stat-block"><div class="val">${totalSessions}</div><div class="lbl">总会话数</div></div>
+    <div class="stat-block"><div class="val">${formatPlaybackDuration(totalPlaybackMillis)}</div><div class="lbl">总播放时长</div></div>
     <div class="stat-block"><div class="val">${formatBytes(totalInboundBytes)}</div><div class="lbl">入站流量</div></div>
     <div class="stat-block"><div class="val">${formatBytes(totalOutboundBytes)}</div><div class="lbl">出站流量</div></div>
     <div class="stat-block"><div class="val">${nodeSet.size}</div><div class="lbl">活跃节点</div></div>
@@ -2485,8 +2489,8 @@ function renderStatsTable() {
   const stats = sortedStatsRows();
   const tbody = document.getElementById('statsBody');
   tbody.innerHTML = stats.length ? stats.map(s => `
-    <tr><td>${esc(s.day)}</td><td>${esc(formatStatsActivity(s))}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
-  `).join('') : '<tr><td class="table-empty" colspan="8">暂无数据</td></tr>';
+    <tr><td>${esc(s.day)}</td><td>${esc(formatStatsActivity(s))}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td><td>${formatPlaybackDuration(statsPlaybackMillis(s))}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
+  `).join('') : '<tr><td class="table-empty" colspan="9">暂无数据</td></tr>';
   updateStatsSortHeaders();
 }
 
@@ -2507,6 +2511,7 @@ function compareStatsField(left, right, key) {
   if (key === 'day' || key === 'node' || key === 'client') {
     return statsTextCollator.compare(String(left?.[key] || ''), String(right?.[key] || ''));
   }
+  if (key === 'playbackMillis') return compareStatsNumber(statsPlaybackMillis(left), statsPlaybackMillis(right));
   if (key === 'inboundBytes') return compareStatsNumber(trafficInboundBytes(left), trafficInboundBytes(right));
   if (key === 'outboundBytes') return compareStatsNumber(trafficOutboundBytes(left), trafficOutboundBytes(right));
   return compareStatsNumber(Number(left?.[key] || 0), Number(right?.[key] || 0));
@@ -2544,6 +2549,24 @@ function trafficInboundBytes(stat) {
 
 function trafficOutboundBytes(stat) {
   return Number(stat?.outboundBytes || 0);
+}
+
+function statsPlaybackMillis(stat) {
+  const value = Number(stat?.playbackMillis || 0);
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function formatPlaybackDuration(milliseconds) {
+  const value = Number(milliseconds || 0);
+  const totalSeconds = Math.floor((Number.isFinite(value) ? Math.max(0, value) : 0) / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `${days} 天 ${hours} 小时`;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分`;
+  if (minutes > 0) return `${minutes} 分 ${seconds} 秒`;
+  return `${seconds} 秒`;
 }
 
 function formatBytes(bytes) {

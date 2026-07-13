@@ -191,6 +191,16 @@ func isSessionsPlayingProgressPath(path string) bool {
 	return strings.Contains(normalizedEmbyAPIPath(path), "/sessions/playing/progress")
 }
 
+func isSessionsPlayingLifecyclePath(path string) bool {
+	p := strings.TrimSuffix(normalizedEmbyAPIPath(path), "/")
+	switch p {
+	case "/sessions/playing", "/sessions/playing/progress", "/sessions/playing/stopped":
+		return true
+	default:
+		return false
+	}
+}
+
 func isImagePath(path string) bool {
 	return embyItemImagesRE.MatchString(path) || embyImagesRE.MatchString(path)
 }

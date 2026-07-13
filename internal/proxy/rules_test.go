@@ -176,6 +176,28 @@ func TestAdditionalPartsPathSupportsOptionalEmbyPrefix(t *testing.T) {
 	}
 }
 
+func TestSessionsPlayingLifecyclePathSupportsOptionalEmbyPrefix(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "/emby/Sessions/Playing", want: true},
+		{path: "/Sessions/Playing/", want: true},
+		{path: "/emby/Sessions/Playing/Progress", want: true},
+		{path: "/Sessions/Playing/Stopped", want: true},
+		{path: "/Sessions/Playing/Progress/Extra"},
+		{path: "/Sessions/Playing2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := isSessionsPlayingLifecyclePath(tt.path); got != tt.want {
+				t.Fatalf("isSessionsPlayingLifecyclePath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSTRMStreamPathSupportsOptionalEmbyPrefix(t *testing.T) {
 	tests := []struct {
 		path string

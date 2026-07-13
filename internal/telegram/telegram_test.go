@@ -61,29 +61,33 @@ func TestBuildReportText(t *testing.T) {
 			name: "normal day",
 			day:  "2026-06-08",
 			today: summary{
-				Plays:         12,
-				InboundBytes:  10_000_000_000,
-				OutboundBytes: 9_000_000_000,
-				Sessions:      8,
-				Errors:        1,
-				NodeMap:       map[string]int64{"alpha": 8, "beta": 4},
-				ClientMap:     map[string]int64{"Infuse/8.0": 6, "Emby Theater": 4, "Unknown": 2},
+				Plays:          12,
+				PlaybackMillis: 19_800_000,
+				InboundBytes:   10_000_000_000,
+				OutboundBytes:  9_000_000_000,
+				Sessions:       8,
+				Errors:         1,
+				NodeMap:        map[string]int64{"alpha": 8, "beta": 4},
+				ClientMap:      map[string]int64{"Infuse/8.0": 6, "Emby Theater": 4, "Unknown": 2},
 			},
 			yesterday: summary{
-				Plays:         7,
-				InboundBytes:  5_000_000_000,
-				OutboundBytes: 4_000_000_000,
-				Sessions:      5,
-				NodeMap:       map[string]int64{"alpha": 7},
-				ClientMap:     map[string]int64{"Infuse/8.0": 7},
+				Plays:          7,
+				PlaybackMillis: 14_400_000,
+				InboundBytes:   5_000_000_000,
+				OutboundBytes:  4_000_000_000,
+				Sessions:       5,
+				NodeMap:        map[string]int64{"alpha": 7},
+				ClientMap:      map[string]int64{"Infuse/8.0": 7},
 			},
 			nodeDisplay: map[string]string{"alpha": "朋友服"},
 			wantContains: []string{
 				"📊 Emby 播放日报 · 2026-06-08",
 				"🕒 统计周期\n   2026-06-07 08:00 至 2026-06-08 08:00\n\n▶ 播放 12 次 · 8 会话 · 2 节点",
+				"播放时长 5 小时 30 分",
 				"入站 10.00 GB | 出站 9.00 GB",
 				"⚠️ 播放出错：1 次",
 				"📈 较前一日  播放 +5 · 会话 +3 · 播放出错 +1",
+				"播放时长 +1 小时 30 分",
 				"入站 +5.00 GB | 出站 +5.00 GB",
 				"🏆 节点排行:",
 				"1. 朋友服 — 8 次 (66.7%)",
@@ -100,19 +104,21 @@ func TestBuildReportText(t *testing.T) {
 			day:   "2026-06-10",
 			today: summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
 			yesterday: summary{
-				Plays:         22,
-				Sessions:      18,
-				InboundBytes:  10_000_000_000,
-				OutboundBytes: 9_230_000_000,
-				Errors:        2,
-				NodeMap:       map[string]int64{"alpha": 15, "beta": 7},
-				ClientMap:     map[string]int64{"Infuse/8.0": 14, "Emby Theater": 8},
+				Plays:          22,
+				PlaybackMillis: 7_200_000,
+				Sessions:       18,
+				InboundBytes:   10_000_000_000,
+				OutboundBytes:  9_230_000_000,
+				Errors:         2,
+				NodeMap:        map[string]int64{"alpha": 15, "beta": 7},
+				ClientMap:      map[string]int64{"Infuse/8.0": 14, "Emby Theater": 8},
 			},
 			nodeDisplay: map[string]string{"alpha": "朋友服"},
 			wantContains: []string{
 				"📊 Emby 播放日报 · 2026-06-10",
 				"🕒 统计周期\n   2026-06-09 08:00 至 2026-06-10 08:00\n\n📭 本周期无播放",
 				"📈 较前一日  播放 -22 · 会话 -18",
+				"播放时长 -2 小时 0 分",
 				"入站 -10.00 GB | 出站 -9.23 GB",
 			},
 			wantNotContains: []string{"昨日", "前一日回顾", "22 次 · 18 会话", "播放出错", "节点排行", "客户端排行", "302直链"},
@@ -159,6 +165,47 @@ func TestBuildReportText(t *testing.T) {
 				"入站 0B | 出站 0B",
 			},
 			wantNotContains: []string{"5xx", "无变化"},
+		},
+		{
+			name: "duration only current period",
+			day:  "2026-06-08",
+			today: summary{
+				PlaybackMillis: 90_000,
+				NodeMap:        map[string]int64{"alpha": 0},
+				ClientMap:      map[string]int64{"Infuse/8.0": 0},
+			},
+			yesterday: summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			wantContains: []string{
+				"▶ 播放 0 次 · 0 会话 · 1 节点",
+				"播放时长 1 分 30 秒",
+				"播放时长 +1 分 30 秒",
+			},
+			wantNotContains: []string{"本周期无播放", "节点排行", "客户端排行", "0 次 (0.0%)"},
+		},
+		{
+			name:      "empty current period compares previous duration",
+			day:       "2026-06-10",
+			today:     summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			yesterday: summary{PlaybackMillis: 90_000, NodeMap: map[string]int64{"alpha": 0}, ClientMap: map[string]int64{"Infuse/8.0": 0}},
+			wantContains: []string{
+				"📭 本周期无播放",
+				"播放时长 -1 分 30 秒",
+			},
+			wantNotContains: []string{"节点排行", "客户端排行", "0 次 (0.0%)"},
+		},
+		{
+			name: "mixed rankings skip duration only entries",
+			day:  "2026-06-08",
+			today: summary{
+				Plays:          1,
+				PlaybackMillis: 60_000,
+				Sessions:       1,
+				NodeMap:        map[string]int64{"new": 1, "continued": 0},
+				ClientMap:      map[string]int64{"new-client": 1, "continued-client": 0},
+			},
+			yesterday:       summary{NodeMap: map[string]int64{}, ClientMap: map[string]int64{}},
+			wantContains:    []string{"new — 1 次 (100.0%)", "new-client — 1 次 (100.0%)"},
+			wantNotContains: []string{"continued —", "continued-client —", "0 次 (0.0%)"},
 		},
 		{
 			name:            "empty day without yesterday",
@@ -326,6 +373,45 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+func TestBuildReportIncludesDurationOnlyBuckets(t *testing.T) {
+	ctx := context.Background()
+	store := newTelegramTestStore(t)
+	if err := store.SaveTGConfig(ctx, storage.TGConfig{ReportTime: "08:00"}); err != nil {
+		t.Fatalf("SaveTGConfig() error = %v", err)
+	}
+	bucketStart := time.Date(2026, 6, 27, 9, 0, 0, 0, localtime.Location()).UnixMilli()
+	if _, err := store.DB().ExecContext(ctx, `
+		INSERT INTO play_buckets (
+			bucket_start, node, client, mode, plays, playback_ms, bytes,
+			inbound_bytes, outbound_bytes, sessions, errors, updated_at
+		) VALUES (?, 'alpha', 'Infuse/8.0', 'direct', 0, 90000, 0, 0, 0, 0, 0, ?)
+	`, bucketStart, bucketStart+90_000); err != nil {
+		t.Fatalf("insert duration bucket error = %v", err)
+	}
+
+	service := New(store, logging.New("silent", false))
+	now := time.Date(2026, 6, 28, 8, 30, 0, 0, localtime.Location()).UnixMilli()
+	text, err := service.BuildReport(ctx, now)
+	if err != nil {
+		t.Fatalf("BuildReport() error = %v", err)
+	}
+	assertContainsAll(t, text, []string{
+		"▶ 播放 0 次 · 0 会话 · 1 节点",
+		"播放时长 1 分 30 秒",
+	})
+	assertContainsNone(t, text, []string{"本周期无播放", "节点排行", "客户端排行", "0 次 (0.0%)"})
+}
+
+func TestSummarizeIncludesPlaybackMillis(t *testing.T) {
+	got := summarize([]storage.PlayStat{
+		{Node: "alpha", Client: "Infuse", Plays: 1, PlaybackMillis: 60_000},
+		{Node: "beta", Client: "Theater", Plays: 2, PlaybackMillis: 90_000},
+	})
+	if got.Plays != 3 || got.PlaybackMillis != 150_000 {
+		t.Fatalf("summary plays = %d playbackMillis = %d; want 3 and 150000", got.Plays, got.PlaybackMillis)
+	}
+}
+
 func TestFormatBytesScalesBeyondGB(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -354,5 +440,41 @@ func TestFormatSignedBytes(t *testing.T) {
 	}
 	if got := formatSignedBytes(0); got != "0B" {
 		t.Fatalf("formatSignedBytes(0) = %q", got)
+	}
+}
+
+func TestFormatPlaybackDuration(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value int64
+		want  string
+	}{
+		{name: "zero", want: "0 秒"},
+		{name: "negative", value: -1, want: "0 秒"},
+		{name: "seconds", value: 59_999, want: "59 秒"},
+		{name: "minutes", value: 90_000, want: "1 分 30 秒"},
+		{name: "hours", value: 3_600_000, want: "1 小时 0 分"},
+		{name: "days", value: 90_000_000, want: "1 天 1 小时"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatPlaybackDuration(tt.value); got != tt.want {
+				t.Fatalf("formatPlaybackDuration(%d) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatSignedPlaybackDuration(t *testing.T) {
+	for _, tt := range []struct {
+		value int64
+		want  string
+	}{
+		{value: 90_000, want: "+1 分 30 秒"},
+		{value: -90_000, want: "-1 分 30 秒"},
+		{want: "0 秒"},
+	} {
+		if got := formatSignedPlaybackDuration(tt.value); got != tt.want {
+			t.Fatalf("formatSignedPlaybackDuration(%d) = %q, want %q", tt.value, got, tt.want)
+		}
 	}
 }

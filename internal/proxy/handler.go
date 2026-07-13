@@ -73,6 +73,7 @@ type parsedRoute struct {
 
 const (
 	rawHostLookupTimeout = 3 * time.Second
+	playbackStateTimeout = time.Second
 	proxyConnIdleTimeout = 2 * time.Minute
 	bodyCopyBufferSize   = 256 * 1024
 )
@@ -313,6 +314,7 @@ func (h *Handler) CleanupTTLMaps() {
 	}
 	if h.store != nil {
 		_ = h.store.PrunePlayBuckets(context.Background(), 3)
+		_ = h.store.PrunePlaybackStates(context.Background(), 24*time.Hour)
 	}
 }
 
@@ -635,6 +637,26 @@ func (h *Handler) finishPlaybackLog(r *http.Request, inboundBytes, outboundBytes
 	}
 }
 
+func (h *Handler) recordPlaybackState(ctx context.Context, in storage.PlaybackInput) {
+	if h == nil || h.store == nil {
+		return
+	}
+	if in.OccurredAt <= 0 {
+		in.OccurredAt = time.Now().UnixMilli()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), playbackStateTimeout)
+	defer cancel()
+	if err := h.store.LogPlayback(writeCtx, in); err != nil {
+		if h.log != nil {
+			h.log.Warn("playback", "playback state write failed", map[string]any{"event": "playbackStateWriteFailed", "error": err.Error()})
+		}
+		return
+	}
+}
+
 func (h *Handler) logPlayback(in storage.PlaybackInput) {
 	if h == nil || h.store == nil {
 		return
@@ -642,7 +664,10 @@ func (h *Handler) logPlayback(in storage.PlaybackInput) {
 	if in.OccurredAt <= 0 {
 		in.OccurredAt = time.Now().UnixMilli()
 	}
-	_ = h.store.LogPlaybackAsync(in)
+	ok := h.store.LogPlaybackAsync(in)
+	if !ok && h.log != nil {
+		h.log.Warn("playback", "playback stat queue full", map[string]any{"event": "playbackStatDropped", "stateOnly": in.PlaybackStateOnly})
+	}
 }
 
 func (h *Handler) sendResponse(w http.ResponseWriter, r *http.Request, res *http.Response) {
