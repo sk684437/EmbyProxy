@@ -36,7 +36,6 @@ func (s *Scheduler) Start(ctx context.Context) {
 }
 
 func (s *Scheduler) tick(ctx context.Context) {
-	s.log.Debug("scheduler", "tick", map[string]any{"event": "schedulerTick"})
 	if s.cleanup != nil {
 		func() {
 			defer func() {
