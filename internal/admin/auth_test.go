@@ -111,6 +111,72 @@ func TestAuthRoutesRejectCrossSitePOST(t *testing.T) {
 	}
 }
 
+func TestValidAdminOriginWithReverseProxyPort(t *testing.T) {
+	tests := []struct {
+		name      string
+		host      string
+		origin    string
+		fetchSite string
+		proto     string
+		want      bool
+	}{
+		{
+			name:      "proxy strips external port",
+			host:      "proxy.example",
+			origin:    "https://proxy.example:8443",
+			fetchSite: "same-origin",
+			proto:     "https",
+			want:      true,
+		},
+		{
+			name:      "same-site request cannot use port fallback",
+			host:      "proxy.example",
+			origin:    "https://proxy.example:8443",
+			fetchSite: "same-site",
+			proto:     "https",
+			want:      false,
+		},
+		{
+			name:      "explicit backend port cannot use fallback",
+			host:      "proxy.example:443",
+			origin:    "https://proxy.example:8443",
+			fetchSite: "same-origin",
+			proto:     "https",
+			want:      false,
+		},
+		{
+			name:      "different hostname is rejected",
+			host:      "proxy.example",
+			origin:    "https://evil.example:8443",
+			fetchSite: "same-origin",
+			proto:     "https",
+			want:      false,
+		},
+		{
+			name:      "direct request cannot use port fallback",
+			host:      "proxy.example",
+			origin:    "http://proxy.example:8080",
+			fetchSite: "same-origin",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://"+tt.host+"/admin/auth/login", nil)
+			req.Header.Set("Origin", tt.origin)
+			req.Header.Set("Sec-Fetch-Site", tt.fetchSite)
+			if tt.proto != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.proto)
+			}
+
+			if got := validAdminOrigin(req); got != tt.want {
+				t.Fatalf("validAdminOrigin() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAdminAPIRechecksTokenAfterReadingBody(t *testing.T) {
 	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
 	setup := beginAuthRouteTwoFactorSetup(t, handler)

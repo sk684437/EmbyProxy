@@ -267,7 +267,8 @@ func validAdminOrigin(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+	fetchSite := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")))
+	if fetchSite == "cross-site" {
 		return false
 	}
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
@@ -278,11 +279,28 @@ func validAdminOrigin(r *http.Request) bool {
 	if err != nil || u.Host == "" || u.Scheme == "" {
 		return false
 	}
+	forwardedProto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
 	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https") {
+	if r.TLS != nil || strings.EqualFold(forwardedProto, "https") {
 		scheme = "https"
 	}
-	return strings.EqualFold(u.Scheme, scheme) && strings.EqualFold(u.Host, r.Host)
+	if !strings.EqualFold(u.Scheme, scheme) {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+
+	// Some reverse proxies strip a non-standard external port from Host.
+	// Only use the hostname fallback when the browser confirms same-origin.
+	if fetchSite != "same-origin" || forwardedProto == "" || u.Port() == "" {
+		return false
+	}
+	requestAuthority, err := url.Parse("//" + strings.TrimSpace(r.Host))
+	if err != nil || requestAuthority.Hostname() == "" || requestAuthority.Port() != "" {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), requestAuthority.Hostname())
 }
 
 func (h *Handler) logSecurityEvent(event, message string, r *http.Request) {
